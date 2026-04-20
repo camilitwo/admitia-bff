@@ -1,0 +1,38 @@
+# Build artifacts
+/target/
+/.mvn/timing.properties
+
+# Local runtime data
+/uploads/
+/logs/
+/*.log
+hs_err_pid*
+replay_pid*
+
+# Environment and local config
+.env
+.env.*
+!.env.example
+/src/main/resources/application-local.yml
+/src/main/resources/application-*.local.yml
+
+# IDEs and editors
+/.idea/
+/.vscode/
+*.iml
+*.ipr
+*.iws
+.project
+.classpath
+.settings/
+.factorypath
+.apt_generated/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Java archives created outside target
+*.jar
+*.war
+*.ear
