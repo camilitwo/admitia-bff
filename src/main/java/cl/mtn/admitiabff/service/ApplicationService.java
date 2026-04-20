@@ -418,8 +418,37 @@ public class ApplicationService {
         response.put("guardian", entity.getGuardian() == null ? null : Map.of("id", entity.getGuardian().getId(), "fullName", entity.getGuardian().getFullName(), "rut", entity.getGuardian().getRut(), "email", entity.getGuardian().getEmail(), "phone", entity.getGuardian().getPhone(), "relationship", entity.getGuardian().getRelationship(), "address", entity.getGuardian().getAddress()));
         response.put("supporter", entity.getSupporter() == null ? null : Map.of("id", entity.getSupporter().getId(), "fullName", entity.getSupporter().getFullName(), "rut", entity.getSupporter().getRut(), "email", entity.getSupporter().getEmail(), "phone", entity.getSupporter().getPhone(), "relationship", entity.getSupporter().getRelationship()));
         response.put("documents", documents(entity.getId()).get("data"));
-        response.put("evaluations", evaluationRepository.findByApplicationIdOrderByCreatedAtDesc(entity.getId()).stream().map(evaluation -> Map.of("id", evaluation.getId(), "applicationId", entity.getId(), "evaluatorId", evaluation.getEvaluator() == null ? null : evaluation.getEvaluator().getId(), "type", evaluation.getEvaluationType(), "subject", evaluation.getSubject(), "status", evaluation.getStatus().name(), "score", evaluation.getScore(), "maxScore", evaluation.getMaxScore(), "evaluationDate", evaluation.getEvaluationDate(), "recommendations", evaluation.getRecommendations(), "observations", evaluation.getObservations())).toList());
-        response.put("interviews", interviewRepository.findByApplicationIdOrderByScheduledDateDesc(entity.getId()).stream().map(interview -> Map.of("id", interview.getId(), "applicationId", entity.getId(), "interviewerId", interview.getInterviewer() == null ? null : interview.getInterviewer().getId(), "secondInterviewerId", interview.getSecondInterviewer() == null ? null : interview.getSecondInterviewer().getId(), "interviewType", interview.getInterviewType(), "scheduledDate", interview.getScheduledDate(), "scheduledTime", interview.getScheduledTime(), "duration", interview.getDuration(), "location", interview.getLocation(), "mode", interview.getMode(), "status", interview.getStatus().name(), "notes", interview.getNotes())).toList());
+        response.put("evaluations", evaluationRepository.findByApplicationIdOrderByCreatedAtDesc(entity.getId()).stream().map(evaluation -> {
+            Map<String, Object> item = new LinkedHashMap<>();
+            item.put("id", evaluation.getId());
+            item.put("applicationId", entity.getId());
+            item.put("evaluatorId", evaluation.getEvaluator() == null ? null : evaluation.getEvaluator().getId());
+            item.put("type", evaluation.getEvaluationType());
+            item.put("subject", evaluation.getSubject());
+            item.put("status", evaluation.getStatus().name());
+            item.put("score", evaluation.getScore());
+            item.put("maxScore", evaluation.getMaxScore());
+            item.put("evaluationDate", evaluation.getEvaluationDate());
+            item.put("recommendations", evaluation.getRecommendations());
+            item.put("observations", evaluation.getObservations());
+            return item;
+        }).toList());
+        response.put("interviews", interviewRepository.findByApplicationIdOrderByScheduledDateDesc(entity.getId()).stream().map(interview -> {
+            Map<String, Object> item = new LinkedHashMap<>();
+            item.put("id", interview.getId());
+            item.put("applicationId", entity.getId());
+            item.put("interviewerId", interview.getInterviewer() == null ? null : interview.getInterviewer().getId());
+            item.put("secondInterviewerId", interview.getSecondInterviewer() == null ? null : interview.getSecondInterviewer().getId());
+            item.put("interviewType", interview.getInterviewType());
+            item.put("scheduledDate", interview.getScheduledDate());
+            item.put("scheduledTime", interview.getScheduledTime());
+            item.put("duration", interview.getDuration());
+            item.put("location", interview.getLocation());
+            item.put("mode", interview.getMode());
+            item.put("status", interview.getStatus().name());
+            item.put("notes", interview.getNotes());
+            return item;
+        }).toList());
         return response;
     }
 

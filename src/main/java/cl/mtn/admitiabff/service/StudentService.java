@@ -30,7 +30,9 @@ public class StudentService {
     }
 
     public Map<String, Object> statisticsByGrade() {
-        List<Map<String, Object>> data = studentRepository.countByGrade().stream().map(item -> Map.of("grade", item.getGrade(), "count", item.getTotal())).toList();
+        List<Map<String, Object>> data = studentRepository.countByGrade().stream()
+            .<Map<String, Object>>map(item -> Map.of("grade", item.getGrade(), "count", item.getTotal()))
+            .toList();
         return Map.of("success", true, "data", data);
     }
 

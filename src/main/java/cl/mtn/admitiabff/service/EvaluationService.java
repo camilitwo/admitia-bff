@@ -4,6 +4,7 @@ import cl.mtn.admitiabff.domain.common.EvaluationStatus;
 import cl.mtn.admitiabff.domain.evaluation.EvaluationEntity;
 import cl.mtn.admitiabff.repository.ApplicationRepository;
 import cl.mtn.admitiabff.repository.EvaluationRepository;
+import cl.mtn.admitiabff.repository.InterviewRepository;
 import cl.mtn.admitiabff.repository.UserRepository;
 import cl.mtn.admitiabff.util.CsvUtils;
 import cl.mtn.admitiabff.util.JsonSupport;
@@ -23,14 +24,16 @@ import org.springframework.transaction.annotation.Transactional;
 public class EvaluationService {
     private final EvaluationRepository evaluationRepository;
     private final ApplicationRepository applicationRepository;
+    private final InterviewRepository interviewRepository;
     private final UserRepository userRepository;
     private final NotificationService notificationService;
     private final AuthService authService;
     private final JsonSupport jsonSupport;
 
-    public EvaluationService(EvaluationRepository evaluationRepository, ApplicationRepository applicationRepository, UserRepository userRepository, NotificationService notificationService, AuthService authService, JsonSupport jsonSupport) {
+    public EvaluationService(EvaluationRepository evaluationRepository, ApplicationRepository applicationRepository, InterviewRepository interviewRepository, UserRepository userRepository, NotificationService notificationService, AuthService authService, JsonSupport jsonSupport) {
         this.evaluationRepository = evaluationRepository;
         this.applicationRepository = applicationRepository;
+        this.interviewRepository = interviewRepository;
         this.userRepository = userRepository;
         this.notificationService = notificationService;
         this.authService = authService;

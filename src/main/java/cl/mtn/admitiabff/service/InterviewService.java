@@ -34,7 +34,18 @@ public class InterviewService {
     }
 
     public List<Map<String, Object>> publicInterviewers() {
-        return scheduleRepository.findInterviewersWithSchedules(LocalDate.now().getYear()).stream().map(item -> Map.of("id", item.getInterviewerId(), "name", item.getFirstName() + " " + item.getLastName(), "role", String.valueOf(item.getRole()), "subject", item.getSubject(), "educationalLevel", null, "scheduleCount", item.getScheduleCount())).toList();
+        return scheduleRepository.findInterviewersWithSchedules(LocalDate.now().getYear()).stream()
+            .map(item -> {
+                Map<String, Object> interviewer = new LinkedHashMap<>();
+                interviewer.put("id", item.getInterviewerId());
+                interviewer.put("name", item.getFirstName() + " " + item.getLastName());
+                interviewer.put("role", String.valueOf(item.getRole()));
+                interviewer.put("subject", item.getSubject());
+                interviewer.put("educationalLevel", null);
+                interviewer.put("scheduleCount", item.getScheduleCount());
+                return interviewer;
+            })
+            .toList();
     }
 
     public Map<String, Object> all() { return wrap(interviewRepository.findAllByOrderByCreatedAtDesc()); }
