@@ -48,11 +48,12 @@ public class AuthService {
     }
 
     public Map<String, Object> publicKey() {
-        return Map.of("success", true, "data", Map.of("publicKey", rsaKeyService.publicKeyPem(), "algorithm", "RSA"));
+        return Map.of("success", true, "data", rsaKeyService.publicKeyInfo());
     }
 
     @Transactional
     public Map<String, Object> login(Map<String, Object> payload, String userAgent, String ipAddress) {
+        payload = normalizePayload(payload);
         String email = decrypt(payload, "email").trim().toLowerCase();
         String password = decrypt(payload, "password");
         UserEntity user = userRepository.findByEmailIgnoreCase(email).orElseThrow(() -> new IllegalArgumentException("Credenciales inválidas"));
@@ -85,6 +86,7 @@ public class AuthService {
 
     @Transactional
     public Map<String, Object> register(Map<String, Object> payload) {
+        payload = normalizePayload(payload);
         String email = decrypt(payload, "email").trim().toLowerCase();
         String password = decrypt(payload, "password");
         if (userRepository.existsByEmailIgnoreCase(email)) {
@@ -107,6 +109,7 @@ public class AuthService {
     }
 
     public Map<String, Object> checkEmail(Map<String, Object> payload) {
+        payload = normalizePayload(payload);
         String email = stringValue(payload.get("email")).trim().toLowerCase();
         return Map.of("exists", userRepository.existsByEmailIgnoreCase(email), "email", email);
     }
@@ -117,6 +120,7 @@ public class AuthService {
 
     @Transactional
     public Map<String, Object> changePassword(Map<String, Object> payload) {
+        payload = normalizePayload(payload);
         UserEntity user = requireAuthenticatedUser();
         String currentPassword = stringValue(payload.get("currentPassword"));
         String newPassword = stringValue(payload.get("newPassword"));
@@ -170,6 +174,17 @@ public class AuthService {
 
     private String decrypt(Map<String, Object> payload, String key) {
         return rsaKeyService.decryptIfNeeded(stringValue(payload.get(key)));
+    }
+
+    private Map<String, Object> normalizePayload(Map<String, Object> payload) {
+        if (payload.containsKey("encryptedData") && payload.containsKey("encryptedKey") && payload.containsKey("iv") && payload.containsKey("authTag")) {
+            Map<String, Object> decrypted = jsonSupport.readMap(rsaKeyService.decryptHybridPayload(payload));
+            if (decrypted.isEmpty()) {
+                throw new IllegalArgumentException("Payload de autenticación inválido");
+            }
+            return decrypted;
+        }
+        return payload;
     }
 
     private String stringValue(Object value) {

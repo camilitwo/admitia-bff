@@ -137,7 +137,7 @@ CREATE TABLE IF NOT EXISTS complementary_forms (
     created_at TIMESTAMP NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
-
+--Caused by: jakarta.persistence.PersistenceException: [PersistenceUnit: default] Unable to build Hibernate SessionFactory; nested exception is org.hibernate.tool.schema.spi.SchemaManagementException: Schema-validation: missing column [created_at] in table [documents]
 CREATE TABLE IF NOT EXISTS documents (
     id BIGSERIAL PRIMARY KEY,
     application_id BIGINT NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
@@ -151,6 +151,7 @@ CREATE TABLE IF NOT EXISTS documents (
     approval_status VARCHAR(50) NOT NULL DEFAULT 'PENDING',
     rejection_reason TEXT,
     approved_by BIGINT REFERENCES users(id) ON DELETE SET NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
     approval_date TIMESTAMP,
     upload_date TIMESTAMP NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMP NOT NULL DEFAULT NOW()

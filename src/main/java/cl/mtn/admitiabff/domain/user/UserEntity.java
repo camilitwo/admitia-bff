@@ -13,6 +13,7 @@ import jakarta.persistence.Table;
 import java.time.LocalDateTime;
 import lombok.Getter;
 import lombok.Setter;
+import org.hibernate.annotations.ColumnTransformer;
 
 @Getter
 @Setter
@@ -58,6 +59,7 @@ public class UserEntity extends BaseEntity {
     private boolean emailVerified;
 
     @Column(name = "preferences_json", columnDefinition = "jsonb")
+    @ColumnTransformer(write = "?::jsonb")
     private String preferencesJson;
 
     @Column(name = "last_login_at")
