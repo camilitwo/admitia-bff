@@ -12,7 +12,22 @@ import org.springframework.data.repository.query.Param;
 public interface GuardianRepository extends JpaRepository<GuardianEntity, Long> {
     Optional<GuardianEntity> findByRut(String rut);
     List<GuardianEntity> findByUserIdOrderByCreatedAtDesc(Long userId);
-    @Query("select g from GuardianEntity g where (:relationship is null or g.relationship = :relationship) and (:search is null or lower(g.fullName) like lower(concat('%', :search, '%')) or lower(coalesce(g.email,'')) like lower(concat('%', :search, '%')) or lower(coalesce(g.rut,'')) like lower(concat('%', :search, '%')))")
-    Page<GuardianEntity> search(@Param("relationship") String relationship, @Param("search") String search, Pageable pageable);
+    @Query(value = "select * from guardians g where g.relationship = :relationship and (lower(g.full_name) like lower('%'||:search||'%') or lower(coalesce(g.email,'')) like lower('%'||:search||'%') or lower(coalesce(g.rut,'')) like lower('%'||:search||'%'))", nativeQuery = true)
+    Page<GuardianEntity> findByRelationshipAndSearch(@Param("relationship") String relationship, @Param("search") String search, Pageable pageable);
+
+    @Query(value = "select * from guardians g where lower(g.full_name) like lower('%'||:search||'%') or lower(coalesce(g.email,'')) like lower('%'||:search||'%') or lower(coalesce(g.rut,'')) like lower('%'||:search||'%')", nativeQuery = true)
+    Page<GuardianEntity> findBySearch(@Param("search") String search, Pageable pageable);
+
+    @Query(value = "select * from guardians g where g.relationship = :relationship", nativeQuery = true)
+    Page<GuardianEntity> findByRelationship(@Param("relationship") String relationship, Pageable pageable);
+
+    default Page<GuardianEntity> search(String relationship, String search, Pageable pageable) {
+        boolean hasRel = relationship != null && !relationship.isBlank();
+        boolean hasSearch = search != null && !search.isBlank();
+        if (hasRel && hasSearch) return findByRelationshipAndSearch(relationship, search, pageable);
+        if (hasRel) return findByRelationship(relationship, pageable);
+        if (hasSearch) return findBySearch(search, pageable);
+        return findAll(pageable);
+    }
     long countByUserIsNotNull();
 }

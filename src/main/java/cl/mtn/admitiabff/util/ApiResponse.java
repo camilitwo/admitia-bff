@@ -25,10 +25,13 @@ public final class ApiResponse {
     }
 
     public static Map<String, Object> error(String code, String message) {
-        return Map.of(
-            "success", false,
-            "error", Map.of("code", code, "message", message),
-            "timestamp", Instant.now().toString()
-        );
+        java.util.Map<String, Object> err = new java.util.LinkedHashMap<>();
+        err.put("code", code != null ? code : "INTERNAL_ERROR");
+        err.put("message", message != null ? message : "Error interno del servidor");
+        java.util.Map<String, Object> resp = new java.util.LinkedHashMap<>();
+        resp.put("success", false);
+        resp.put("error", err);
+        resp.put("timestamp", Instant.now().toString());
+        return resp;
     }
 }

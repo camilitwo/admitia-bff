@@ -22,8 +22,20 @@ public interface InterviewRepository extends JpaRepository<InterviewEntity, Long
     List<KeyCountView> countByStatus();
     @Query("select i.interviewType as key, count(i) as total from InterviewEntity i group by i.interviewType")
     List<KeyCountView> countByType();
-    @Query("select i from InterviewEntity i where (:startDate is null or i.scheduledDate >= :startDate) and (:endDate is null or i.scheduledDate <= :endDate) order by i.scheduledDate, i.scheduledTime")
-    List<InterviewEntity> findForCalendar(@Param("startDate") LocalDate startDate, @Param("endDate") LocalDate endDate);
+    List<InterviewEntity> findByScheduledDateGreaterThanEqualAndScheduledDateLessThanEqualOrderByScheduledDateAscScheduledTimeAsc(LocalDate startDate, LocalDate endDate);
+    List<InterviewEntity> findByScheduledDateGreaterThanEqualOrderByScheduledDateAscScheduledTimeAsc(LocalDate startDate);
+    List<InterviewEntity> findByScheduledDateLessThanEqualOrderByScheduledDateAscScheduledTimeAsc(LocalDate endDate);
+    List<InterviewEntity> findAllByOrderByScheduledDateAscScheduledTimeAsc();
+
+    default List<InterviewEntity> findForCalendar(LocalDate startDate, LocalDate endDate) {
+        if (startDate != null && endDate != null)
+            return findByScheduledDateGreaterThanEqualAndScheduledDateLessThanEqualOrderByScheduledDateAscScheduledTimeAsc(startDate, endDate);
+        if (startDate != null)
+            return findByScheduledDateGreaterThanEqualOrderByScheduledDateAscScheduledTimeAsc(startDate);
+        if (endDate != null)
+            return findByScheduledDateLessThanEqualOrderByScheduledDateAscScheduledTimeAsc(endDate);
+        return findAllByOrderByScheduledDateAscScheduledTimeAsc();
+    }
 
     interface KeyCountView {
         String getKey();

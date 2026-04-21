@@ -80,15 +80,30 @@ public class DashboardService {
     public Map<String, Object> applicantSummary(Long applicationId) {
         var application = applicationRepository.findActiveById(applicationId).orElseThrow(() -> new IllegalArgumentException("Postulación no encontrada"));
         List<Map<String, Object>> evaluations = evaluationRepository.findByApplicationIdOrderByCreatedAtDesc(applicationId).stream()
-            .<Map<String, Object>>map(item -> Map.of("evaluationType", item.getEvaluationType(), "status", item.getStatus().name(), "score", item.getScore()))
+            .<Map<String, Object>>map(item -> { Map<String, Object> m = new LinkedHashMap<>(); m.put("evaluationType", item.getEvaluationType()); m.put("status", item.getStatus().name()); m.put("score", item.getScore()); return m; })
             .toList();
         List<Map<String, Object>> interviews = interviewRepository.findByApplicationIdOrderByScheduledDateDesc(applicationId).stream()
-            .<Map<String, Object>>map(item -> Map.of("interviewType", item.getInterviewType(), "status", item.getStatus().name(), "scheduledDate", item.getScheduledDate(), "scheduledTime", item.getScheduledTime()))
+            .<Map<String, Object>>map(item -> { Map<String, Object> m = new LinkedHashMap<>(); m.put("interviewType", item.getInterviewType()); m.put("status", item.getStatus().name()); m.put("scheduledDate", item.getScheduledDate()); m.put("scheduledTime", item.getScheduledTime()); return m; })
             .toList();
         List<Map<String, Object>> documents = documentRepository.findByApplicationIdOrderByUploadDateDesc(applicationId).stream()
             .<Map<String, Object>>map(item -> Map.of("documentType", item.getDocumentType(), "approvalStatus", item.getApprovalStatus().name()))
             .toList();
-        return Map.of("success", true, "data", Map.of("application", Map.of("id", application.getId(), "status", application.getStatus().name(), "submissionDate", application.getSubmissionDate(), "studentName", application.getStudent().getFirstName() + " " + application.getStudent().getPaternalLastName() + " " + application.getStudent().getMaternalLastName(), "gradeApplied", application.getStudent().getGradeApplied(), "applicantEmail", application.getApplicantUser() == null ? null : application.getApplicantUser().getEmail()), "evaluations", evaluations, "interviews", interviews, "documents", documents));
+        Map<String, Object> appMap = new LinkedHashMap<>();
+        appMap.put("id", application.getId());
+        appMap.put("status", application.getStatus().name());
+        appMap.put("submissionDate", application.getSubmissionDate());
+        appMap.put("studentName", application.getStudent().getFirstName() + " " + application.getStudent().getPaternalLastName() + " " + application.getStudent().getMaternalLastName());
+        appMap.put("gradeApplied", application.getStudent().getGradeApplied());
+        appMap.put("applicantEmail", application.getApplicantUser() == null ? null : application.getApplicantUser().getEmail());
+        Map<String, Object> dataMap = new LinkedHashMap<>();
+        dataMap.put("application", appMap);
+        dataMap.put("evaluations", evaluations);
+        dataMap.put("interviews", interviews);
+        dataMap.put("documents", documents);
+        Map<String, Object> summaryResult = new LinkedHashMap<>();
+        summaryResult.put("success", true);
+        summaryResult.put("data", dataMap);
+        return summaryResult;
     }
 
     public Map<String, Object> applicantMetrics(Integer academicYear, String grade, String status, String sortBy, String sortOrder) {
@@ -115,10 +130,23 @@ public class DashboardService {
             response.put("documents", Map.of("approved", approved, "total", total, "completionRate", total == 0 ? 0 : (approved * 100.0) / total));
             return response;
         }).toList();
-        return Map.of("success", true, "data", data, "meta", Map.of("total", data.size(), "academicYear", academicYear, "filters", Map.of("grade", grade == null ? "" : grade, "status", status == null ? "" : status), "sortBy", sortBy, "sortOrder", sortOrder));
+        Map<String, Object> filters = new LinkedHashMap<>();
+        filters.put("grade", grade == null ? "" : grade);
+        filters.put("status", status == null ? "" : status);
+        Map<String, Object> meta = new LinkedHashMap<>();
+        meta.put("total", data.size());
+        meta.put("academicYear", academicYear);
+        meta.put("filters", filters);
+        meta.put("sortBy", sortBy == null ? "studentName" : sortBy);
+        meta.put("sortOrder", sortOrder == null ? "ASC" : sortOrder);
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("success", true);
+        result.put("data", data);
+        result.put("meta", meta);
+        return result;
     }
 
-    public Map<String, Object> clearCache(String pattern) { return Map.of("success", true, "message", "No hay caché externo para limpiar", "pattern", pattern); }
+    public Map<String, Object> clearCache(String pattern) { Map<String, Object> r = new LinkedHashMap<>(); r.put("success", true); r.put("message", "No hay caché externo para limpiar"); r.put("pattern", pattern); return r; }
     public Map<String, Object> cacheStats() { return Map.of("success", true, "data", Map.of("provider", "in-process", "entries", 0, "hits", 0, "misses", 0)); }
     public Map<String, Object> analyticsDashboardMetrics() { return Map.of("totalApplications", applicationRepository.countByDeletedAtIsNull(), "applicationsThisMonth", applicationRepository.findBetween(LocalDate.now().withDayOfMonth(1).atStartOfDay(), LocalDate.now().plusDays(1).atStartOfDay()).size(), "conversionRate", 0, "acceptedApplications", applicationRepository.countByDeletedAtIsNullAndStatus(ApplicationStatus.APPROVED), "averageCompletionDays", 0, "activeEvaluators", userRepository.findByRoleInOrderByRoleAscFirstNameAscLastNameAsc(List.of(cl.mtn.admitiabff.domain.common.Role.TEACHER, cl.mtn.admitiabff.domain.common.Role.PSYCHOLOGIST, cl.mtn.admitiabff.domain.common.Role.CYCLE_DIRECTOR, cl.mtn.admitiabff.domain.common.Role.COORDINATOR, cl.mtn.admitiabff.domain.common.Role.INTERVIEWER)).size(), "totalActiveUsers", userRepository.countByActiveTrue()); }
 
@@ -150,7 +178,22 @@ public class DashboardService {
         long totalApplications = applicationRepository.countByDeletedAtIsNull();
         long completedEvaluations = evaluationRepository.findAll().stream().filter(item -> item.getStatus() == EvaluationStatus.COMPLETED).count();
         BigDecimal averageScore = evaluationRepository.averageScore();
-        return Map.of("success", true, "data", Map.of("insights", List.of(Map.of("type", completedEvaluations < totalApplications ? "warning" : "performance", "message", completedEvaluations < totalApplications ? "Hay evaluaciones pendientes por completar" : "El flujo de evaluaciones está al día", "action", completedEvaluations < totalApplications ? "Revisar evaluaciones pendientes" : null)), "metrics", Map.of("totalApplications", totalApplications, "completedEvaluations", completedEvaluations, "averageScore", String.valueOf(averageScore))));
+        boolean hasPending = completedEvaluations < totalApplications;
+        Map<String, Object> insight = new LinkedHashMap<>();
+        insight.put("type", hasPending ? "warning" : "performance");
+        insight.put("message", hasPending ? "Hay evaluaciones pendientes por completar" : "El flujo de evaluaciones está al día");
+        insight.put("action", hasPending ? "Revisar evaluaciones pendientes" : null);
+        Map<String, Object> metrics = new LinkedHashMap<>();
+        metrics.put("totalApplications", totalApplications);
+        metrics.put("completedEvaluations", completedEvaluations);
+        metrics.put("averageScore", String.valueOf(averageScore));
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("insights", List.of(insight));
+        data.put("metrics", metrics);
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("success", true);
+        result.put("data", data);
+        return result;
     }
 
     public Map<String, Object> evaluatorAnalysis() {
