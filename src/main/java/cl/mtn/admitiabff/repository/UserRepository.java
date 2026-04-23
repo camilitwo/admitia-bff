@@ -14,6 +14,7 @@ import org.springframework.data.repository.query.Param;
 
 public interface UserRepository extends JpaRepository<UserEntity, Long>, JpaSpecificationExecutor<UserEntity> {
     Optional<UserEntity> findByEmailIgnoreCase(String email);
+    Optional<UserEntity> findByFirebaseUid(String firebaseUid);
     boolean existsByEmailIgnoreCase(String email);
     long countByActiveTrue();
     long countByRole(Role role);

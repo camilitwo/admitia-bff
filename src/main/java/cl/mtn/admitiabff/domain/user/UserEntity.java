@@ -64,4 +64,7 @@ public class UserEntity extends BaseEntity {
 
     @Column(name = "last_login_at")
     private LocalDateTime lastLoginAt;
+
+    @Column(name = "firebase_uid", unique = true)
+    private String firebaseUid;
 }

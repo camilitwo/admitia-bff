@@ -33,6 +33,12 @@ public class AuthController {
     @PostMapping("/register")
     public Map<String, Object> register(@RequestBody Map<String, Object> payload) { return authService.register(payload); }
 
+    @PostMapping("/firebase-login")
+    public Map<String, Object> firebaseLogin(@RequestBody Map<String, Object> payload) { return authService.firebaseLogin(payload); }
+
+    @PostMapping("/firebase-register")
+    public Map<String, Object> firebaseRegister(@RequestBody Map<String, Object> payload) { return authService.firebaseRegister(payload); }
+
     @PostMapping("/check-email")
     public Map<String, Object> checkEmail(@RequestBody Map<String, Object> payload) { return authService.checkEmail(payload); }
 

@@ -132,6 +132,65 @@ public class AuthService {
         return Map.of("success", true, "message", "Contraseña actualizada correctamente");
     }
 
+    @Transactional
+    public Map<String, Object> firebaseLogin(Map<String, Object> payload) {
+        String idToken = stringValue(payload.get("idToken"));
+        com.google.firebase.auth.FirebaseToken decoded;
+        try {
+            decoded = com.google.firebase.auth.FirebaseAuth.getInstance().verifyIdToken(idToken);
+        } catch (Exception ex) {
+            throw new IllegalArgumentException("Token de Firebase inválido");
+        }
+        String email = decoded.getEmail();
+        String firebaseUid = decoded.getUid();
+
+        UserEntity user = userRepository.findByFirebaseUid(firebaseUid)
+            .or(() -> userRepository.findByEmailIgnoreCase(email))
+            .orElseThrow(() -> new IllegalArgumentException("Usuario no registrado"));
+
+        if (user.getFirebaseUid() == null) {
+            user.setFirebaseUid(firebaseUid);
+        }
+        user.setLastLoginAt(LocalDateTime.now());
+        if (decoded.isEmailVerified()) {
+            user.setEmailVerified(true);
+        }
+        userRepository.save(user);
+
+        return Map.of("success", true, "user", toAuthUser(user));
+    }
+
+    @Transactional
+    public Map<String, Object> firebaseRegister(Map<String, Object> payload) {
+        String idToken = stringValue(payload.get("idToken"));
+        com.google.firebase.auth.FirebaseToken decoded;
+        try {
+            decoded = com.google.firebase.auth.FirebaseAuth.getInstance().verifyIdToken(idToken);
+        } catch (Exception ex) {
+            throw new IllegalArgumentException("Token de Firebase inválido");
+        }
+        String email = decoded.getEmail();
+        if (userRepository.existsByEmailIgnoreCase(email)) {
+            throw new IllegalArgumentException("El email ya existe");
+        }
+
+        UserEntity user = new UserEntity();
+        user.setFirebaseUid(decoded.getUid());
+        user.setEmail(email);
+        user.setFirstName(stringValue(payload.get("firstName")));
+        user.setLastName(stringValue(payload.get("lastName")));
+        user.setRut(stringValue(payload.get("rut")));
+        user.setPhone(stringValue(payload.get("phone")));
+        user.setRole(Role.APODERADO);
+        user.setActive(true);
+        user.setEmailVerified(decoded.isEmailVerified());
+        user.setPasswordHash("FIREBASE_MANAGED");
+        user.setPreferencesJson(jsonSupport.write(Map.of()));
+        UserEntity saved = userRepository.save(user);
+
+        return Map.of("success", true, "user", toAuthUser(saved));
+    }
+
     public AuthContextHolder requireAuth() {
         UserEntity user = requireAuthenticatedUser();
         return new AuthContextHolder(user.getId(), user.getEmail(), user.getRole().name());
