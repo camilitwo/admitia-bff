@@ -36,3 +36,6 @@ Thumbs.db
 *.jar
 *.war
 *.ear
+
+# Firebase service account (NEVER commit)
+/src/main/resources/firebase-service-account.json
