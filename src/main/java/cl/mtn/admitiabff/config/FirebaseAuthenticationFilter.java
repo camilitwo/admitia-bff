@@ -92,15 +92,19 @@ public class FirebaseAuthenticationFilter extends OncePerRequestFilter {
 
             // Link firebase_uid if not already set
             if (user.getFirebaseUid() == null) {
-                user.setFirebaseUid(firebaseUid);
-                userRepository.save(user);
-                log.info("[Auth/Firebase] Linked firebase_uid={} to user id={}", firebaseUid, user.getId());
+                try {
+                    user.setFirebaseUid(firebaseUid);
+                    userRepository.save(user);
+                    log.info("[Auth/Firebase] Linked firebase_uid={} to user id={}", firebaseUid, user.getId());
+                } catch (Exception saveEx) {
+                    log.warn("[Auth/Firebase] Could not persist firebase_uid for user id={}: {}", user.getId(), saveEx.getMessage());
+                }
             }
 
             setAuthentication(user);
             return true;
         } catch (Exception ex) {
-            log.debug("[Auth/Firebase] Not a valid Firebase token: {}", ex.getMessage());
+            log.warn("[Auth/Firebase] Auth failed for path={}: {}", request.getRequestURI(), ex.getMessage());
             return false;
         }
     }
