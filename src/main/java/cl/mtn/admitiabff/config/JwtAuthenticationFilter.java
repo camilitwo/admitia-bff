@@ -1,5 +1,7 @@
 package cl.mtn.admitiabff.config;
 
+import cl.mtn.admitiabff.domain.user.UserEntity;
+import cl.mtn.admitiabff.repository.UserRepository;
 import io.jsonwebtoken.Claims;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
@@ -20,9 +22,11 @@ import org.springframework.web.filter.OncePerRequestFilter;
 public class JwtAuthenticationFilter extends OncePerRequestFilter {
     private static final Logger log = LoggerFactory.getLogger(JwtAuthenticationFilter.class);
     private final JwtService jwtService;
+    private final UserRepository userRepository;
 
-    public JwtAuthenticationFilter(JwtService jwtService) {
+    public JwtAuthenticationFilter(JwtService jwtService, UserRepository userRepository) {
         this.jwtService = jwtService;
+        this.userRepository = userRepository;
     }
 
     @Override
@@ -78,6 +82,16 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                         }
                     } catch (Exception e) {
                         log.warn("[JWT] Error en fallback base64: {}", e.getMessage());
+                    }
+                }
+
+                // Si el JWT no trae role, lo resolvemos desde la BD (fuente única de verdad)
+                if (role == null && email != null) {
+                    UserEntity dbUser = userRepository.findByEmailIgnoreCase(email).orElse(null);
+                    if (dbUser != null && dbUser.getRole() != null) {
+                        role = dbUser.getRole().name();
+                        if (userId == null) userId = dbUser.getId();
+                        log.info("[JWT] Role resuelto desde BD: role={} userId={}", role, userId);
                     }
                 }
 
