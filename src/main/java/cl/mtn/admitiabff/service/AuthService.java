@@ -157,7 +157,23 @@ public class AuthService {
         }
         userRepository.save(user);
 
-        return Map.of("success", true, "user", toAuthUser(user));
+        String token = jwtService.generateToken(user.getId(), user.getEmail(), user.getRole().name());
+        ActiveSessionEntity session = new ActiveSessionEntity();
+        session.setUser(user);
+        session.setTokenHash(sha256(token));
+        session.setCreatedAt(LocalDateTime.now());
+        session.setLastActivity(LocalDateTime.now());
+        activeSessionRepository.save(session);
+
+        return Map.of(
+            "success", true,
+            "token", token,
+            "refreshToken", token,
+            "expiresAt", LocalDateTime.now().plusHours(12).toString(),
+            "refreshExpiresAt", LocalDateTime.now().plusHours(12).toString(),
+            "permissions", List.of(user.getRole().name()),
+            "user", toAuthUser(user)
+        );
     }
 
     @Transactional
@@ -188,7 +204,23 @@ public class AuthService {
         user.setPreferencesJson(jsonSupport.write(Map.of()));
         UserEntity saved = userRepository.save(user);
 
-        return Map.of("success", true, "user", toAuthUser(saved));
+        String token = jwtService.generateToken(saved.getId(), saved.getEmail(), saved.getRole().name());
+        ActiveSessionEntity session = new ActiveSessionEntity();
+        session.setUser(saved);
+        session.setTokenHash(sha256(token));
+        session.setCreatedAt(LocalDateTime.now());
+        session.setLastActivity(LocalDateTime.now());
+        activeSessionRepository.save(session);
+
+        return Map.of(
+            "success", true,
+            "token", token,
+            "refreshToken", token,
+            "expiresAt", LocalDateTime.now().plusHours(12).toString(),
+            "refreshExpiresAt", LocalDateTime.now().plusHours(12).toString(),
+            "permissions", List.of(saved.getRole().name()),
+            "user", toAuthUser(saved)
+        );
     }
 
     public AuthContextHolder requireAuth() {
