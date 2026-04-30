@@ -281,16 +281,16 @@ public class ApplicationService {
         Object nested = payload.get("student");
         Map<String, Object> source = nested instanceof Map<?, ?> map ? (Map<String, Object>) map : payload;
         StudentEntity student = new StudentEntity();
-        student.setFirstName(value(source.getOrDefault("firstName", payload.get("firstName"))));
-        student.setPaternalLastName(value(source.getOrDefault("paternalLastName", payload.get("paternalLastName"))));
-        student.setMaternalLastName(value(source.getOrDefault("maternalLastName", payload.get("maternalLastName"))));
-        student.setRut(value(source.getOrDefault("rut", payload.get("rut"))));
-        student.setBirthDate(parseDate(source.getOrDefault("birthDate", payload.get("birthDate"))));
-        student.setEmail(value(source.getOrDefault("email", payload.get("studentEmail"))));
-        student.setAddress(value(source.getOrDefault("address", payload.get("studentAddress"))));
-        student.setGradeApplied(value(source.getOrDefault("gradeApplied", payload.getOrDefault("grade", payload.get("gradeApplied")))));
-        student.setTargetSchool(value(source.getOrDefault("targetSchool", payload.getOrDefault("schoolApplied", payload.get("targetSchool")))));
-        student.setCurrentSchool(value(source.getOrDefault("currentSchool", payload.get("currentSchool"))));
+        student.setFirstName(firstNonNull(source.get("firstName"), payload.get("firstName"), payload.get("studentFirstName")));
+        student.setPaternalLastName(firstNonNull(source.get("paternalLastName"), payload.get("paternalLastName"), payload.get("studentPaternalLastName")));
+        student.setMaternalLastName(firstNonNull(source.get("maternalLastName"), payload.get("maternalLastName"), payload.get("studentMaternalLastName")));
+        student.setRut(firstNonNull(source.get("rut"), payload.get("rut"), payload.get("studentRUT"), payload.get("studentRut")));
+        student.setBirthDate(parseDate(firstNonNullRaw(source.get("birthDate"), payload.get("birthDate"), payload.get("studentDateOfBirth"), payload.get("studentBirthDate"))));
+        student.setEmail(firstNonNull(source.get("email"), payload.get("studentEmail")));
+        student.setAddress(firstNonNull(source.get("address"), payload.get("studentAddress")));
+        student.setGradeApplied(firstNonNull(source.get("gradeApplied"), payload.get("grade"), payload.get("gradeApplied"), payload.get("gradeAppliedFor")));
+        student.setTargetSchool(firstNonNull(source.get("targetSchool"), payload.get("schoolApplied"), payload.get("targetSchool"), payload.get("studentAdmissionPreference")));
+        student.setCurrentSchool(firstNonNull(source.get("currentSchool"), payload.get("currentSchool"), payload.get("studentCurrentSchool")));
         student.setSpecialNeeds(booleanValue(source.getOrDefault("specialNeeds", false)));
         student.setSpecialNeedsDescription(value(source.get("specialNeedsDescription")));
         student.setAdditionalNotes(value(source.getOrDefault("additionalNotes", payload.get("additionalNotes"))));
@@ -501,6 +501,24 @@ public class ApplicationService {
 
     private String value(Object value) { return value == null ? "" : String.valueOf(value); }
     private String emptyToNull(String value) { return value == null || value.isBlank() ? null : value; }
+
+    private String firstNonNull(Object... values) {
+        for (Object v : values) {
+            if (v == null) continue;
+            String s = String.valueOf(v);
+            if (!s.isBlank()) return s;
+        }
+        return "";
+    }
+
+    private Object firstNonNullRaw(Object... values) {
+        for (Object v : values) {
+            if (v == null) continue;
+            if (v instanceof String s && s.isBlank()) continue;
+            return v;
+        }
+        return null;
+    }
     private boolean booleanValue(Object value) { return value instanceof Boolean b ? b : Boolean.parseBoolean(String.valueOf(value)); }
     private Integer integerValue(Object value) { return value == null || String.valueOf(value).isBlank() ? null : value instanceof Number n ? n.intValue() : Integer.parseInt(String.valueOf(value)); }
     private LocalDate parseDate(Object value) { return value == null || String.valueOf(value).isBlank() ? null : value instanceof LocalDate date ? date : LocalDate.parse(String.valueOf(value)); }
