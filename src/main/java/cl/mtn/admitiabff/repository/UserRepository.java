@@ -16,6 +16,7 @@ public interface UserRepository extends JpaRepository<UserEntity, Long>, JpaSpec
     Optional<UserEntity> findByEmailIgnoreCase(String email);
     Optional<UserEntity> findByFirebaseUid(String firebaseUid);
     boolean existsByEmailIgnoreCase(String email);
+    Optional<UserEntity> findByRut(String rut);
     long countByActiveTrue();
     long countByRole(Role role);
     List<UserEntity> findByRoleOrderByFirstNameAscLastNameAsc(Role role);

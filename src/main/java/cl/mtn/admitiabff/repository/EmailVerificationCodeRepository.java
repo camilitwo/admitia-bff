@@ -7,4 +7,6 @@ import org.springframework.data.jpa.repository.JpaRepository;
 
 public interface EmailVerificationCodeRepository extends JpaRepository<EmailVerificationCodeEntity, Long> {
     Optional<EmailVerificationCodeEntity> findFirstByEmailIgnoreCaseAndCodeAndUsedFalseAndExpiresAtAfterOrderByCreatedAtDesc(String email, String code, LocalDateTime dateTime);
+    void deleteByEmailIgnoreCase(String email);
+    boolean existsByEmailIgnoreCase(String email);
 }
