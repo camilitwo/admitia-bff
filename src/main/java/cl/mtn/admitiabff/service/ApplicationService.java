@@ -4,6 +4,7 @@ import cl.mtn.admitiabff.domain.application.ApplicationEntity;
 import cl.mtn.admitiabff.domain.application.ComplementaryFormEntity;
 import cl.mtn.admitiabff.domain.common.ApplicationStatus;
 import cl.mtn.admitiabff.domain.common.DocumentApprovalStatus;
+import cl.mtn.admitiabff.domain.common.Role;
 import cl.mtn.admitiabff.domain.document.DocumentEntity;
 import cl.mtn.admitiabff.domain.person.GuardianEntity;
 import cl.mtn.admitiabff.domain.person.ParentEntity;
@@ -34,12 +35,18 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.server.ResponseStatusException;
 
 @Service
 @Transactional(readOnly = true)
 public class ApplicationService {
+    private static final Logger log = LoggerFactory.getLogger(ApplicationService.class);
+
     private final ApplicationRepository applicationRepository;
     private final StudentRepository studentRepository;
     private final ParentRepository parentRepository;
@@ -51,10 +58,11 @@ public class ApplicationService {
     private final EvaluationRepository evaluationRepository;
     private final InterviewRepository interviewRepository;
     private final AuthService authService;
+    private final NotificationService notificationService;
     private final JsonSupport jsonSupport;
     private final String uploadsDir;
 
-    public ApplicationService(ApplicationRepository applicationRepository, StudentRepository studentRepository, ParentRepository parentRepository, GuardianRepository guardianRepository, SupporterRepository supporterRepository, UserRepository userRepository, DocumentRepository documentRepository, ComplementaryFormRepository complementaryFormRepository, EvaluationRepository evaluationRepository, InterviewRepository interviewRepository, AuthService authService, JsonSupport jsonSupport, @Value("${app.uploads-dir}") String uploadsDir) {
+    public ApplicationService(ApplicationRepository applicationRepository, StudentRepository studentRepository, ParentRepository parentRepository, GuardianRepository guardianRepository, SupporterRepository supporterRepository, UserRepository userRepository, DocumentRepository documentRepository, ComplementaryFormRepository complementaryFormRepository, EvaluationRepository evaluationRepository, InterviewRepository interviewRepository, AuthService authService, NotificationService notificationService, JsonSupport jsonSupport, @Value("${app.uploads-dir}") String uploadsDir) {
         this.applicationRepository = applicationRepository;
         this.studentRepository = studentRepository;
         this.parentRepository = parentRepository;
@@ -66,6 +74,7 @@ public class ApplicationService {
         this.evaluationRepository = evaluationRepository;
         this.interviewRepository = interviewRepository;
         this.authService = authService;
+        this.notificationService = notificationService;
         this.jsonSupport = jsonSupport;
         this.uploadsDir = uploadsDir;
     }
@@ -197,6 +206,57 @@ public class ApplicationService {
         entity.setStatus(parseStatus(value(payload.getOrDefault("status", entity.getStatus().name()))));
         if (payload.containsKey("notes")) entity.setNotes(value(payload.get("notes")));
         return Map.of("success", true, "message", "Estado actualizado correctamente", "data", toFullResponse(applicationRepository.save(entity)));
+    }
+
+    /**
+     * Compatibilidad con el front ({@code POST .../final-decision} con {@code decision}, {@code note}).
+     * Paridad funcional con Node: {@code PATCH /api/applications/:id/status} + roles ADMIN/COORDINATOR
+     * y notificación {@code STATUS_UPDATE} (best-effort, no bloquea si falla el correo).
+     */
+    @Transactional
+    public Map<String, Object> recordFinalDecision(Long id, Map<String, Object> payload) {
+        var auth = authService.requireAuth();
+        if (!Role.ADMIN.name().equals(auth.role()) && !Role.COORDINATOR.name().equals(auth.role())) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Solo administradores o coordinadores pueden registrar la decisión final");
+        }
+        String decisionRaw = firstNonNull(payload.get("decision"), payload.get("status"));
+        if (decisionRaw == null || decisionRaw.isBlank()) {
+            throw new IllegalArgumentException("Se requiere decision (APPROVED o REJECTED)");
+        }
+        ApplicationStatus newStatus;
+        try {
+            newStatus = ApplicationStatus.valueOf(decisionRaw.trim().toUpperCase());
+        } catch (IllegalArgumentException ex) {
+            throw new IllegalArgumentException("decision debe ser APPROVED o REJECTED");
+        }
+        if (newStatus != ApplicationStatus.APPROVED && newStatus != ApplicationStatus.REJECTED) {
+            throw new IllegalArgumentException("decision debe ser APPROVED o REJECTED");
+        }
+        String note = firstNonNull(payload.get("note"), payload.get("notes"));
+        String noteOrEmpty = note == null || note.isBlank() ? null : note.trim();
+
+        ApplicationEntity entity = load(id);
+        entity.setStatus(newStatus);
+        if (noteOrEmpty != null) {
+            entity.setNotes(noteOrEmpty);
+        }
+        ApplicationEntity saved = applicationRepository.save(entity);
+
+        try {
+            notificationService.institutional(
+                "STATUS_UPDATE",
+                id,
+                Map.of("newStatus", newStatus.name(), "notes", noteOrEmpty == null ? "" : noteOrEmpty)
+            );
+        } catch (Exception e) {
+            log.warn("[final-decision] Notificación STATUS_UPDATE no enviada para applicationId={}: {}", id, e.getMessage());
+        }
+
+        return Map.of(
+            "success", true,
+            "message", newStatus == ApplicationStatus.APPROVED ? "Postulación aprobada" : "Postulación rechazada",
+            "data", toFullResponse(saved)
+        );
     }
 
     @Transactional

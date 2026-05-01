@@ -37,6 +37,8 @@ public class ApplicationsController {
     @DeleteMapping("/{id}") public Map<String, Object> delete(@PathVariable Long id) { return applicationService.delete(id); }
     @PostMapping("/bulk/update-status") public Map<String, Object> bulkUpdateStatus(@RequestBody Map<String, Object> payload) { return applicationService.bulkUpdateStatus(payload); }
     @PostMapping("/{id}/complementary-form") public Map<String, Object> upsertComplementaryForm(@PathVariable Long id, @RequestBody Map<String, Object> payload) { return applicationService.upsertComplementaryForm(id, payload); }
+    /** Alias esperado por el front: equivalente a Node PATCH /api/applications/:id/status con status APPROVED|REJECTED. */
+    @PostMapping("/{id}/final-decision") public Map<String, Object> finalDecision(@PathVariable Long id, @RequestBody Map<String, Object> payload) { return applicationService.recordFinalDecision(id, payload); }
     @PostMapping("/cache/clear") public Map<String, Object> clearCache() { return applicationService.clearCache(); }
     @GetMapping("/debug/system-info") public Map<String, Object> systemInfo() { return applicationService.systemInfo(); }
 }
