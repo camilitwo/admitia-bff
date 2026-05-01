@@ -56,13 +56,14 @@ public class VercelBlobService {
                 .timeout(Duration.ofSeconds(60))
                 .header("Authorization", "Bearer " + token)
                 .header("x-content-type", contentType == null ? "application/octet-stream" : contentType)
+                .header("x-access", "private")
                 .header("x-api-version", "7")
                 .PUT(HttpRequest.BodyPublishers.ofByteArray(data))
                 .build();
         try {
             HttpResponse<String> resp = http.send(req, HttpResponse.BodyHandlers.ofString());
             if (resp.statusCode() / 100 != 2) {
-                throw new IOException("Vercel Blob PUT failed: HTTP " + resp.statusCode() + " body=" + resp.body());
+                throw new IOException("Vercel Blob PUT failed: HTTP " + resp.statusCode() + " uri=" + uri + " access=private body=" + resp.body());
             }
             JsonNode json = mapper.readTree(resp.body());
             BlobUploadResult result = new BlobUploadResult();
