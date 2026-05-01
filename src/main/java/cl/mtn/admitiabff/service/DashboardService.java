@@ -20,8 +20,14 @@ import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
+/**
+ * Lecturas que recorren {@code ApplicationEntity} y asociaciones LAZY (p. ej. {@code student}, {@code guardian})
+ * deben ejecutarse dentro de una transacción para evitar {@code LazyInitializationException}.
+ */
 @Service
+@Transactional(readOnly = true)
 public class DashboardService {
     private final ApplicationRepository applicationRepository;
     private final UserRepository userRepository;
