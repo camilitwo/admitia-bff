@@ -2,6 +2,7 @@ package cl.mtn.admitiabff.service;
 
 import cl.mtn.admitiabff.domain.common.EvaluationStatus;
 import cl.mtn.admitiabff.domain.evaluation.EvaluationEntity;
+import cl.mtn.admitiabff.domain.user.UserEntity;
 import cl.mtn.admitiabff.repository.ApplicationRepository;
 import cl.mtn.admitiabff.repository.EvaluationRepository;
 import cl.mtn.admitiabff.repository.InterviewRepository;
@@ -120,7 +121,12 @@ public class EvaluationService {
     @Transactional
     public Map<String, Object> assign(Long id, Map<String, Object> payload) {
         EvaluationEntity entity = load(id);
-        entity.setEvaluator(userRepository.findById(((Number) payload.get("evaluatorId")).longValue()).orElseThrow(() -> new IllegalArgumentException("Evaluador no encontrado")));
+        var evaluator = userRepository.findById(((Number) payload.get("evaluatorId")).longValue())
+            .orElseThrow(() -> new IllegalArgumentException("Evaluador no encontrado"));
+
+        validateEvaluatorSubject(entity, evaluator);
+
+        entity.setEvaluator(evaluator);
         entity.setEvaluationDate(parseDateTime(payload.get("evaluationDate")));
         if (entity.getStatus() != EvaluationStatus.COMPLETED) {
             entity.setStatus(EvaluationStatus.IN_PROGRESS);
@@ -184,6 +190,19 @@ public class EvaluationService {
         return Map.of("success", true, "message", "Migración completada", "data", Map.of("created", created));
     }
 
+    private void validateEvaluatorSubject(EvaluationEntity evaluation, UserEntity evaluator) {
+        String evaluationSubject = evaluation.getSubject();
+        String evaluatorSubject = evaluator.getSubject();
+
+        if (evaluationSubject != null && !evaluationSubject.isBlank() &&
+            !evaluationSubject.equals(evaluatorSubject)) {
+            throw new IllegalArgumentException(
+                String.format("El evaluador no tiene la asignatura requerida. Asignatura de la evaluación: %s, Asignatura del evaluador: %s",
+                    evaluationSubject, evaluatorSubject)
+            );
+        }
+    }
+
     private void merge(EvaluationEntity entity, Map<String, Object> payload) {
         if (payload.get("applicationId") instanceof Number number) {
             entity.setApplication(applicationRepository.findActiveById(number.longValue()).orElseThrow(() -> new IllegalArgumentException("Postulación no encontrada")));
@@ -200,6 +219,10 @@ public class EvaluationService {
         entity.setMaxScore(decimalValue(payload.getOrDefault("maxScore", entity.getMaxScore())));
         entity.setRecommendations(stringValue(payload.getOrDefault("recommendations", entity.getRecommendations())));
         entity.setObservations(stringValue(payload.getOrDefault("observations", entity.getObservations())));
+
+        if (entity.getEvaluator() != null) {
+            validateEvaluatorSubject(entity, entity.getEvaluator());
+        }
     }
 
     private Map<String, Object> wrap(List<EvaluationEntity> entities) {
