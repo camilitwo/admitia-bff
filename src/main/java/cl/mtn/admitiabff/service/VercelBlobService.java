@@ -22,7 +22,8 @@ import org.springframework.stereotype.Service;
 @Service
 public class VercelBlobService {
     private static final Logger log = LoggerFactory.getLogger(VercelBlobService.class);
-    private static final String BLOB_API = "https://blob.vercel-storage.com";
+    private static final String BLOB_API = "https://vercel.com/api/blob";
+    private static final String BLOB_API_VERSION = "12";
 
     private final String token;
     private final HttpClient http;
@@ -49,21 +50,19 @@ public class VercelBlobService {
             throw new IllegalStateException("Vercel Blob not configured");
         }
         String encodedPath = URLEncoder.encode(pathname, StandardCharsets.UTF_8).replace("+", "%20");
-        // This project uses a private Vercel Blob store. The REST API defaults to
-        // public access if omitted, which fails against private stores.
-        URI uri = URI.create(BLOB_API + "/" + encodedPath + "?access=private");
+        URI uri = URI.create(BLOB_API + "/?pathname=" + encodedPath);
         HttpRequest req = HttpRequest.newBuilder(uri)
                 .timeout(Duration.ofSeconds(60))
                 .header("Authorization", "Bearer " + token)
                 .header("x-content-type", contentType == null ? "application/octet-stream" : contentType)
-                .header("x-access", "private")
-                .header("x-api-version", "7")
+                .header("x-vercel-blob-access", "private")
+                .header("x-api-version", BLOB_API_VERSION)
                 .PUT(HttpRequest.BodyPublishers.ofByteArray(data))
                 .build();
         try {
             HttpResponse<String> resp = http.send(req, HttpResponse.BodyHandlers.ofString());
             if (resp.statusCode() / 100 != 2) {
-                throw new IOException("Vercel Blob PUT failed: HTTP " + resp.statusCode() + " uri=" + uri + " access=private body=" + resp.body());
+                throw new IOException("Vercel Blob PUT failed: HTTP " + resp.statusCode() + " uri=" + uri + " header=x-vercel-blob-access:private body=" + resp.body());
             }
             JsonNode json = mapper.readTree(resp.body());
             BlobUploadResult result = new BlobUploadResult();
@@ -87,7 +86,7 @@ public class VercelBlobService {
                 .timeout(Duration.ofSeconds(30))
                 .header("Authorization", "Bearer " + token)
                 .header("Content-Type", "application/json")
-                .header("x-api-version", "7")
+                .header("x-api-version", BLOB_API_VERSION)
                 .POST(HttpRequest.BodyPublishers.ofString(body))
                 .build();
         try {
