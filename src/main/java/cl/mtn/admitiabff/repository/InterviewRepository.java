@@ -16,6 +16,8 @@ public interface InterviewRepository extends JpaRepository<InterviewEntity, Long
     @Query("select i from InterviewEntity i where (i.interviewer.id = :interviewerId or i.secondInterviewer.id = :interviewerId) and i.status not in :excluded order by i.scheduledDate, i.scheduledTime")
     List<InterviewEntity> findVisibleForInterviewer(@Param("interviewerId") Long interviewerId, @Param("excluded") List<InterviewStatus> excluded);
     List<InterviewEntity> findByInterviewerIdAndScheduledDateAndStatusIn(Long interviewerId, LocalDate date, List<InterviewStatus> statuses);
+    @Query("select i from InterviewEntity i where (i.interviewer.id = :interviewerId or i.secondInterviewer.id = :interviewerId) and i.scheduledDate = :date and i.status not in :excluded")
+    List<InterviewEntity> findBlockingForInterviewer(@Param("interviewerId") Long interviewerId, @Param("date") LocalDate date, @Param("excluded") List<InterviewStatus> excluded);
     long countByStatus(InterviewStatus status);
     long countByScheduledDateGreaterThanEqualAndStatus(LocalDate date, InterviewStatus status);
     @Query("select i.status as key, count(i) as total from InterviewEntity i group by i.status")

@@ -33,7 +33,7 @@ public class InterviewerScheduleEntity extends BaseEntity {
     private UserEntity interviewer;
 
     @Column(name = "day_of_week")
-    private Integer dayOfWeek;
+    private String dayOfWeek;
 
     @Column(name = "start_time", nullable = false)
     private LocalTime startTime;

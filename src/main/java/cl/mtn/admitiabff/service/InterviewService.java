@@ -76,16 +76,18 @@ public class InterviewService {
     public Map<String, Object> availableSlots(Long interviewerId, String date, Integer duration) {
         LocalDate targetDate = LocalDate.parse(date);
         int interviewDuration = duration == null ? 60 : duration;
-        List<InterviewerScheduleEntity> schedules = scheduleRepository.findAvailableTemplates(interviewerId, targetDate, targetDate.getDayOfWeek().getValue());
-        List<InterviewEntity> booked = interviewRepository.findByInterviewerIdAndScheduledDateAndStatusIn(interviewerId, targetDate, List.of(InterviewStatus.SCHEDULED, InterviewStatus.RESCHEDULED));
+        List<InterviewerScheduleEntity> schedules = scheduleRepository.findAvailableTemplates(interviewerId, targetDate, dayName(targetDate), targetDate.getYear());
+        List<InterviewEntity> booked = interviewRepository.findBlockingForInterviewer(interviewerId, targetDate, List.of(InterviewStatus.CANCELLED, InterviewStatus.RESCHEDULED));
         List<Map<String, Object>> slots = new ArrayList<>();
         for (InterviewerScheduleEntity schedule : schedules) {
             LocalTime current = schedule.getStartTime();
-            while (!current.plusMinutes(30).isAfter(schedule.getEndTime())) {
+            while (current.isBefore(schedule.getEndTime())) {
                 LocalTime slot = current;
-                boolean occupied = booked.stream().anyMatch(interview -> slot.equals(interview.getScheduledTime()));
-                if (!occupied) {
-                    slots.add(Map.of("time", slot.toString(), "display", slot.toString(), "canFitDuration", !slot.plusMinutes(interviewDuration).isAfter(schedule.getEndTime())));
+                LocalTime slotEnd = slot.plusMinutes(interviewDuration);
+                boolean canFitDuration = !slotEnd.isAfter(schedule.getEndTime());
+                boolean occupied = booked.stream().anyMatch(interview -> overlaps(slot, slotEnd, interview.getScheduledTime(), interview.getScheduledTime().plusMinutes(interview.getDuration() == null ? 60 : interview.getDuration())));
+                if (canFitDuration && !occupied) {
+                    slots.add(Map.of("time", slot.toString(), "display", slot.toString(), "canFitDuration", true));
                 }
                 current = current.plusMinutes(30);
             }
@@ -99,6 +101,7 @@ public class InterviewService {
     public Map<String, Object> create(Map<String, Object> payload) {
         InterviewEntity entity = new InterviewEntity();
         merge(entity, payload);
+        ensureInterviewersAvailable(entity);
         return Map.of("success", true, "message", "Entrevista creada correctamente", "data", toResponse(interviewRepository.save(entity)));
     }
 
@@ -106,6 +109,7 @@ public class InterviewService {
     public Map<String, Object> update(Long id, Map<String, Object> payload) {
         InterviewEntity entity = load(id);
         merge(entity, payload);
+        ensureInterviewersAvailable(entity);
         return Map.of("success", true, "message", "Entrevista actualizada", "data", toResponse(interviewRepository.save(entity)));
     }
 
@@ -152,7 +156,8 @@ public class InterviewService {
         if (payload.get("secondInterviewerId") instanceof Number number) {
             entity.setSecondInterviewer(userRepository.findById(number.longValue()).orElseThrow(() -> new IllegalArgumentException("Segundo entrevistador no encontrado")));
         }
-        entity.setInterviewType(String.valueOf(payload.getOrDefault("interviewType", entity.getInterviewType() == null ? "FAMILY" : entity.getInterviewType())));
+        Object interviewType = payload.getOrDefault("interviewType", payload.getOrDefault("type", entity.getInterviewType() == null ? "FAMILY" : entity.getInterviewType()));
+        entity.setInterviewType(String.valueOf(interviewType));
         if (payload.get("scheduledDate") != null) entity.setScheduledDate(LocalDate.parse(String.valueOf(payload.get("scheduledDate"))));
         if (payload.get("scheduledTime") != null) entity.setScheduledTime(LocalTime.parse(String.valueOf(payload.get("scheduledTime"))));
         entity.setDuration(payload.get("duration") instanceof Number number ? number.intValue() : entity.getDuration() == null ? 60 : entity.getDuration());
@@ -164,6 +169,36 @@ public class InterviewService {
 
     private InterviewEntity load(Long id) {
         return interviewRepository.findById(id).orElseThrow(() -> new IllegalArgumentException("Entrevista no encontrada"));
+    }
+
+    private void ensureInterviewersAvailable(InterviewEntity entity) {
+        ensureInterviewerAvailable(entity.getInterviewer().getId(), entity.getScheduledDate(), entity.getScheduledTime(), entity.getDuration());
+        if (entity.getSecondInterviewer() != null) {
+            ensureInterviewerAvailable(entity.getSecondInterviewer().getId(), entity.getScheduledDate(), entity.getScheduledTime(), entity.getDuration());
+        }
+    }
+
+    private void ensureInterviewerAvailable(Long interviewerId, LocalDate date, LocalTime time, Integer duration) {
+        int interviewDuration = duration == null ? 60 : duration;
+        LocalTime end = time.plusMinutes(interviewDuration);
+        boolean coveredBySchedule = scheduleRepository.findAvailableTemplates(interviewerId, date, dayName(date), date.getYear()).stream()
+            .anyMatch(schedule -> !time.isBefore(schedule.getStartTime()) && !end.isAfter(schedule.getEndTime()));
+        if (!coveredBySchedule) {
+            throw new IllegalArgumentException("El entrevistador no tiene horario disponible para la fecha y hora seleccionadas");
+        }
+        boolean hasConflict = interviewRepository.findBlockingForInterviewer(interviewerId, date, List.of(InterviewStatus.CANCELLED, InterviewStatus.RESCHEDULED)).stream()
+            .anyMatch(interview -> overlaps(time, end, interview.getScheduledTime(), interview.getScheduledTime().plusMinutes(interview.getDuration() == null ? 60 : interview.getDuration())));
+        if (hasConflict) {
+            throw new IllegalArgumentException("El entrevistador ya tiene una entrevista programada en este horario");
+        }
+    }
+
+    private boolean overlaps(LocalTime start, LocalTime end, LocalTime bookedStart, LocalTime bookedEnd) {
+        return start.isBefore(bookedEnd) && end.isAfter(bookedStart);
+    }
+
+    private String dayName(LocalDate date) {
+        return date.getDayOfWeek().name();
     }
 
     private Map<String, Object> wrap(List<InterviewEntity> entities) {

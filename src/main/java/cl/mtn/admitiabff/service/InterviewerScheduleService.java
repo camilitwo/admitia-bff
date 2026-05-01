@@ -37,8 +37,8 @@ public class InterviewerScheduleService {
         LocalDate targetDate = LocalDate.parse(date);
         LocalTime targetTime = LocalTime.parse(time);
         List<Map<String, Object>> interviewers = scheduleRepository.findInterviewersWithSchedules(targetDate.getYear()).stream()
-            .filter(item -> scheduleRepository.findAvailableTemplates(item.getInterviewerId(), targetDate, targetDate.getDayOfWeek().getValue()).stream().anyMatch(schedule -> !targetTime.isBefore(schedule.getStartTime()) && targetTime.isBefore(schedule.getEndTime())))
-            .filter(item -> interviewRepository.findByInterviewerIdAndScheduledDateAndStatusIn(item.getInterviewerId(), targetDate, List.of(cl.mtn.admitiabff.domain.common.InterviewStatus.SCHEDULED, cl.mtn.admitiabff.domain.common.InterviewStatus.RESCHEDULED)).stream().noneMatch(interview -> targetTime.equals(interview.getScheduledTime())))
+            .filter(item -> scheduleRepository.findAvailableTemplates(item.getInterviewerId(), targetDate, dayName(targetDate), targetDate.getYear()).stream().anyMatch(schedule -> !targetTime.isBefore(schedule.getStartTime()) && targetTime.isBefore(schedule.getEndTime())))
+            .filter(item -> interviewRepository.findBlockingForInterviewer(item.getInterviewerId(), targetDate, List.of(cl.mtn.admitiabff.domain.common.InterviewStatus.CANCELLED, cl.mtn.admitiabff.domain.common.InterviewStatus.RESCHEDULED)).stream().noneMatch(interview -> overlaps(targetTime, targetTime.plusMinutes(60), interview.getScheduledTime(), interview.getScheduledTime().plusMinutes(interview.getDuration() == null ? 60 : interview.getDuration()))))
             .<Map<String, Object>>map(item -> {
                 Map<String, Object> interviewer = new LinkedHashMap<>();
                 interviewer.put("id", item.getInterviewerId());
@@ -74,7 +74,7 @@ public class InterviewerScheduleService {
     public Map<String, Object> create(Map<String, Object> payload) {
         Long interviewerId = resolveInterviewerId(payload);
         enforceOwnership(interviewerId);
-        Integer dayOfWeek = payload.get("dayOfWeek") == null ? null : Integer.parseInt(String.valueOf(payload.get("dayOfWeek")));
+        String dayOfWeek = payload.get("dayOfWeek") == null ? null : String.valueOf(payload.get("dayOfWeek")).toUpperCase();
         LocalTime startTime = LocalTime.parse(String.valueOf(payload.get("startTime")));
         LocalTime endTime = LocalTime.parse(String.valueOf(payload.get("endTime")));
         Integer year = Integer.parseInt(String.valueOf(payload.get("year")));
@@ -97,7 +97,7 @@ public class InterviewerScheduleService {
             request.put("interviewerId", interviewerId);
             request.put("year", year);
             request.put("scheduleType", ScheduleType.RECURRING.name());
-            Integer dayOfWeek = Integer.parseInt(String.valueOf(item.get("dayOfWeek")));
+            String dayOfWeek = String.valueOf(item.get("dayOfWeek")).toUpperCase();
             LocalTime startTime = LocalTime.parse(String.valueOf(item.get("startTime")));
             LocalTime endTime = LocalTime.parse(String.valueOf(item.get("endTime")));
             if (scheduleRepository.existsDuplicate(interviewerId, dayOfWeek, startTime, endTime, year, null)) {
@@ -163,7 +163,7 @@ public class InterviewerScheduleService {
 
     private void merge(InterviewerScheduleEntity entity, Map<String, Object> payload, Long interviewerId) {
         entity.setInterviewer(userRepository.findById(interviewerId).orElseThrow(() -> new IllegalArgumentException("Entrevistador no encontrado")));
-        entity.setDayOfWeek(payload.get("dayOfWeek") == null || String.valueOf(payload.get("dayOfWeek")).isBlank() ? entity.getDayOfWeek() : Integer.parseInt(String.valueOf(payload.get("dayOfWeek"))));
+        entity.setDayOfWeek(payload.get("dayOfWeek") == null || String.valueOf(payload.get("dayOfWeek")).isBlank() ? entity.getDayOfWeek() : String.valueOf(payload.get("dayOfWeek")).toUpperCase());
         entity.setStartTime(payload.get("startTime") == null ? entity.getStartTime() : LocalTime.parse(String.valueOf(payload.get("startTime"))));
         entity.setEndTime(payload.get("endTime") == null ? entity.getEndTime() : LocalTime.parse(String.valueOf(payload.get("endTime"))));
         entity.setYear(payload.get("year") == null ? entity.getYear() : Integer.parseInt(String.valueOf(payload.get("year"))));
@@ -185,6 +185,14 @@ public class InterviewerScheduleService {
         if (Role.INTERVIEWER.name().equals(auth.role()) && !auth.id().equals(interviewerId)) {
             throw new IllegalArgumentException("Un entrevistador solo puede gestionar sus propios horarios");
         }
+    }
+
+    private boolean overlaps(LocalTime start, LocalTime end, LocalTime bookedStart, LocalTime bookedEnd) {
+        return start.isBefore(bookedEnd) && end.isAfter(bookedStart);
+    }
+
+    private String dayName(LocalDate date) {
+        return date.getDayOfWeek().name();
     }
 
     private Map<String, Object> toResponse(InterviewerScheduleEntity entity) {
