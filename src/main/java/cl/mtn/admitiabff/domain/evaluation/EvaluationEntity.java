@@ -19,6 +19,8 @@ import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import lombok.Getter;
 import lombok.Setter;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 @Getter
 @Setter
@@ -68,6 +70,7 @@ public class EvaluationEntity extends BaseEntity {
     @Column(name = "cancellation_reason", columnDefinition = "text")
     private String cancellationReason;
 
+    @JdbcTypeCode(SqlTypes.JSON)
     @Column(name = "interview_data", columnDefinition = "jsonb")
     private String interviewData;
 

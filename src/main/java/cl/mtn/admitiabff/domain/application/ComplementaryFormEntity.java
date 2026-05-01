@@ -12,6 +12,8 @@ import jakarta.persistence.Table;
 import java.time.LocalDateTime;
 import lombok.Getter;
 import lombok.Setter;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 @Getter
 @Setter
@@ -26,6 +28,7 @@ public class ComplementaryFormEntity {
     @JoinColumn(name = "application_id", nullable = false, unique = true)
     private ApplicationEntity application;
 
+    @JdbcTypeCode(SqlTypes.JSON)
     @Column(name = "form_data", nullable = false, columnDefinition = "jsonb")
     private String formData;
 
