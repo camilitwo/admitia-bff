@@ -12,28 +12,61 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 public interface ApplicationRepository extends JpaRepository<ApplicationEntity, Long> {
-    @Query(value = "select ae.* from applications ae join students s on s.id = ae.student_id where ae.deleted_at is null and ae.status = :status and s.grade_applied = :grade and (lower(s.first_name) like lower('%'||:search||'%') or lower(coalesce(s.paternal_last_name,'')) like lower('%'||:search||'%') or lower(coalesce(s.maternal_last_name,'')) like lower('%'||:search||'%') or lower(coalesce(s.rut,'')) like lower('%'||:search||'%') or cast(ae.id as text) like '%'||:search||'%')", nativeQuery = true)
+    /** Listados admin: excluye soft-delete y archivadas; orden estable para paginación. */
+    String ACTIVE_APP = "ae.deleted_at is null and ae.is_archived = false";
+    String ORDER_RECENT = " order by ae.submission_date desc, ae.id desc";
+
+    @Query(
+        value = "select ae.* from applications ae join students s on s.id = ae.student_id where "
+            + ACTIVE_APP
+            + " and ae.status = :status and s.grade_applied = :grade and (lower(s.first_name) like lower('%'||:search||'%') or lower(coalesce(s.paternal_last_name,'')) like lower('%'||:search||'%') or lower(coalesce(s.maternal_last_name,'')) like lower('%'||:search||'%') or lower(coalesce(s.rut,'')) like lower('%'||:search||'%') or cast(ae.id as text) like '%'||:search||'%')"
+            + ORDER_RECENT,
+        nativeQuery = true)
     Page<ApplicationEntity> findByStatusAndGradeAndSearch(@Param("status") String status, @Param("grade") String grade, @Param("search") String search, Pageable pageable);
 
-    @Query(value = "select ae.* from applications ae join students s on s.id = ae.student_id where ae.deleted_at is null and ae.status = :status and s.grade_applied = :grade", nativeQuery = true)
+    @Query(
+        value = "select ae.* from applications ae join students s on s.id = ae.student_id where "
+            + ACTIVE_APP
+            + " and ae.status = :status and s.grade_applied = :grade"
+            + ORDER_RECENT,
+        nativeQuery = true)
     Page<ApplicationEntity> findByStatusAndGrade(@Param("status") String status, @Param("grade") String grade, Pageable pageable);
 
-    @Query(value = "select ae.* from applications ae join students s on s.id = ae.student_id where ae.deleted_at is null and ae.status = :status and (lower(s.first_name) like lower('%'||:search||'%') or lower(coalesce(s.paternal_last_name,'')) like lower('%'||:search||'%') or lower(coalesce(s.maternal_last_name,'')) like lower('%'||:search||'%') or lower(coalesce(s.rut,'')) like lower('%'||:search||'%') or cast(ae.id as text) like '%'||:search||'%')", nativeQuery = true)
+    @Query(
+        value = "select ae.* from applications ae join students s on s.id = ae.student_id where "
+            + ACTIVE_APP
+            + " and ae.status = :status and (lower(s.first_name) like lower('%'||:search||'%') or lower(coalesce(s.paternal_last_name,'')) like lower('%'||:search||'%') or lower(coalesce(s.maternal_last_name,'')) like lower('%'||:search||'%') or lower(coalesce(s.rut,'')) like lower('%'||:search||'%') or cast(ae.id as text) like '%'||:search||'%')"
+            + ORDER_RECENT,
+        nativeQuery = true)
     Page<ApplicationEntity> findByStatusAndSearch(@Param("status") String status, @Param("search") String search, Pageable pageable);
 
-    @Query(value = "select ae.* from applications ae join students s on s.id = ae.student_id where ae.deleted_at is null and s.grade_applied = :grade and (lower(s.first_name) like lower('%'||:search||'%') or lower(coalesce(s.paternal_last_name,'')) like lower('%'||:search||'%') or lower(coalesce(s.maternal_last_name,'')) like lower('%'||:search||'%') or lower(coalesce(s.rut,'')) like lower('%'||:search||'%') or cast(ae.id as text) like '%'||:search||'%')", nativeQuery = true)
+    @Query(
+        value = "select ae.* from applications ae join students s on s.id = ae.student_id where "
+            + ACTIVE_APP
+            + " and s.grade_applied = :grade and (lower(s.first_name) like lower('%'||:search||'%') or lower(coalesce(s.paternal_last_name,'')) like lower('%'||:search||'%') or lower(coalesce(s.maternal_last_name,'')) like lower('%'||:search||'%') or lower(coalesce(s.rut,'')) like lower('%'||:search||'%') or cast(ae.id as text) like '%'||:search||'%')"
+            + ORDER_RECENT,
+        nativeQuery = true)
     Page<ApplicationEntity> findByGradeAndSearch(@Param("grade") String grade, @Param("search") String search, Pageable pageable);
 
-    @Query(value = "select ae.* from applications ae where ae.deleted_at is null and ae.status = :status", nativeQuery = true)
+    @Query(
+        value = "select ae.* from applications ae where " + ACTIVE_APP + " and ae.status = :status" + ORDER_RECENT,
+        nativeQuery = true)
     Page<ApplicationEntity> findByStatus(@Param("status") String status, Pageable pageable);
 
-    @Query(value = "select ae.* from applications ae join students s on s.id = ae.student_id where ae.deleted_at is null and s.grade_applied = :grade", nativeQuery = true)
+    @Query(
+        value = "select ae.* from applications ae join students s on s.id = ae.student_id where " + ACTIVE_APP + " and s.grade_applied = :grade" + ORDER_RECENT,
+        nativeQuery = true)
     Page<ApplicationEntity> findByGrade(@Param("grade") String grade, Pageable pageable);
 
-    @Query(value = "select ae.* from applications ae join students s on s.id = ae.student_id where ae.deleted_at is null and (lower(s.first_name) like lower('%'||:search||'%') or lower(coalesce(s.paternal_last_name,'')) like lower('%'||:search||'%') or lower(coalesce(s.maternal_last_name,'')) like lower('%'||:search||'%') or lower(coalesce(s.rut,'')) like lower('%'||:search||'%') or cast(ae.id as text) like '%'||:search||'%')", nativeQuery = true)
+    @Query(
+        value = "select ae.* from applications ae join students s on s.id = ae.student_id where "
+            + ACTIVE_APP
+            + " and (lower(s.first_name) like lower('%'||:search||'%') or lower(coalesce(s.paternal_last_name,'')) like lower('%'||:search||'%') or lower(coalesce(s.maternal_last_name,'')) like lower('%'||:search||'%') or lower(coalesce(s.rut,'')) like lower('%'||:search||'%') or cast(ae.id as text) like '%'||:search||'%')"
+            + ORDER_RECENT,
+        nativeQuery = true)
     Page<ApplicationEntity> findBySearchOnly(@Param("search") String search, Pageable pageable);
 
-    @Query(value = "select ae.* from applications ae where ae.deleted_at is null", nativeQuery = true)
+    @Query(value = "select ae.* from applications ae where " + ACTIVE_APP + ORDER_RECENT, nativeQuery = true)
     Page<ApplicationEntity> findAllActive(Pageable pageable);
 
     default Page<ApplicationEntity> search(ApplicationStatus status, String grade, String search, Pageable pageable) {
@@ -42,12 +75,12 @@ public interface ApplicationRepository extends JpaRepository<ApplicationEntity, 
         boolean hasSearch = search != null && !search.isBlank();
         String st = hasStatus ? status.name() : null;
         if (hasStatus && hasGrade && hasSearch) return findByStatusAndGradeAndSearch(st, grade, search, pageable);
-        if (hasStatus && hasGrade)              return findByStatusAndGrade(st, grade, pageable);
-        if (hasStatus && hasSearch)             return findByStatusAndSearch(st, search, pageable);
-        if (hasGrade && hasSearch)              return findByGradeAndSearch(grade, search, pageable);
-        if (hasStatus)                          return findByStatus(st, pageable);
-        if (hasGrade)                           return findByGrade(grade, pageable);
-        if (hasSearch)                          return findBySearchOnly(search, pageable);
+        if (hasStatus && hasGrade) return findByStatusAndGrade(st, grade, pageable);
+        if (hasStatus && hasSearch) return findByStatusAndSearch(st, search, pageable);
+        if (hasGrade && hasSearch) return findByGradeAndSearch(grade, search, pageable);
+        if (hasStatus) return findByStatus(st, pageable);
+        if (hasGrade) return findByGrade(grade, pageable);
+        if (hasSearch) return findBySearchOnly(search, pageable);
         return findAllActive(pageable);
     }
 
@@ -57,14 +90,21 @@ public interface ApplicationRepository extends JpaRepository<ApplicationEntity, 
 
     @EntityGraph(attributePaths = {"student"})
     List<ApplicationEntity> findByDeletedAtIsNullOrderBySubmissionDateDesc(Pageable pageable);
+
     long countByDeletedAtIsNull();
+
     long countByDeletedAtIsNullAndStatus(ApplicationStatus status);
+
     List<ApplicationEntity> findByDeletedAtIsNullAndStatusOrderBySubmissionDateAsc(ApplicationStatus status);
+
     List<ApplicationEntity> findByDeletedAtIsNullAndApplicantUserIdOrderByCreatedAtDesc(Long userId);
+
     @Query("select distinct a from ApplicationEntity a join EvaluationEntity e on e.application = a where a.deletedAt is null and e.evaluator.id = :evaluatorId order by a.createdAt desc")
     List<ApplicationEntity> findForEvaluator(@Param("evaluatorId") Long evaluatorId);
+
     @Query("select a from ApplicationEntity a where a.deletedAt is null and ((:category = 'employee' and a.student.employeeChild = true) or (:category = 'alumni' and a.student.alumniChild = true) or (:category = 'inclusion' and a.student.inclusionStudent = true))")
     List<ApplicationEntity> findBySpecialCategory(@Param("category") String category);
+
     @Query("select a from ApplicationEntity a where a.deletedAt is null and a.createdAt between :start and :end")
     List<ApplicationEntity> findBetween(@Param("start") LocalDateTime start, @Param("end") LocalDateTime end);
 }

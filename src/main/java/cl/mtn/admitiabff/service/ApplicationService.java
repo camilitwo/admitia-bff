@@ -396,18 +396,34 @@ public class ApplicationService {
         response.put("submissionDate", entity.getSubmissionDate());
         response.put("createdAt", entity.getCreatedAt());
         response.put("updatedAt", entity.getUpdatedAt());
-        response.put("student", Map.of(
-            "id", entity.getStudent().getId(),
-            "firstName", entity.getStudent().getFirstName(),
-            "lastName", (value(entity.getStudent().getPaternalLastName()) + " " + value(entity.getStudent().getMaternalLastName())).trim(),
-            "rut", entity.getStudent().getRut(),
-            "birthDate", entity.getStudent().getBirthDate(),
-            "gradeApplying", entity.getStudent().getGradeApplied(),
-            "currentSchool", entity.getStudent().getCurrentSchool(),
-            "specialNeeds", entity.getStudent().isSpecialNeeds(),
-            "specialNeedsDescription", entity.getStudent().getSpecialNeedsDescription(),
-            "targetSchool", entity.getStudent().getTargetSchool()
-        ));
+        Map<String, Object> studentMap = new LinkedHashMap<>();
+        studentMap.put("id", entity.getStudent().getId());
+        studentMap.put("firstName", entity.getStudent().getFirstName());
+        studentMap.put("paternalLastName", value(entity.getStudent().getPaternalLastName()));
+        studentMap.put("maternalLastName", value(entity.getStudent().getMaternalLastName()));
+        studentMap.put("lastName", (value(entity.getStudent().getPaternalLastName()) + " " + value(entity.getStudent().getMaternalLastName())).trim());
+        studentMap.put("rut", entity.getStudent().getRut());
+        studentMap.put("birthDate", entity.getStudent().getBirthDate());
+        studentMap.put("gradeApplying", entity.getStudent().getGradeApplied());
+        studentMap.put("gradeApplied", entity.getStudent().getGradeApplied());
+        studentMap.put("grade", entity.getStudent().getGradeApplied());
+        studentMap.put("currentSchool", entity.getStudent().getCurrentSchool());
+        studentMap.put("specialNeeds", entity.getStudent().isSpecialNeeds());
+        studentMap.put("specialNeedsDescription", entity.getStudent().getSpecialNeedsDescription());
+        studentMap.put("targetSchool", entity.getStudent().getTargetSchool());
+        response.put("student", studentMap);
+        if (entity.getGuardian() != null) {
+            Map<String, Object> guardianMap = new LinkedHashMap<>();
+            guardianMap.put("id", entity.getGuardian().getId());
+            guardianMap.put("fullName", entity.getGuardian().getFullName());
+            guardianMap.put("rut", entity.getGuardian().getRut());
+            guardianMap.put("email", value(entity.getGuardian().getEmail()));
+            guardianMap.put("phone", value(entity.getGuardian().getPhone()));
+            guardianMap.put("relationship", value(entity.getGuardian().getRelationship()));
+            response.put("guardian", guardianMap);
+        } else {
+            response.put("guardian", null);
+        }
         return response;
     }
 
