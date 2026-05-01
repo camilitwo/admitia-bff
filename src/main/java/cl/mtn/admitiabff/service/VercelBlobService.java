@@ -49,13 +49,13 @@ public class VercelBlobService {
             throw new IllegalStateException("Vercel Blob not configured");
         }
         String encodedPath = URLEncoder.encode(pathname, StandardCharsets.UTF_8).replace("+", "%20");
-        // Private store (beta): explicit access=private. Public stores use access=public.
-        URI uri = URI.create(BLOB_API + "/" + encodedPath + "?access=private");
+        // Omit access= param/header: the store's configured access mode (private/public)
+        // is authoritative. Sending "public" to a private store (or vice-versa) errors out.
+        URI uri = URI.create(BLOB_API + "/" + encodedPath);
         HttpRequest req = HttpRequest.newBuilder(uri)
                 .timeout(Duration.ofSeconds(60))
                 .header("Authorization", "Bearer " + token)
                 .header("x-content-type", contentType == null ? "application/octet-stream" : contentType)
-                .header("x-access", "private")
                 .header("x-api-version", "7")
                 .PUT(HttpRequest.BodyPublishers.ofByteArray(data))
                 .build();
