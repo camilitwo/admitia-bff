@@ -248,7 +248,12 @@ public class EvaluationService {
     private LocalDateTime parseDateTime(Object value) {
         if (value == null || String.valueOf(value).isBlank()) return null;
         if (value instanceof LocalDateTime dateTime) return dateTime;
-        return LocalDateTime.parse(String.valueOf(value));
+        String str = String.valueOf(value).trim();
+        // Handle date-only format (e.g., "2026-05-01") by appending start of day
+        if (str.length() == 10) {
+            return java.time.LocalDate.parse(str).atStartOfDay();
+        }
+        return LocalDateTime.parse(str);
     }
 
     private String stringValue(Object value) { return value == null ? null : String.valueOf(value); }
