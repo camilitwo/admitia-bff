@@ -216,7 +216,10 @@ public class ApplicationService {
     @Transactional
     public Map<String, Object> recordFinalDecision(Long id, Map<String, Object> payload) {
         var auth = authService.requireAuth();
+        log.info("[final-decision] applicationId={} requested by userId={} email={} role={}",
+            id, auth.id(), auth.email(), auth.role());
         if (!Role.ADMIN.name().equals(auth.role()) && !Role.COORDINATOR.name().equals(auth.role())) {
+            log.warn("[final-decision] DENIED applicationId={} role={} (need ADMIN or COORDINATOR)", id, auth.role());
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Solo administradores o coordinadores pueden registrar la decisión final");
         }
         String decisionRaw = firstNonNull(payload.get("decision"), payload.get("status"));

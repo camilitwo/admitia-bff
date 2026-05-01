@@ -3,6 +3,7 @@ package cl.mtn.admitiabff.domain.notification;
 import cl.mtn.admitiabff.domain.common.NotificationChannel;
 import cl.mtn.admitiabff.domain.common.NotificationStatus;
 import jakarta.persistence.Column;
+import jakarta.persistence.Convert;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
 import jakarta.persistence.Enumerated;
@@ -48,6 +49,7 @@ public class NotificationEntity {
     @Column(name = "template_name")
     private String templateName;
 
+    @Convert(converter = JsonbConverter.class)
     @Column(name = "template_data", columnDefinition = "jsonb")
     private String templateData;
 
