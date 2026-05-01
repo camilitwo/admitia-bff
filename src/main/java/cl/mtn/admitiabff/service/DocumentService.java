@@ -29,30 +29,34 @@ public class DocumentService {
     private final ApplicationRepository applicationRepository;
     private final UserRepository userRepository;
     private final AuthService authService;
+    private final VercelBlobService blobService;
     private final Path uploadsDir;
 
-    public DocumentService(DocumentRepository documentRepository, ApplicationRepository applicationRepository, UserRepository userRepository, AuthService authService, @Value("${app.uploads-dir}") String uploadsDir) {
+    public DocumentService(DocumentRepository documentRepository, ApplicationRepository applicationRepository, UserRepository userRepository, AuthService authService, VercelBlobService blobService, @Value("${app.uploads-dir}") String uploadsDir) {
         this.documentRepository = documentRepository;
         this.applicationRepository = applicationRepository;
         this.userRepository = userRepository;
         this.authService = authService;
+        this.blobService = blobService;
         this.uploadsDir = Path.of(uploadsDir).toAbsolutePath();
+    }
+
+    private boolean isBlobUrl(String path) {
+        return path != null && (path.startsWith("http://") || path.startsWith("https://"));
     }
 
     @Transactional
     public Map<String, Object> upload(List<MultipartFile> files, Map<String, Object> metadata) throws IOException {
         Long applicationId = Long.parseLong(String.valueOf(metadata.get("applicationId")));
-        Files.createDirectories(uploadsDir);
         var application = applicationRepository.findActiveById(applicationId).orElseThrow(() -> new IllegalArgumentException("Postulación no encontrada"));
         for (MultipartFile file : files) {
             DocumentEntity document = new DocumentEntity();
             document.setApplication(application);
             document.setDocumentType(String.valueOf(metadata.getOrDefault("documentType", "GENERAL")));
             document.setOriginalName(file.getOriginalFilename());
-            document.setFileName(UUID.randomUUID() + "-" + file.getOriginalFilename());
-            Path target = uploadsDir.resolve(document.getFileName());
-            Files.copy(file.getInputStream(), target, StandardCopyOption.REPLACE_EXISTING);
-            document.setFilePath(target.toString());
+            String storedName = UUID.randomUUID() + "-" + sanitize(file.getOriginalFilename());
+            document.setFileName(storedName);
+            storeFile(file, document, storedName);
             document.setFileSize(file.getSize());
             document.setContentType(file.getContentType());
             document.setRequired(Boolean.parseBoolean(String.valueOf(metadata.getOrDefault("isRequired", false))));
@@ -63,6 +67,27 @@ public class DocumentService {
         return byApplication(applicationId);
     }
 
+    private void storeFile(MultipartFile file, DocumentEntity document, String storedName) throws IOException {
+        if (blobService.isEnabled()) {
+            VercelBlobService.BlobUploadResult result = blobService.upload(
+                file.getBytes(),
+                "mtn_documents/" + storedName,
+                file.getContentType()
+            );
+            document.setFilePath(result.url);
+        } else {
+            Files.createDirectories(uploadsDir);
+            Path target = uploadsDir.resolve(storedName);
+            Files.copy(file.getInputStream(), target, StandardCopyOption.REPLACE_EXISTING);
+            document.setFilePath(target.toString());
+        }
+    }
+
+    private String sanitize(String name) {
+        if (name == null) return "file";
+        return name.replaceAll("[^a-zA-Z0-9._-]", "_");
+    }
+
     public Map<String, Object> byApplication(Long applicationId) {
         List<Map<String, Object>> data = documentRepository.findByApplicationIdOrderByUploadDateDesc(applicationId).stream().map(this::toResponse).toList();
         return Map.of("success", true, "data", data, "count", data.size());
@@ -70,7 +95,9 @@ public class DocumentService {
 
     public ResponseEntity<ByteArrayResource> download(Long id, boolean inline) throws IOException {
         DocumentEntity document = documentRepository.findById(id).orElseThrow(() -> new IllegalArgumentException("Documento no encontrado"));
-        byte[] bytes = Files.readAllBytes(Path.of(document.getFilePath()));
+        byte[] bytes = isBlobUrl(document.getFilePath())
+            ? blobService.download(document.getFilePath())
+            : Files.readAllBytes(Path.of(document.getFilePath()));
         MediaType mediaType = document.getContentType() == null ? MediaType.APPLICATION_OCTET_STREAM : MediaType.parseMediaType(document.getContentType());
         return ResponseEntity.ok().contentType(mediaType).header("Content-Disposition", (inline ? "inline" : "attachment") + "; filename=\"" + document.getOriginalName() + "\"").body(new ByteArrayResource(bytes));
     }
@@ -78,11 +105,12 @@ public class DocumentService {
     @Transactional
     public Map<String, Object> replace(Long id, MultipartFile file) throws IOException {
         DocumentEntity document = documentRepository.findById(id).orElseThrow(() -> new IllegalArgumentException("Documento no encontrado"));
-        Files.createDirectories(uploadsDir);
-        document.setFileName(UUID.randomUUID() + "-" + file.getOriginalFilename());
-        Path target = uploadsDir.resolve(document.getFileName());
-        Files.copy(file.getInputStream(), target, StandardCopyOption.REPLACE_EXISTING);
-        document.setFilePath(target.toString());
+        // Best-effort delete of previous file
+        String previous = document.getFilePath();
+        if (isBlobUrl(previous)) { blobService.delete(previous); } else if (previous != null) { Files.deleteIfExists(Path.of(previous)); }
+        String storedName = UUID.randomUUID() + "-" + sanitize(file.getOriginalFilename());
+        document.setFileName(storedName);
+        storeFile(file, document, storedName);
         document.setOriginalName(file.getOriginalFilename());
         document.setFileSize(file.getSize());
         document.setContentType(file.getContentType());
@@ -108,7 +136,12 @@ public class DocumentService {
     @Transactional
     public Map<String, Object> delete(Long id) throws IOException {
         DocumentEntity document = documentRepository.findById(id).orElseThrow(() -> new IllegalArgumentException("Documento no encontrado"));
-        Files.deleteIfExists(Path.of(document.getFilePath()));
+        String path = document.getFilePath();
+        if (isBlobUrl(path)) {
+            blobService.delete(path);
+        } else if (path != null) {
+            Files.deleteIfExists(Path.of(path));
+        }
         Long applicationId = document.getApplication().getId();
         documentRepository.delete(document);
         return byApplication(applicationId);

@@ -44,7 +44,8 @@ public class AuthService {
     }
 
     public Map<String, Object> csrfToken() {
-        return Map.of("success", true, "data", Map.of("csrfToken", UUID.randomUUID().toString()));
+        String token = UUID.randomUUID().toString();
+        return Map.of("success", true, "csrfToken", token);
     }
 
     public Map<String, Object> publicKey() {

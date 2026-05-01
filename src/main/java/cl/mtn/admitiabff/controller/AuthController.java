@@ -42,6 +42,12 @@ public class AuthController {
     @PostMapping("/check-email")
     public Map<String, Object> checkEmail(@RequestBody Map<String, Object> payload) { return authService.checkEmail(payload); }
 
+    @GetMapping("/check-email")
+    public boolean checkEmailGet(@org.springframework.web.bind.annotation.RequestParam String email) {
+        Map<String, Object> result = authService.checkEmail(java.util.Map.of("email", email));
+        return Boolean.TRUE.equals(result.get("exists"));
+    }
+
     @GetMapping("/check")
     public Map<String, Object> check() { return authService.check(); }
 

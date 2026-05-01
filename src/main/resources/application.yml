@@ -50,6 +50,8 @@ app:
   csrf:
     enabled: false
   uploads-dir: ${APP_UPLOADS_DIR:uploads}
+  blob:
+    token: ${BLOB_READ_WRITE_TOKEN:}
   email:
     mock-mode: ${APP_EMAIL_MOCK_MODE:true}
   cors:
