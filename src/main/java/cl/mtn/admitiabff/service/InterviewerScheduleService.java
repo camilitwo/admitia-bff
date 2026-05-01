@@ -39,14 +39,34 @@ public class InterviewerScheduleService {
         List<Map<String, Object>> interviewers = scheduleRepository.findInterviewersWithSchedules(targetDate.getYear()).stream()
             .filter(item -> scheduleRepository.findAvailableTemplates(item.getInterviewerId(), targetDate, targetDate.getDayOfWeek().getValue()).stream().anyMatch(schedule -> !targetTime.isBefore(schedule.getStartTime()) && targetTime.isBefore(schedule.getEndTime())))
             .filter(item -> interviewRepository.findByInterviewerIdAndScheduledDateAndStatusIn(item.getInterviewerId(), targetDate, List.of(cl.mtn.admitiabff.domain.common.InterviewStatus.SCHEDULED, cl.mtn.admitiabff.domain.common.InterviewStatus.RESCHEDULED)).stream().noneMatch(interview -> targetTime.equals(interview.getScheduledTime())))
-            .<Map<String, Object>>map(item -> Map.of("id", item.getInterviewerId(), "firstName", item.getFirstName(), "lastName", item.getLastName(), "name", item.getFirstName() + " " + item.getLastName(), "email", item.getEmail(), "role", String.valueOf(item.getRole()), "subject", item.getSubject()))
+            .<Map<String, Object>>map(item -> {
+                Map<String, Object> interviewer = new LinkedHashMap<>();
+                interviewer.put("id", item.getInterviewerId());
+                interviewer.put("firstName", item.getFirstName());
+                interviewer.put("lastName", item.getLastName());
+                interviewer.put("name", item.getFirstName() + " " + item.getLastName());
+                interviewer.put("email", item.getEmail());
+                interviewer.put("role", String.valueOf(item.getRole()));
+                interviewer.put("subject", item.getSubject());
+                return interviewer;
+            })
             .toList();
         return Map.of("success", true, "date", date, "time", time, "dayOfWeek", targetDate.getDayOfWeek().getValue(), "count", interviewers.size(), "interviewers", interviewers);
     }
 
     public List<Map<String, Object>> interviewersWithSchedules(Integer year) {
         return scheduleRepository.findInterviewersWithSchedules(year).stream()
-            .<Map<String, Object>>map(item -> Map.of("id", item.getInterviewerId(), "firstName", item.getFirstName(), "lastName", item.getLastName(), "email", item.getEmail(), "role", String.valueOf(item.getRole()), "subject", item.getSubject(), "scheduleCount", item.getScheduleCount()))
+            .<Map<String, Object>>map(item -> {
+                Map<String, Object> interviewer = new LinkedHashMap<>();
+                interviewer.put("id", item.getInterviewerId());
+                interviewer.put("firstName", item.getFirstName());
+                interviewer.put("lastName", item.getLastName());
+                interviewer.put("email", item.getEmail());
+                interviewer.put("role", String.valueOf(item.getRole()));
+                interviewer.put("subject", item.getSubject());
+                interviewer.put("scheduleCount", item.getScheduleCount());
+                return interviewer;
+            })
             .toList();
     }
 

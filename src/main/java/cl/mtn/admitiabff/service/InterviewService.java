@@ -34,14 +34,14 @@ public class InterviewService {
     }
 
     public List<Map<String, Object>> publicInterviewers() {
-        return scheduleRepository.findInterviewersWithSchedules(LocalDate.now().getYear()).stream()
+        return scheduleRepository.findPublicInterviewers().stream()
             .map(item -> {
                 Map<String, Object> interviewer = new LinkedHashMap<>();
                 interviewer.put("id", item.getInterviewerId());
-                interviewer.put("name", item.getFirstName() + " " + item.getLastName());
+                interviewer.put("name", item.getName());
                 interviewer.put("role", String.valueOf(item.getRole()));
                 interviewer.put("subject", item.getSubject());
-                interviewer.put("educationalLevel", null);
+                interviewer.put("educationalLevel", item.getEducationalLevel());
                 interviewer.put("scheduleCount", item.getScheduleCount());
                 return interviewer;
             })

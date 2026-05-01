@@ -17,8 +17,49 @@ public interface InterviewerScheduleRepository extends JpaRepository<Interviewer
     @Query("select count(s) > 0 from InterviewerScheduleEntity s where s.interviewer.id = :interviewerId and coalesce(s.dayOfWeek, -1) = coalesce(:dayOfWeek, -1) and s.startTime = :startTime and s.endTime = :endTime and s.year = :year and ((s.specificDate is null and :specificDate is null) or s.specificDate = :specificDate)")
     boolean existsDuplicate(@Param("interviewerId") Long interviewerId, @Param("dayOfWeek") Integer dayOfWeek, @Param("startTime") LocalTime startTime, @Param("endTime") LocalTime endTime, @Param("year") Integer year, @Param("specificDate") LocalDate specificDate);
     Optional<InterviewerScheduleEntity> findByInterviewerIdAndSpecificDateAndStartTimeAndEndTimeAndYear(Long interviewerId, LocalDate specificDate, LocalTime startTime, LocalTime endTime, Integer year);
-    @Query("select s.interviewer.id as interviewerId, s.interviewer.firstName as firstName, s.interviewer.lastName as lastName, s.interviewer.email as email, s.interviewer.role as role, s.interviewer.subject as subject, count(s) as scheduleCount from InterviewerScheduleEntity s where s.active = true and s.year = :year group by s.interviewer.id, s.interviewer.firstName, s.interviewer.lastName, s.interviewer.email, s.interviewer.role, s.interviewer.subject order by s.interviewer.firstName, s.interviewer.lastName")
+    @Query(value = """
+        SELECT DISTINCT
+            u.id AS interviewerId,
+            u.first_name AS firstName,
+            u.last_name AS lastName,
+            u.email AS email,
+            u.role AS role,
+            u.subject AS subject,
+            COUNT(s.id) AS scheduleCount
+        FROM users u
+        INNER JOIN interviewer_schedules s ON u.id = s.interviewer_id
+        WHERE s.year = :year
+          AND s.is_active = true
+          AND u.role IN ('TEACHER', 'PSYCHOLOGIST', 'CYCLE_DIRECTOR', 'COORDINATOR', 'INTERVIEWER')
+          AND u.active = true
+        GROUP BY u.id, u.first_name, u.last_name, u.email, u.role, u.subject
+        ORDER BY u.last_name, u.first_name
+        """, nativeQuery = true)
     List<InterviewerWithCountView> findInterviewersWithSchedules(@Param("year") Integer year);
+
+    @Query(value = """
+        SELECT
+            u.id AS interviewerId,
+            CONCAT(u.first_name, ' ', u.last_name) AS name,
+            u.role AS role,
+            u.subject AS subject,
+            CASE
+                WHEN u.role IN ('CYCLE_DIRECTOR', 'PSYCHOLOGIST', 'INTERVIEWER') THEN 'ALL'
+                WHEN u.subject LIKE '%MATH%' OR u.subject LIKE '%SCIENCE%' THEN 'SECONDARY'
+                ELSE 'PRIMARY'
+            END AS educationalLevel,
+            (
+                SELECT COUNT(*)
+                FROM interviewer_schedules s
+                WHERE s.interviewer_id = u.id
+                  AND s.is_active = true
+            ) AS scheduleCount
+        FROM users u
+        WHERE u.role IN ('TEACHER', 'PSYCHOLOGIST', 'CYCLE_DIRECTOR', 'COORDINATOR', 'INTERVIEWER')
+          AND u.active = true
+        ORDER BY u.role, u.last_name, u.first_name
+        """, nativeQuery = true)
+    List<PublicInterviewerView> findPublicInterviewers();
 
     interface InterviewerWithCountView {
         Long getInterviewerId();
@@ -27,6 +68,15 @@ public interface InterviewerScheduleRepository extends JpaRepository<Interviewer
         String getEmail();
         Object getRole();
         String getSubject();
+        long getScheduleCount();
+    }
+
+    interface PublicInterviewerView {
+        Long getInterviewerId();
+        String getName();
+        Object getRole();
+        String getSubject();
+        String getEducationalLevel();
         long getScheduleCount();
     }
 }
