@@ -49,9 +49,9 @@ public class VercelBlobService {
             throw new IllegalStateException("Vercel Blob not configured");
         }
         String encodedPath = URLEncoder.encode(pathname, StandardCharsets.UTF_8).replace("+", "%20");
-        // Omit access= param/header: the store's configured access mode (private/public)
-        // is authoritative. Sending "public" to a private store (or vice-versa) errors out.
-        URI uri = URI.create(BLOB_API + "/" + encodedPath);
+        // This project uses a private Vercel Blob store. The REST API defaults to
+        // public access if omitted, which fails against private stores.
+        URI uri = URI.create(BLOB_API + "/" + encodedPath + "?access=private");
         HttpRequest req = HttpRequest.newBuilder(uri)
                 .timeout(Duration.ofSeconds(60))
                 .header("Authorization", "Bearer " + token)
