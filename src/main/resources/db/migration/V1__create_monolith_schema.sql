@@ -199,7 +199,7 @@ CREATE TABLE IF NOT EXISTS interviews (
 CREATE TABLE IF NOT EXISTS interviewer_schedules (
     id BIGSERIAL PRIMARY KEY,
     interviewer_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    day_of_week VARCHAR(20),
+    day_of_week INTEGER,
     start_time TIME NOT NULL,
     end_time TIME NOT NULL,
     year INTEGER NOT NULL,
