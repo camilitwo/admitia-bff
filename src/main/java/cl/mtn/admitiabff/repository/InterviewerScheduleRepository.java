@@ -18,21 +18,22 @@ public interface InterviewerScheduleRepository extends JpaRepository<Interviewer
     boolean existsDuplicate(@Param("interviewerId") Long interviewerId, @Param("dayOfWeek") Integer dayOfWeek, @Param("startTime") LocalTime startTime, @Param("endTime") LocalTime endTime, @Param("year") Integer year, @Param("specificDate") LocalDate specificDate);
     Optional<InterviewerScheduleEntity> findByInterviewerIdAndSpecificDateAndStartTimeAndEndTimeAndYear(Long interviewerId, LocalDate specificDate, LocalTime startTime, LocalTime endTime, Integer year);
     @Query(value = """
-        SELECT DISTINCT
+        SELECT
             u.id AS interviewerId,
             u.first_name AS firstName,
             u.last_name AS lastName,
             u.email AS email,
             u.role AS role,
             u.subject AS subject,
-            COUNT(s.id) AS scheduleCount
+            (
+                SELECT COUNT(*)
+                FROM interviewer_schedules s
+                WHERE s.interviewer_id = u.id
+                  AND s.is_active = true
+            ) AS scheduleCount
         FROM users u
-        INNER JOIN interviewer_schedules s ON u.id = s.interviewer_id
-        WHERE s.year = :year
-          AND s.is_active = true
-          AND u.role IN ('TEACHER', 'PSYCHOLOGIST', 'CYCLE_DIRECTOR', 'COORDINATOR', 'INTERVIEWER')
+        WHERE u.role IN ('PSYCHOLOGIST', 'CYCLE_DIRECTOR', 'COORDINATOR', 'INTERVIEWER')
           AND u.active = true
-        GROUP BY u.id, u.first_name, u.last_name, u.email, u.role, u.subject
         ORDER BY u.last_name, u.first_name
         """, nativeQuery = true)
     List<InterviewerWithCountView> findInterviewersWithSchedules(@Param("year") Integer year);
