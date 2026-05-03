@@ -10,7 +10,6 @@ import java.security.Key;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.Date;
-import java.util.Map;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
@@ -39,7 +38,8 @@ public class JwtService {
         Instant now = Instant.now();
         return Jwts.builder()
             .subject(String.valueOf(userId))
-            .claims(Map.of("email", email, "role", role))
+            .claim("email", email)
+            .claim("role", role)
             .issuedAt(Date.from(now))
             .expiration(Date.from(now.plus(expirationMinutes, ChronoUnit.MINUTES)))
             .signWith(signingKey)
