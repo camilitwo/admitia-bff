@@ -1,6 +1,7 @@
 package cl.mtn.admitiabff.service;
 
 import cl.mtn.admitiabff.domain.common.EvaluationStatus;
+import cl.mtn.admitiabff.domain.common.InterviewStatus;
 import cl.mtn.admitiabff.domain.evaluation.EvaluationEntity;
 import cl.mtn.admitiabff.domain.user.UserEntity;
 import cl.mtn.admitiabff.repository.ApplicationRepository;
@@ -81,7 +82,45 @@ public class EvaluationService {
     public Map<String, Object> evaluatorCompleted(Long evaluatorId) { return wrap(evaluationRepository.findByEvaluatorIdAndStatusOrderByCreatedAtDesc(evaluatorId, EvaluationStatus.COMPLETED)); }
     public Map<String, Object> byType(String type) { return wrap(evaluationRepository.findByEvaluationTypeOrderByCreatedAtDesc(type)); }
     public Map<String, Object> bySubject(String subject) { return wrap(evaluationRepository.findBySubjectOrderByCreatedAtDesc(subject)); }
-    public Map<String, Object> myEvaluations() { return byEvaluator(authService.requireAuth().id()); }
+    public Map<String, Object> myEvaluations() {
+        AuthService.AuthContextHolder auth = authService.requireAuth();
+        Long userId = auth.id();
+        List<Map<String, Object>> evaluations = new java.util.ArrayList<>(
+            evaluationRepository.findByEvaluatorIdOrderByCreatedAtDesc(userId).stream()
+                .map(this::toResponse).toList()
+        );
+        List<InterviewStatus> excluded = List.of(InterviewStatus.CANCELLED, InterviewStatus.RESCHEDULED);
+        interviewRepository.findVisibleForInterviewer(userId, excluded).stream()
+            .map(this::interviewToEvaluationResponse)
+            .forEach(evaluations::add);
+        return Map.of("success", true, "data", evaluations, "count", evaluations.size());
+    }
+
+    private Map<String, Object> interviewToEvaluationResponse(cl.mtn.admitiabff.domain.interview.InterviewEntity entity) {
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("id", entity.getId());
+        response.put("applicationId", entity.getApplication() == null ? null : entity.getApplication().getId());
+        response.put("evaluatorId", entity.getInterviewer() == null ? null : entity.getInterviewer().getId());
+        response.put("evaluationType", entity.getInterviewType());
+        response.put("type", entity.getInterviewType());
+        response.put("status", entity.getStatus().name());
+        response.put("scheduledDate", entity.getScheduledDate());
+        response.put("evaluationDate", entity.getScheduledDate() != null && entity.getScheduledTime() != null
+            ? entity.getScheduledDate().atTime(entity.getScheduledTime()) : null);
+        response.put("score", null);
+        response.put("maxScore", null);
+        response.put("observations", entity.getNotes());
+        response.put("recommendations", null);
+        response.put("createdAt", entity.getCreatedAt());
+        response.put("updatedAt", entity.getUpdatedAt());
+        response.put("completedAt", null);
+        if (entity.getApplication() != null && entity.getApplication().getStudent() != null) {
+            var student = entity.getApplication().getStudent();
+            response.put("studentName", student.getFirstName() + " " + student.getPaternalLastName() + " " + student.getMaternalLastName());
+            response.put("gradeApplied", student.getGradeApplied());
+        }
+        return response;
+    }
     public Map<String, Object> familyInterviewTemplate(String grade) { return Map.of("success", true, "data", Map.of("grade", grade, "sections", List.of("Historia familiar", "Motivación", "Rutinas", "Observaciones"))); }
     public Map<String, Object> get(Long id) { return toResponse(load(id)); }
     public Map<String, Object> familyInterviewData(Long evaluationId) { EvaluationEntity entity = load(evaluationId); return Map.of("success", true, "data", jsonSupport.readMap(entity.getInterviewData()), "score", entity.getFamilyInterviewScore()); }
