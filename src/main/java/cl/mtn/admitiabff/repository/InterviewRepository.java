@@ -13,10 +13,10 @@ public interface InterviewRepository extends JpaRepository<InterviewEntity, Long
     List<InterviewEntity> findAllByOrderByCreatedAtDesc();
     List<InterviewEntity> findByApplicationIdOrderByScheduledDateDesc(Long applicationId);
     long countByApplicationIdAndSummarySentTrue(Long applicationId);
-    @Query("select i from InterviewEntity i where (i.interviewer.id = :interviewerId or i.secondInterviewer.id = :interviewerId) and i.status not in :excluded order by i.scheduledDate, i.scheduledTime")
+    @Query("select i from InterviewEntity i left join i.secondInterviewer si where (i.interviewer.id = :interviewerId or si.id = :interviewerId) and i.status not in :excluded order by i.scheduledDate, i.scheduledTime")
     List<InterviewEntity> findVisibleForInterviewer(@Param("interviewerId") Long interviewerId, @Param("excluded") List<InterviewStatus> excluded);
     List<InterviewEntity> findByInterviewerIdAndScheduledDateAndStatusIn(Long interviewerId, LocalDate date, List<InterviewStatus> statuses);
-    @Query("select i from InterviewEntity i where (i.interviewer.id = :interviewerId or i.secondInterviewer.id = :interviewerId) and i.scheduledDate = :date and i.status not in :excluded")
+    @Query("select i from InterviewEntity i left join i.secondInterviewer si where (i.interviewer.id = :interviewerId or si.id = :interviewerId) and i.scheduledDate = :date and i.status not in :excluded")
     List<InterviewEntity> findBlockingForInterviewer(@Param("interviewerId") Long interviewerId, @Param("date") LocalDate date, @Param("excluded") List<InterviewStatus> excluded);
     long countByStatus(InterviewStatus status);
     long countByScheduledDateGreaterThanEqualAndStatus(LocalDate date, InterviewStatus status);

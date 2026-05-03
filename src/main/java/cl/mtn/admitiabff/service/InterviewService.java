@@ -71,7 +71,10 @@ public class InterviewService {
 
     public Map<String, Object> byApplication(Long applicationId) { return wrap(interviewRepository.findByApplicationIdOrderByScheduledDateDesc(applicationId)); }
     public Map<String, Object> summaryStatus(Long applicationId) { return Map.of("success", true, "data", Map.of("applicationId", applicationId, "summarySent", interviewRepository.countByApplicationIdAndSummarySentTrue(applicationId) > 0)); }
-    public List<Map<String, Object>> byInterviewer(Long interviewerId) { return interviewRepository.findVisibleForInterviewer(interviewerId, List.of(InterviewStatus.CANCELLED, InterviewStatus.RESCHEDULED)).stream().map(this::toResponse).toList(); }
+    public Map<String, Object> byInterviewer(Long interviewerId) {
+        List<Map<String, Object>> data = interviewRepository.findVisibleForInterviewer(interviewerId, List.of(InterviewStatus.CANCELLED, InterviewStatus.RESCHEDULED)).stream().map(this::toResponse).toList();
+        return Map.of("success", true, "data", data, "count", data.size());
+    }
 
     public Map<String, Object> availableSlots(Long interviewerId, String date, Integer duration) {
         LocalDate targetDate = LocalDate.parse(date);
@@ -197,6 +200,15 @@ public class InterviewService {
         return start.isBefore(bookedEnd) && end.isAfter(bookedStart);
     }
 
+    private String resolveParentNames(InterviewEntity entity) {
+        var app = entity.getApplication();
+        java.util.List<String> names = new java.util.ArrayList<>();
+        if (app.getFather() != null && app.getFather().getFullName() != null) names.add(app.getFather().getFullName());
+        if (app.getMother() != null && app.getMother().getFullName() != null) names.add(app.getMother().getFullName());
+        if (names.isEmpty() && app.getGuardian() != null && app.getGuardian().getFullName() != null) names.add(app.getGuardian().getFullName());
+        return names.isEmpty() ? null : String.join(" / ", names);
+    }
+
     private String dayName(LocalDate date) {
         return date.getDayOfWeek().name();
     }
@@ -221,6 +233,7 @@ public class InterviewService {
         response.put("status", entity.getStatus().name());
         response.put("notes", entity.getNotes());
         response.put("studentName", entity.getApplication().getStudent() == null ? null : entity.getApplication().getStudent().getFirstName() + " " + entity.getApplication().getStudent().getPaternalLastName() + " " + entity.getApplication().getStudent().getMaternalLastName());
+        response.put("parentNames", resolveParentNames(entity));
         response.put("interviewerName", entity.getInterviewer() == null ? null : entity.getInterviewer().getFirstName() + " " + entity.getInterviewer().getLastName());
         response.put("secondInterviewerName", entity.getSecondInterviewer() == null ? null : entity.getSecondInterviewer().getFirstName() + " " + entity.getSecondInterviewer().getLastName());
         response.put("gradeApplied", entity.getApplication().getStudent() == null ? null : entity.getApplication().getStudent().getGradeApplied());

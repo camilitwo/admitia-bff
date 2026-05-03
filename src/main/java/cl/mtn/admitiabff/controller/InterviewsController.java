@@ -17,7 +17,7 @@ public class InterviewsController {
     @GetMapping("/calendar") public Map<String, Object> calendar(@RequestParam(required = false) String startDate, @RequestParam(required = false) String endDate) { return interviewService.calendar(startDate, endDate); }
     @GetMapping("/application/{applicationId}") public Map<String, Object> byApplication(@PathVariable Long applicationId) { return interviewService.byApplication(applicationId); }
     @GetMapping("/application/{applicationId}/summary-status") public Map<String, Object> summaryStatus(@PathVariable Long applicationId) { return interviewService.summaryStatus(applicationId); }
-    @GetMapping("/interviewer/{interviewerId}") public Object byInterviewer(@PathVariable Long interviewerId) { return interviewService.byInterviewer(interviewerId); }
+    @GetMapping("/interviewer/{interviewerId}") public Map<String, Object> byInterviewer(@PathVariable Long interviewerId) { return interviewService.byInterviewer(interviewerId); }
     @GetMapping("/available-slots") public Map<String, Object> availableSlots(@RequestParam Long interviewerId, @RequestParam String date, @RequestParam(required = false) Integer duration) { return interviewService.availableSlots(interviewerId, date, duration); }
     @GetMapping("/{id}") public Map<String, Object> get(@PathVariable Long id) { return interviewService.get(id); }
     @PostMapping public Map<String, Object> create(@RequestBody Map<String, Object> payload) { return interviewService.create(payload); }
