@@ -17,14 +17,26 @@ import java.time.LocalDateTime;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
+import org.springframework.http.HttpStatus;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.server.ResponseStatusException;
 
 @Service
 @Transactional(readOnly = true)
 public class AuthService {
+
+    private static final Set<Role> ADMIN_PORTAL_ROLES = Set.of(Role.ADMIN);
+
+    private static final Set<Role> STAFF_PORTAL_ROLES = Set.of(
+        Role.TEACHER, Role.COORDINATOR, Role.CYCLE_DIRECTOR,
+        Role.PSYCHOLOGIST, Role.INTERVIEWER
+    );
+
+    private static final Set<Role> GUARDIAN_PORTAL_ROLES = Set.of(Role.APODERADO);
     private final UserRepository userRepository;
     private final ActiveSessionRepository activeSessionRepository;
     private final EmailVerificationCodeRepository verificationCodeRepository;
@@ -57,9 +69,22 @@ public class AuthService {
         payload = normalizePayload(payload);
         String email = decrypt(payload, "email").trim().toLowerCase();
         String password = decrypt(payload, "password");
+        String portalType = stringValue(payload.get("portalType")).trim().toUpperCase();
         UserEntity user = userRepository.findByEmailIgnoreCase(email).orElseThrow(() -> new IllegalArgumentException("Credenciales inválidas"));
         if (!user.isActive() || !passwordEncoder.matches(password, user.getPasswordHash())) {
             throw new IllegalArgumentException("Credenciales inválidas");
+        }
+        if (!portalType.isEmpty()) {
+            Set<Role> allowedRoles = switch (portalType) {
+                case "ADMIN" -> ADMIN_PORTAL_ROLES;
+                case "STAFF" -> STAFF_PORTAL_ROLES;
+                case "GUARDIAN" -> GUARDIAN_PORTAL_ROLES;
+                default -> throw new IllegalArgumentException("Portal desconocido: " + portalType);
+            };
+            if (!allowedRoles.contains(user.getRole())) {
+                throw new ResponseStatusException(HttpStatus.FORBIDDEN,
+                    "Su cuenta no tiene acceso a este portal. Por favor use el portal correspondiente a su rol.");
+            }
         }
         user.setLastLoginAt(LocalDateTime.now());
         userRepository.save(user);
