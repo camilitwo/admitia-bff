@@ -259,7 +259,13 @@ public class AuthService {
         if (auth == null) {
             throw new IllegalArgumentException("No autenticado");
         }
-        return userRepository.findById(auth.id()).orElseThrow(() -> new IllegalArgumentException("Usuario no encontrado"));
+        if (auth.id() != null) {
+            return userRepository.findById(auth.id()).orElseThrow(() -> new IllegalArgumentException("Usuario no encontrado"));
+        }
+        if (auth.email() != null && !auth.email().isBlank()) {
+            return userRepository.findByEmailIgnoreCase(auth.email()).orElseThrow(() -> new IllegalArgumentException("Usuario no encontrado"));
+        }
+        throw new IllegalArgumentException("No autenticado");
     }
 
     public Map<String, Object> toAuthUser(UserEntity user) {
