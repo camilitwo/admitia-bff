@@ -12,7 +12,7 @@ import org.springframework.data.repository.query.Param;
 public interface InterviewerScheduleRepository extends JpaRepository<InterviewerScheduleEntity, Long> {
     List<InterviewerScheduleEntity> findByInterviewerIdOrderByYearDescDayOfWeekAscStartTimeAsc(Long interviewerId);
     List<InterviewerScheduleEntity> findByInterviewerIdAndYearOrderByDayOfWeekAscStartTimeAsc(Long interviewerId, Integer year);
-    @Query("select s from InterviewerScheduleEntity s where s.active = true and s.interviewer.id = :interviewerId and s.year = :year and ((s.specificDate = :date) or (s.specificDate is null and s.dayOfWeek = :dayOfWeek))")
+    @Query("select s from InterviewerScheduleEntity s where s.active = true and s.interviewer.id = :interviewerId and ((s.specificDate = :date) or (s.specificDate is null and s.dayOfWeek = :dayOfWeek))")
     List<InterviewerScheduleEntity> findAvailableTemplates(@Param("interviewerId") Long interviewerId, @Param("date") LocalDate date, @Param("dayOfWeek") String dayOfWeek, @Param("year") Integer year);
     @Query("select count(s) > 0 from InterviewerScheduleEntity s where s.interviewer.id = :interviewerId and coalesce(s.dayOfWeek, '') = coalesce(:dayOfWeek, '') and s.startTime = :startTime and s.endTime = :endTime and s.year = :year and ((s.specificDate is null and :specificDate is null) or s.specificDate = :specificDate)")
     boolean existsDuplicate(@Param("interviewerId") Long interviewerId, @Param("dayOfWeek") String dayOfWeek, @Param("startTime") LocalTime startTime, @Param("endTime") LocalTime endTime, @Param("year") Integer year, @Param("specificDate") LocalDate specificDate);

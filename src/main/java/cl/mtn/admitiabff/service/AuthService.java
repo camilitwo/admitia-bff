@@ -276,7 +276,7 @@ public class AuthService {
         response.put("email", user.getEmail());
         response.put("rut", user.getRut());
         response.put("phone", user.getPhone());
-        response.put("role", user.getRole().name());
+        response.put("role", user.getRole().name().toUpperCase());
         response.put("subject", user.getSubject());
         response.put("educationalLevel", user.getEducationalLevel());
         response.put("active", user.isActive());
