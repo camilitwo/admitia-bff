@@ -2,6 +2,7 @@ package cl.mtn.admitiabff.service;
 
 import cl.mtn.admitiabff.domain.user.EmailVerificationCodeEntity;
 import cl.mtn.admitiabff.repository.EmailVerificationCodeRepository;
+import cl.mtn.admitiabff.repository.NotificationRepository;
 import cl.mtn.admitiabff.repository.UserRepository;
 import cl.mtn.admitiabff.service.notification.EmailNotificationStrategy;
 import java.security.SecureRandom;
@@ -22,14 +23,17 @@ public class EmailVerificationService {
     private final EmailVerificationCodeRepository verificationCodeRepository;
     private final UserRepository userRepository;
     private final EmailNotificationStrategy emailStrategy;
+    private final NotificationRepository notificationRepository;
 
     public EmailVerificationService(
             EmailVerificationCodeRepository verificationCodeRepository,
             UserRepository userRepository,
-            EmailNotificationStrategy emailStrategy) {
+            EmailNotificationStrategy emailStrategy,
+            NotificationRepository notificationRepository) {
         this.verificationCodeRepository = verificationCodeRepository;
         this.userRepository = userRepository;
         this.emailStrategy = emailStrategy;
+        this.notificationRepository = notificationRepository;
     }
 
     /**
@@ -75,19 +79,27 @@ public class EmailVerificationService {
         entity.setCreatedAt(LocalDateTime.now());
         verificationCodeRepository.save(entity);
 
-        // 5. Send email
+        // 5. Send email via Amazon SES (through EmailNotificationStrategy)
         boolean emailSent = false;
         String emailError = null;
+        String subject = "Código de Verificación - Colegio MTN";
+        String htmlMessage = buildHtmlMessage(firstName, lastName, code);
+        var notification = buildNotificationEntity(email, subject, htmlMessage);
         try {
-            String subject = "Código de Verificación - Colegio MTN";
-            String message = buildMessage(firstName, lastName, code);
-            var notification = buildNotificationEntity(email, subject, message);
             emailStrategy.dispatch(notification);
+            notification.setStatus(cl.mtn.admitiabff.domain.common.NotificationStatus.SENT);
             emailSent = true;
-            log.info("Verification code sent to {}", email);
+            log.info("Verification code sent to {} via SES", email);
         } catch (Exception ex) {
+            notification.setStatus(cl.mtn.admitiabff.domain.common.NotificationStatus.FAILED);
             emailError = ex.getMessage();
-            log.error("Error sending verification email to {}: {}", email, ex.getMessage());
+            log.error("Error sending verification email to {}: {}", email, ex.getMessage(), ex);
+        } finally {
+            try {
+                notificationRepository.save(notification);
+            } catch (Exception persistEx) {
+                log.warn("No fue posible persistir la notificación de verificación: {}", persistEx.getMessage());
+            }
         }
 
         var response = new java.util.LinkedHashMap<String, Object>();
@@ -144,13 +156,30 @@ public class EmailVerificationService {
         return String.format("%06d", new SecureRandom().nextInt(900000) + 100000);
     }
 
-    private String buildMessage(String firstName, String lastName, String code) {
+    private String buildHtmlMessage(String firstName, String lastName, String code) {
         String name = (firstName + " " + lastName).trim();
-        return "Estimado/a " + (name.isEmpty() ? "usuario/a" : name) + ",\n\n"
-                + "Tu código de verificación es: " + code + "\n\n"
-                + "Este código expirará en " + EXPIRY_MINUTES + " minutos.\n\n"
-                + "Si no solicitaste este código, por favor ignora este mensaje.\n\n"
-                + "Saludos cordiales,\nColegio MTN";
+        String safeName = escapeHtml(name.isEmpty() ? "usuario/a" : name);
+        return "<!DOCTYPE html><html><body style=\"font-family:Arial,Helvetica,sans-serif;background:#f5f7fb;padding:24px;color:#1f2937;\">"
+                + "<div style=\"max-width:560px;margin:0 auto;background:#ffffff;border-radius:8px;padding:32px;box-shadow:0 1px 3px rgba(0,0,0,0.08);\">"
+                + "<h2 style=\"margin:0 0 16px;color:#0f172a;\">Colegio MTN</h2>"
+                + "<p>Estimado/a <strong>" + safeName + "</strong>,</p>"
+                + "<p>Tu código de verificación es:</p>"
+                + "<p style=\"font-size:28px;font-weight:bold;letter-spacing:6px;background:#eef2ff;color:#1e3a8a;padding:14px 20px;border-radius:6px;text-align:center;\">"
+                + escapeHtml(code) + "</p>"
+                + "<p>Este código expirará en <strong>" + EXPIRY_MINUTES + " minutos</strong>.</p>"
+                + "<p style=\"color:#6b7280;font-size:13px;\">Si no solicitaste este código, por favor ignora este mensaje.</p>"
+                + "<hr style=\"border:none;border-top:1px solid #e5e7eb;margin:24px 0;\"/>"
+                + "<p style=\"font-size:12px;color:#9ca3af;\">Saludos cordiales,<br/>Colegio MTN</p>"
+                + "</div></body></html>";
+    }
+
+    private String escapeHtml(String value) {
+        if (value == null) return "";
+        return value.replace("&", "&amp;")
+                .replace("<", "&lt;")
+                .replace(">", "&gt;")
+                .replace("\"", "&quot;")
+                .replace("'", "&#39;");
     }
 
     private cl.mtn.admitiabff.domain.notification.NotificationEntity buildNotificationEntity(
