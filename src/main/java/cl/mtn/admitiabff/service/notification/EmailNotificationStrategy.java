@@ -9,32 +9,28 @@ import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.mail.SimpleMailMessage;
-import org.springframework.mail.javamail.JavaMailSender;
 import org.springframework.stereotype.Component;
 
+/**
+ * Single email channel: Resend.
+ * <p>Internal use only by {@code NotificationService} / {@code EmailComposerService}.
+ * Other services must NOT inject this class directly: the only public entry
+ * point for sending emails with templates is {@code EmailComposerService}.
+ */
 @Component
 public class EmailNotificationStrategy implements NotificationChannelStrategy {
     private static final Logger log = LoggerFactory.getLogger(EmailNotificationStrategy.class);
 
-    private final JavaMailSender mailSender;
-    private final SesEmailSender sesEmailSender;
     private final ResendEmailSender resendEmailSender;
     private final JsonSupport jsonSupport;
     private final boolean mockMode;
-    private final String provider;
 
-    public EmailNotificationStrategy(JavaMailSender mailSender,
-                                     SesEmailSender sesEmailSender, ResendEmailSender resendEmailSender,
+    public EmailNotificationStrategy(ResendEmailSender resendEmailSender,
                                      JsonSupport jsonSupport,
-                                     @Value("${app.email.mock-mode}") boolean mockMode,
-                                     @Value("${app.email.provider:ses}") String provider) {
-        this.mailSender = mailSender;
-        this.sesEmailSender = sesEmailSender;
+                                     @Value("${app.email.mock-mode:false}") boolean mockMode) {
         this.resendEmailSender = resendEmailSender;
         this.jsonSupport = jsonSupport;
         this.mockMode = mockMode;
-        this.provider = provider;
     }
 
     @Override
@@ -66,17 +62,7 @@ public class EmailNotificationStrategy implements NotificationChannelStrategy {
             return;
         }
         try {
-            if ("resend".equalsIgnoreCase(provider)) {
-                resendEmailSender.send(notification.getRecipient(), notification.getSubject(), notification.getMessage());
-            } else if ("ses".equalsIgnoreCase(provider)) {
-                sesEmailSender.send(notification.getRecipient(), notification.getSubject(), notification.getMessage());
-            } else {
-                SimpleMailMessage message = new SimpleMailMessage();
-                message.setTo(notification.getRecipient());
-                message.setSubject(notification.getSubject());
-                message.setText(notification.getMessage());
-                mailSender.send(message);
-            }
+            resendEmailSender.send(notification.getRecipient(), notification.getSubject(), notification.getMessage());
         } catch (Exception ex) {
             log.error("Error enviando email a {}: {}", notification.getRecipient(), ex.getMessage(), ex);
             notification.setStatus(NotificationStatus.FAILED);
@@ -84,3 +70,4 @@ public class EmailNotificationStrategy implements NotificationChannelStrategy {
         }
     }
 }
+

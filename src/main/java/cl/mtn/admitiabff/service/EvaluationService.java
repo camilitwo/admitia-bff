@@ -28,16 +28,16 @@ public class EvaluationService {
     private final ApplicationRepository applicationRepository;
     private final InterviewRepository interviewRepository;
     private final UserRepository userRepository;
-    private final NotificationService notificationService;
+    private final cl.mtn.admitiabff.service.notification.EmailComposerService emailComposerService;
     private final AuthService authService;
     private final JsonSupport jsonSupport;
 
-    public EvaluationService(EvaluationRepository evaluationRepository, ApplicationRepository applicationRepository, InterviewRepository interviewRepository, UserRepository userRepository, NotificationService notificationService, AuthService authService, JsonSupport jsonSupport) {
+    public EvaluationService(EvaluationRepository evaluationRepository, ApplicationRepository applicationRepository, InterviewRepository interviewRepository, UserRepository userRepository, cl.mtn.admitiabff.service.notification.EmailComposerService emailComposerService, AuthService authService, JsonSupport jsonSupport) {
         this.evaluationRepository = evaluationRepository;
         this.applicationRepository = applicationRepository;
         this.interviewRepository = interviewRepository;
         this.userRepository = userRepository;
-        this.notificationService = notificationService;
+        this.emailComposerService = emailComposerService;
         this.authService = authService;
         this.jsonSupport = jsonSupport;
     }
@@ -171,7 +171,16 @@ public class EvaluationService {
             entity.setStatus(EvaluationStatus.IN_PROGRESS);
         }
         EvaluationEntity saved = evaluationRepository.save(entity);
-        notificationService.recordEmail(Map.of("to", saved.getEvaluator().getEmail(), "subject", "Nueva evaluación asignada", "message", "Se le ha asignado una nueva evaluación", "type", "EVALUATION_ASSIGNMENT"));
+        emailComposerService.send(cl.mtn.admitiabff.service.notification.EmailComposerService.EmailRequest.builder()
+                .template(cl.mtn.admitiabff.domain.notification.EmailTemplate.EVALUATION_ASSIGNMENT)
+                .to(saved.getEvaluator().getEmail())
+                .recipientType("USER")
+                .recipientId(saved.getEvaluator().getId())
+                .data(Map.of(
+                        "evaluatorName", saved.getEvaluator().getFirstName() == null ? "" : saved.getEvaluator().getFirstName(),
+                        "evaluationSubject", saved.getSubject() == null ? "" : saved.getSubject()
+                ))
+                .build());
         return Map.of("success", true, "message", "Evaluador asignado", "data", toResponse(saved));
     }
 

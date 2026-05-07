@@ -23,14 +23,14 @@ public class InterviewService {
     private final InterviewerScheduleRepository scheduleRepository;
     private final ApplicationRepository applicationRepository;
     private final UserRepository userRepository;
-    private final NotificationService notificationService;
+    private final cl.mtn.admitiabff.service.notification.EmailComposerService emailComposerService;
 
-    public InterviewService(InterviewRepository interviewRepository, InterviewerScheduleRepository scheduleRepository, ApplicationRepository applicationRepository, UserRepository userRepository, NotificationService notificationService) {
+    public InterviewService(InterviewRepository interviewRepository, InterviewerScheduleRepository scheduleRepository, ApplicationRepository applicationRepository, UserRepository userRepository, cl.mtn.admitiabff.service.notification.EmailComposerService emailComposerService) {
         this.interviewRepository = interviewRepository;
         this.scheduleRepository = scheduleRepository;
         this.applicationRepository = applicationRepository;
         this.userRepository = userRepository;
-        this.notificationService = notificationService;
+        this.emailComposerService = emailComposerService;
     }
 
     public List<Map<String, Object>> publicInterviewers() {
@@ -145,7 +145,26 @@ public class InterviewService {
         List<InterviewEntity> interviews = interviewRepository.findByApplicationIdOrderByScheduledDateDesc(applicationId);
         interviews.forEach(interview -> interview.setSummarySent(true));
         interviewRepository.saveAll(interviews);
-        notificationService.recordEmail(Map.of("to", "camilo.igv2@gmail.com", "subject", "Resumen de entrevistas", "message", "Resumen enviado para la postulación " + applicationId, "type", "INTERVIEW_SUMMARY"));
+
+        // Destinatario: SIEMPRE desde la base de datos (applicantUser de la postulación).
+        // Si no hay correo válido se aborta el envío con error explícito (nunca hardcodear).
+        String to = applicationRepository.findActiveById(applicationId)
+                .map(app -> app.getApplicantUser() != null ? app.getApplicantUser().getEmail() : null)
+                .filter(e -> e != null && !e.isBlank())
+                .orElseThrow(() -> new IllegalStateException(
+                        "No se puede enviar el resumen: la postulación " + applicationId
+                                + " no tiene un email de destinatario válido (applicantUser.email)."));
+
+        emailComposerService.send(cl.mtn.admitiabff.service.notification.EmailComposerService.EmailRequest.builder()
+                .template(cl.mtn.admitiabff.domain.notification.EmailTemplate.INTERVIEW_SUMMARY)
+                .to(to)
+                .recipientType("APPLICATION")
+                .recipientId(applicationId)
+                .data(Map.of(
+                        "applicationId", applicationId,
+                        "summary", "Resumen enviado para la postulación " + applicationId
+                ))
+                .build());
         return Map.of("success", true, "message", "Resumen enviado", "data", Map.of("applicationId", applicationId, "interviews", interviews.stream().map(this::toResponse).toList()));
     }
 

@@ -59,10 +59,11 @@ public class ApplicationService {
     private final InterviewRepository interviewRepository;
     private final AuthService authService;
     private final NotificationService notificationService;
+    private final cl.mtn.admitiabff.service.notification.EmailComposerService emailComposerService;
     private final JsonSupport jsonSupport;
     private final String uploadsDir;
 
-    public ApplicationService(ApplicationRepository applicationRepository, StudentRepository studentRepository, ParentRepository parentRepository, GuardianRepository guardianRepository, SupporterRepository supporterRepository, UserRepository userRepository, DocumentRepository documentRepository, ComplementaryFormRepository complementaryFormRepository, EvaluationRepository evaluationRepository, InterviewRepository interviewRepository, AuthService authService, NotificationService notificationService, JsonSupport jsonSupport, @Value("${app.uploads-dir}") String uploadsDir) {
+    public ApplicationService(ApplicationRepository applicationRepository, StudentRepository studentRepository, ParentRepository parentRepository, GuardianRepository guardianRepository, SupporterRepository supporterRepository, UserRepository userRepository, DocumentRepository documentRepository, ComplementaryFormRepository complementaryFormRepository, EvaluationRepository evaluationRepository, InterviewRepository interviewRepository, AuthService authService, NotificationService notificationService, cl.mtn.admitiabff.service.notification.EmailComposerService emailComposerService, JsonSupport jsonSupport, @Value("${app.uploads-dir}") String uploadsDir) {
         this.applicationRepository = applicationRepository;
         this.studentRepository = studentRepository;
         this.parentRepository = parentRepository;
@@ -75,6 +76,7 @@ public class ApplicationService {
         this.interviewRepository = interviewRepository;
         this.authService = authService;
         this.notificationService = notificationService;
+        this.emailComposerService = emailComposerService;
         this.jsonSupport = jsonSupport;
         this.uploadsDir = uploadsDir;
     }
@@ -246,11 +248,24 @@ public class ApplicationService {
         ApplicationEntity saved = applicationRepository.save(entity);
 
         try {
-            notificationService.institutional(
-                "STATUS_UPDATE",
-                id,
-                Map.of("newStatus", newStatus.name(), "notes", noteOrEmpty == null ? "" : noteOrEmpty)
-            );
+            String to = saved.getApplicantUser() != null && saved.getApplicantUser().getEmail() != null
+                    ? saved.getApplicantUser().getEmail()
+                    : null;
+            if (to != null && !to.isBlank()) {
+                emailComposerService.send(cl.mtn.admitiabff.service.notification.EmailComposerService.EmailRequest.builder()
+                        .template(cl.mtn.admitiabff.domain.notification.EmailTemplate.STATUS_UPDATE)
+                        .to(to)
+                        .recipientType("APPLICATION")
+                        .recipientId(id)
+                        .data(Map.of(
+                                "newStatus", newStatus.name(),
+                                "notes", noteOrEmpty == null ? "" : noteOrEmpty,
+                                "applicationId", id
+                        ))
+                        .build());
+            } else {
+                log.warn("[final-decision] sin email destinatario para applicationId={}", id);
+            }
         } catch (Exception e) {
             log.warn("[final-decision] Notificación STATUS_UPDATE no enviada para applicationId={}: {}", id, e.getMessage());
         }

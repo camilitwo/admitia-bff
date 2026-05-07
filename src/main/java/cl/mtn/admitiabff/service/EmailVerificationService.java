@@ -1,18 +1,25 @@
 package cl.mtn.admitiabff.service;
 
+import cl.mtn.admitiabff.domain.notification.EmailTemplate;
 import cl.mtn.admitiabff.domain.user.EmailVerificationCodeEntity;
 import cl.mtn.admitiabff.repository.EmailVerificationCodeRepository;
-import cl.mtn.admitiabff.repository.NotificationRepository;
 import cl.mtn.admitiabff.repository.UserRepository;
-import cl.mtn.admitiabff.service.notification.EmailNotificationStrategy;
+import cl.mtn.admitiabff.service.notification.EmailComposerService;
 import java.security.SecureRandom;
 import java.time.LocalDateTime;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+/**
+ * Maneja el código OTP de verificación de email para el registro.
+ * <p>El envío real del correo se delega 100% a {@link EmailComposerService}
+ * usando el template {@link EmailTemplate#EMAIL_VERIFICATION}; este servicio
+ * sólo valida y persiste el código.
+ */
 @Service
 @Transactional(readOnly = true)
 public class EmailVerificationService {
@@ -22,24 +29,22 @@ public class EmailVerificationService {
 
     private final EmailVerificationCodeRepository verificationCodeRepository;
     private final UserRepository userRepository;
-    private final EmailNotificationStrategy emailStrategy;
-    private final NotificationRepository notificationRepository;
+    private final EmailComposerService emailComposerService;
 
     public EmailVerificationService(
             EmailVerificationCodeRepository verificationCodeRepository,
             UserRepository userRepository,
-            EmailNotificationStrategy emailStrategy,
-            NotificationRepository notificationRepository) {
+            EmailComposerService emailComposerService) {
         this.verificationCodeRepository = verificationCodeRepository;
         this.userRepository = userRepository;
-        this.emailStrategy = emailStrategy;
-        this.notificationRepository = notificationRepository;
+        this.emailComposerService = emailComposerService;
     }
 
     /**
      * POST /api/email/send-verification
-     * Validates the email/rut are not already registered, generates a 6-digit OTP,
-     * persists it, and dispatches it via the configured email strategy.
+     * Valida que el email/RUT no estén registrados, genera un OTP de 6 dígitos,
+     * lo persiste y lo despacha vía el composer (Resend) con el template
+     * {@code EMAIL_VERIFICATION}.
      */
     @Transactional
     public Map<String, Object> sendVerification(Map<String, Object> body) {
@@ -52,21 +57,18 @@ public class EmailVerificationService {
             throw new IllegalArgumentException("EMAIL_003:Email es requerido");
         }
 
-        // 1. Verify email not already registered
         if (userRepository.existsByEmailIgnoreCase(email)) {
             throw new IllegalStateException("EMAIL_008:Este email ya está registrado en el sistema. Por favor, inicia sesión o usa otro email.");
         }
 
-        // 2. Verify RUT not already registered (if provided)
         if (!rut.isEmpty()) {
-            userRepository.findByRut(rut).ifPresent(existing ->
-                    { throw new IllegalStateException("EMAIL_009:Este RUT ya está registrado en el sistema con el email: " + existing.getEmail()); });
+            userRepository.findByRut(rut).ifPresent(existing -> {
+                throw new IllegalStateException("EMAIL_009:Este RUT ya está registrado en el sistema con el email: " + existing.getEmail());
+            });
         }
 
-        // 3. Delete any existing pending codes for this email
         verificationCodeRepository.deleteByEmailIgnoreCase(email);
 
-        // 4. Generate 6-digit code and persist
         String code = generateCode();
         LocalDateTime expiresAt = LocalDateTime.now().plusMinutes(EXPIRY_MINUTES);
 
@@ -79,30 +81,28 @@ public class EmailVerificationService {
         entity.setCreatedAt(LocalDateTime.now());
         verificationCodeRepository.save(entity);
 
-        // 5. Send email via Amazon SES (through EmailNotificationStrategy)
         boolean emailSent = false;
         String emailError = null;
-        String subject = "Código de Verificación - Colegio MTN";
-        String htmlMessage = buildHtmlMessage(firstName, lastName, code);
-        var notification = buildNotificationEntity(email, subject, htmlMessage);
         try {
-            emailStrategy.dispatch(notification);
-            notification.setStatus(cl.mtn.admitiabff.domain.common.NotificationStatus.SENT);
+            Map<String, Object> data = new LinkedHashMap<>();
+            data.put("code", code);
+            data.put("recipientName", (firstName + " " + lastName).trim());
+            data.put("expiresInMinutes", EXPIRY_MINUTES);
+
+            emailComposerService.send(EmailComposerService.EmailRequest.builder()
+                    .template(EmailTemplate.EMAIL_VERIFICATION)
+                    .to(email)
+                    .recipientType("USER")
+                    .data(data)
+                    .build());
             emailSent = true;
-            log.info("Verification code sent to {} via SES", email);
+            log.info("Verification code sent to {}", email);
         } catch (Exception ex) {
-            notification.setStatus(cl.mtn.admitiabff.domain.common.NotificationStatus.FAILED);
             emailError = ex.getMessage();
             log.error("Error sending verification email to {}: {}", email, ex.getMessage(), ex);
-        } finally {
-            try {
-                notificationRepository.save(notification);
-            } catch (Exception persistEx) {
-                log.warn("No fue posible persistir la notificación de verificación: {}", persistEx.getMessage());
-            }
         }
 
-        var response = new java.util.LinkedHashMap<String, Object>();
+        Map<String, Object> response = new LinkedHashMap<>();
         response.put("success", true);
         response.put("data", Map.of(
                 "message", "Código de verificación enviado",
@@ -116,10 +116,7 @@ public class EmailVerificationService {
         return response;
     }
 
-    /**
-     * POST /api/email/verify-code
-     * Validates the OTP against the stored code. Marks it as used on success.
-     */
+    /** POST /api/email/verify-code — valida el OTP y lo marca como usado. */
     @Transactional
     public Map<String, Object> verifyCode(Map<String, Object> body) {
         String email = stringValue(body.get("email")).trim().toLowerCase();
@@ -134,7 +131,6 @@ public class EmailVerificationService {
                         email, code, LocalDateTime.now())
                 .orElseThrow(() -> new IllegalArgumentException("EMAIL_006:Código inválido o expirado"));
 
-        // Mark as used
         verification.setUsed(true);
         verificationCodeRepository.save(verification);
 
@@ -150,50 +146,10 @@ public class EmailVerificationService {
         );
     }
 
-    // ── helpers ──────────────────────────────────────────────────────────────
-
     private String generateCode() {
         return String.format("%06d", new SecureRandom().nextInt(900000) + 100000);
     }
 
-    private String buildHtmlMessage(String firstName, String lastName, String code) {
-        String name = (firstName + " " + lastName).trim();
-        String safeName = escapeHtml(name.isEmpty() ? "usuario/a" : name);
-        return "<!DOCTYPE html><html><body style=\"font-family:Arial,Helvetica,sans-serif;background:#f5f7fb;padding:24px;color:#1f2937;\">"
-                + "<div style=\"max-width:560px;margin:0 auto;background:#ffffff;border-radius:8px;padding:32px;box-shadow:0 1px 3px rgba(0,0,0,0.08);\">"
-                + "<h2 style=\"margin:0 0 16px;color:#0f172a;\">Colegio MTN</h2>"
-                + "<p>Estimado/a <strong>" + safeName + "</strong>,</p>"
-                + "<p>Tu código de verificación es:</p>"
-                + "<p style=\"font-size:28px;font-weight:bold;letter-spacing:6px;background:#eef2ff;color:#1e3a8a;padding:14px 20px;border-radius:6px;text-align:center;\">"
-                + escapeHtml(code) + "</p>"
-                + "<p>Este código expirará en <strong>" + EXPIRY_MINUTES + " minutos</strong>.</p>"
-                + "<p style=\"color:#6b7280;font-size:13px;\">Si no solicitaste este código, por favor ignora este mensaje.</p>"
-                + "<hr style=\"border:none;border-top:1px solid #e5e7eb;margin:24px 0;\"/>"
-                + "<p style=\"font-size:12px;color:#9ca3af;\">Saludos cordiales,<br/>Colegio MTN</p>"
-                + "</div></body></html>";
-    }
-
-    private String escapeHtml(String value) {
-        if (value == null) return "";
-        return value.replace("&", "&amp;")
-                .replace("<", "&lt;")
-                .replace(">", "&gt;")
-                .replace("\"", "&quot;")
-                .replace("'", "&#39;");
-    }
-
-    private cl.mtn.admitiabff.domain.notification.NotificationEntity buildNotificationEntity(
-            String to, String subject, String message) {
-        var n = new cl.mtn.admitiabff.domain.notification.NotificationEntity();
-        n.setRecipient(to);
-        n.setSubject(subject);
-        n.setMessage(message);
-        n.setChannel(cl.mtn.admitiabff.domain.common.NotificationChannel.EMAIL);
-        n.setType("EMAIL_VERIFICATION");
-        n.setStatus(cl.mtn.admitiabff.domain.common.NotificationStatus.PENDING);
-        n.setCreatedAt(LocalDateTime.now());
-        return n;
-    }
 
     private String stringValue(Object value) {
         return value == null ? "" : String.valueOf(value);
