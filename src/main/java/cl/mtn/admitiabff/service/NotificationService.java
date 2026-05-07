@@ -124,10 +124,12 @@ public class NotificationService {
         return Map.of("isValid", true, "verified", true, "email", verification.getEmail());
     }
 
+    @Transactional
     public Map<String, Object> sendTest(Map<String, Object> payload) {
         return email(Map.of("to", payload.get("to"), "subject", payload.getOrDefault("subject", "Correo de prueba"), "message", payload.getOrDefault("message", "Correo de prueba del sistema MTN"), "type", "TEST"));
     }
 
+    @Transactional
     public Map<String, Object> institutional(String type, Long resourceId, Map<String, Object> payload) {
         Map<String, Object> request = new LinkedHashMap<>(payload);
         request.putIfAbsent("to", payload.getOrDefault("recipientEmail", "camilo.igv2@gmail.com"));
