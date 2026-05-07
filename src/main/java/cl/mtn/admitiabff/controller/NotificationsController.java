@@ -4,6 +4,7 @@ import cl.mtn.admitiabff.domain.notification.EmailTemplate;
 import cl.mtn.admitiabff.service.EmailVerificationService;
 import cl.mtn.admitiabff.service.NotificationService;
 import cl.mtn.admitiabff.service.notification.EmailComposerService;
+import cl.mtn.admitiabff.service.notification.EmailRecipientResolver;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -22,13 +23,16 @@ public class NotificationsController {
     private final NotificationService notificationService;
     private final EmailVerificationService emailVerificationService;
     private final EmailComposerService emailComposerService;
+    private final EmailRecipientResolver recipientResolver;
 
     public NotificationsController(NotificationService notificationService,
                                    EmailVerificationService emailVerificationService,
-                                   EmailComposerService emailComposerService) {
+                                   EmailComposerService emailComposerService,
+                                   EmailRecipientResolver recipientResolver) {
         this.notificationService = notificationService;
         this.emailVerificationService = emailVerificationService;
         this.emailComposerService = emailComposerService;
+        this.recipientResolver = recipientResolver;
     }
 
     // ───── Consulta / persistencia ─────
@@ -78,43 +82,44 @@ public class NotificationsController {
 
     // ───── Emails institucionales (path = template) ─────
     @PostMapping("/api/institutional-emails/document-review/{applicationId}")
-    public Map<String, Object> documentReview(@PathVariable Long applicationId, @RequestBody Map<String, Object> payload) {
-        return institutional(EmailTemplate.DOCUMENT_REVIEW, applicationId, payload);
+    public Map<String, Object> documentReview(@PathVariable Long applicationId, @RequestBody(required = false) Map<String, Object> payload) {
+        return institutionalForApplication(EmailTemplate.DOCUMENT_REVIEW, applicationId, payload);
     }
 
     @PostMapping("/api/institutional-emails/application-received/{applicationId}")
     public Map<String, Object> applicationReceived(@PathVariable Long applicationId, @RequestBody(required = false) Map<String, Object> payload) {
-        return institutional(EmailTemplate.APPLICATION_RECEIVED, applicationId, payload);
+        return institutionalForApplication(EmailTemplate.APPLICATION_RECEIVED, applicationId, payload);
     }
 
     @PostMapping("/api/institutional-emails/interview-invitation/{interviewId}")
     public Map<String, Object> interviewInvitation(@PathVariable Long interviewId, @RequestBody(required = false) Map<String, Object> payload) {
-        return institutional(EmailTemplate.INTERVIEW_INVITATION, interviewId, payload);
+        return institutionalForInterview(EmailTemplate.INTERVIEW_INVITATION, interviewId, payload);
     }
 
     @PostMapping("/api/institutional-emails/status-update/{applicationId}")
-    public Map<String, Object> statusUpdate(@PathVariable Long applicationId, @RequestBody Map<String, Object> payload) {
-        return institutional(EmailTemplate.STATUS_UPDATE, applicationId, payload);
+    public Map<String, Object> statusUpdate(@PathVariable Long applicationId, @RequestBody(required = false) Map<String, Object> payload) {
+        return institutionalForApplication(EmailTemplate.STATUS_UPDATE, applicationId, payload);
     }
 
     @PostMapping("/api/institutional-emails/document-reminder/{applicationId}")
-    public Map<String, Object> documentReminder(@PathVariable Long applicationId, @RequestBody Map<String, Object> payload) {
-        return institutional(EmailTemplate.DOCUMENT_REMINDER, applicationId, payload);
+    public Map<String, Object> documentReminder(@PathVariable Long applicationId, @RequestBody(required = false) Map<String, Object> payload) {
+        return institutionalForApplication(EmailTemplate.DOCUMENT_REMINDER, applicationId, payload);
     }
 
     @PostMapping("/api/institutional-emails/admission-result/{applicationId}")
-    public Map<String, Object> admissionResult(@PathVariable Long applicationId, @RequestBody Map<String, Object> payload) {
-        return institutional(EmailTemplate.ADMISSION_RESULT, applicationId, payload);
+    public Map<String, Object> admissionResult(@PathVariable Long applicationId, @RequestBody(required = false) Map<String, Object> payload) {
+        return institutionalForApplication(EmailTemplate.ADMISSION_RESULT, applicationId, payload);
     }
 
     @PostMapping("/api/institutional-emails/evaluation-assignment/{evaluationId}")
-    public Map<String, Object> evaluationAssignment(@PathVariable Long evaluationId, @RequestBody Map<String, Object> payload) {
-        return institutional(EmailTemplate.EVALUATION_ASSIGNMENT, evaluationId, payload);
+    public Map<String, Object> evaluationAssignment(@PathVariable Long evaluationId, @RequestBody(required = false) Map<String, Object> payload) {
+        // Las evaluaciones requieren el email del evaluador en el payload (lo conoce el front).
+        return institutional(EmailTemplate.EVALUATION_ASSIGNMENT, "EVALUATION", evaluationId, payload, null);
     }
 
     @PostMapping("/api/institutional-emails/interview-summary/{applicationId}")
-    public Map<String, Object> interviewSummary(@PathVariable Long applicationId, @RequestBody Map<String, Object> payload) {
-        return institutional(EmailTemplate.INTERVIEW_SUMMARY, applicationId, payload);
+    public Map<String, Object> interviewSummary(@PathVariable Long applicationId, @RequestBody(required = false) Map<String, Object> payload) {
+        return institutionalForApplication(EmailTemplate.INTERVIEW_SUMMARY, applicationId, payload);
     }
 
     @GetMapping("/api/institutional-emails/debug")
@@ -142,19 +147,56 @@ public class NotificationsController {
     @PostMapping("/api/email/verify-code")
     public Map<String, Object> verifyCode(@RequestBody Map<String, Object> payload) { return emailVerificationService.verifyCode(payload); }
 
-    // ───── Helper privado ─────
-    private Map<String, Object> institutional(EmailTemplate template, Long resourceId, Map<String, Object> rawPayload) {
+    // ───── Helpers privados ─────
+
+    /**
+     * Email institucional asociado a una postulación. Si el front no envía
+     * {@code to}/{@code recipientEmail}, se busca en la BD el email del
+     * apoderado/applicantUser/etc. (ver {@link EmailRecipientResolver}).
+     */
+    private Map<String, Object> institutionalForApplication(EmailTemplate template, Long applicationId, Map<String, Object> rawPayload) {
+        String fallbackTo = recipientResolver.resolveForApplication(applicationId).orElse(null);
+        return institutional(template, "APPLICATION", applicationId, rawPayload, fallbackTo);
+    }
+
+    /**
+     * Email institucional asociado a una entrevista. Resuelve el email
+     * del apoderado de la postulación dueña de la entrevista.
+     */
+    private Map<String, Object> institutionalForInterview(EmailTemplate template, Long interviewId, Map<String, Object> rawPayload) {
+        String fallbackTo = recipientResolver.resolveForInterview(interviewId).orElse(null);
+        return institutional(template, "INTERVIEW", interviewId, rawPayload, fallbackTo);
+    }
+
+    /**
+     * Helper genérico. {@code dbResolvedTo} es el email obtenido de la BD
+     * (puede ser null) y se usa solo si el caller no envió {@code to} ni
+     * {@code recipientEmail} en el payload.
+     */
+    private Map<String, Object> institutional(EmailTemplate template, String resourceType, Long resourceId,
+                                              Map<String, Object> rawPayload, String dbResolvedTo) {
         Map<String, Object> payload = rawPayload == null ? new LinkedHashMap<>() : new LinkedHashMap<>(rawPayload);
         payload.put("template", template.name());
-        if (payload.get("to") == null && payload.get("recipientEmail") != null) {
-            payload.put("to", payload.get("recipientEmail"));
+        // Prioridad del destinatario: 1) "to" del front, 2) "recipientEmail", 3) BD.
+        if (isBlank(payload.get("to"))) {
+            if (!isBlank(payload.get("recipientEmail"))) {
+                payload.put("to", payload.get("recipientEmail"));
+            } else if (dbResolvedTo != null) {
+                payload.put("to", dbResolvedTo);
+            }
         }
-        payload.putIfAbsent("recipientType", "APPLICATION");
+        payload.putIfAbsent("recipientType", resourceType);
         payload.putIfAbsent("recipientId", resourceId);
         payload.putIfAbsent("applicationId", resourceId);
-        if (payload.get("to") == null) {
-            throw new IllegalArgumentException("El campo 'to' (o 'recipientEmail') es obligatorio para enviar el email institucional.");
+        if (isBlank(payload.get("to"))) {
+            throw new IllegalArgumentException(
+                    "No fue posible resolver el destinatario para " + resourceType + "#" + resourceId
+                            + ". Asegúrate de que la postulación tenga un email registrado o envía 'to'/'recipientEmail' en el body.");
         }
         return emailComposerService.sendFromPayload(payload);
+    }
+
+    private static boolean isBlank(Object value) {
+        return value == null || String.valueOf(value).isBlank();
     }
 }
