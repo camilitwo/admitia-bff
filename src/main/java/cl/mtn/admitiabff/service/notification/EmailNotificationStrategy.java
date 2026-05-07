@@ -19,17 +19,19 @@ public class EmailNotificationStrategy implements NotificationChannelStrategy {
 
     private final JavaMailSender mailSender;
     private final SesEmailSender sesEmailSender;
+    private final ResendEmailSender resendEmailSender;
     private final JsonSupport jsonSupport;
     private final boolean mockMode;
     private final String provider;
 
     public EmailNotificationStrategy(JavaMailSender mailSender,
-                                     SesEmailSender sesEmailSender,
+                                     SesEmailSender sesEmailSender, ResendEmailSender resendEmailSender,
                                      JsonSupport jsonSupport,
                                      @Value("${app.email.mock-mode}") boolean mockMode,
                                      @Value("${app.email.provider:ses}") String provider) {
         this.mailSender = mailSender;
         this.sesEmailSender = sesEmailSender;
+        this.resendEmailSender = resendEmailSender;
         this.jsonSupport = jsonSupport;
         this.mockMode = mockMode;
         this.provider = provider;
@@ -64,7 +66,9 @@ public class EmailNotificationStrategy implements NotificationChannelStrategy {
             return;
         }
         try {
-            if ("ses".equalsIgnoreCase(provider)) {
+            if ("resend".equalsIgnoreCase(provider)) {
+                resendEmailSender.send(notification.getRecipient(), notification.getSubject(), notification.getMessage());
+            } else if ("ses".equalsIgnoreCase(provider)) {
                 sesEmailSender.send(notification.getRecipient(), notification.getSubject(), notification.getMessage());
             } else {
                 SimpleMailMessage message = new SimpleMailMessage();

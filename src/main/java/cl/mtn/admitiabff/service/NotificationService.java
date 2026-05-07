@@ -72,16 +72,18 @@ public class NotificationService {
 
     public Map<String, Object> configStatus() {
         boolean mockMode = Boolean.parseBoolean(System.getenv().getOrDefault("APP_EMAIL_MOCK_MODE", "false"));
-        String provider = System.getenv().getOrDefault("APP_EMAIL_PROVIDER", "ses");
+        String provider = System.getenv().getOrDefault("APP_EMAIL_PROVIDER", "resend");
         String from = System.getenv().getOrDefault("APP_EMAIL_FROM", "");
         String region = System.getenv().getOrDefault("AWS_SES_REGION", "");
         boolean sesConfigured = !System.getenv().getOrDefault("AWS_SES_ACCESS_KEY", "").isBlank()
                 && !System.getenv().getOrDefault("AWS_SES_SECRET_KEY", "").isBlank();
+        boolean resendConfigured = !System.getenv().getOrDefault("RESEND_API_KEY", "").isBlank();
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("status", "OK");
         result.put("provider", provider);
         result.put("mockMode", mockMode);
         result.put("from", from);
+        result.put("resendConfigured", resendConfigured);
         result.put("sesConfigured", sesConfigured);
         result.put("sesRegion", region);
         result.put("environment", System.getenv().getOrDefault("SPRING_PROFILES_ACTIVE", "default"));
