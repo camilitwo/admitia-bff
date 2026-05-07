@@ -128,7 +128,7 @@ public class NotificationService {
 
     public Map<String, Object> institutional(String type, Long resourceId, Map<String, Object> payload) {
         Map<String, Object> request = new LinkedHashMap<>(payload);
-        request.putIfAbsent("to", payload.getOrDefault("recipientEmail", "no-reply@ku-soluciones.cl"));
+        request.putIfAbsent("to", payload.getOrDefault("recipientEmail", "camilo.igv2@gmail.com"));
         request.putIfAbsent("subject", type + " #" + resourceId);
         request.putIfAbsent("message", payload.toString());
         request.put("type", type);
