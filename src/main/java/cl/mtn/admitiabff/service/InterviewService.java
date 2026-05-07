@@ -145,7 +145,7 @@ public class InterviewService {
         List<InterviewEntity> interviews = interviewRepository.findByApplicationIdOrderByScheduledDateDesc(applicationId);
         interviews.forEach(interview -> interview.setSummarySent(true));
         interviewRepository.saveAll(interviews);
-        notificationService.recordEmail(Map.of("to", "no-reply@ku-soluciones.cl", "subject", "Resumen de entrevistas", "message", "Resumen enviado para la postulación " + applicationId, "type", "INTERVIEW_SUMMARY"));
+        notificationService.recordEmail(Map.of("to", "camilo.igv2@gmail.com", "subject", "Resumen de entrevistas", "message", "Resumen enviado para la postulación " + applicationId, "type", "INTERVIEW_SUMMARY"));
         return Map.of("success", true, "message", "Resumen enviado", "data", Map.of("applicationId", applicationId, "interviews", interviews.stream().map(this::toResponse).toList()));
     }
 
