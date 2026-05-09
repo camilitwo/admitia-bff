@@ -1,6 +1,8 @@
 package cl.mtn.admitiabff.config;
 
+import cl.mtn.admitiabff.domain.user.ActiveSessionEntity;
 import cl.mtn.admitiabff.domain.user.UserEntity;
+import cl.mtn.admitiabff.repository.ActiveSessionRepository;
 import cl.mtn.admitiabff.repository.UserRepository;
 import com.google.firebase.FirebaseApp;
 import com.google.firebase.auth.FirebaseAuth;
@@ -10,6 +12,10 @@ import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.time.LocalDateTime;
+import java.util.HexFormat;
 import java.util.List;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -20,13 +26,6 @@ import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
 
-/**
- * Authentication filter that supports both Firebase idTokens and legacy JWT tokens.
- * <p>
- * Order of verification:
- * 1. Try Firebase Auth (verifyIdToken) — preferred
- * 2. Fallback to legacy JwtService — for backward compatibility during transition
- */
 @Component
 public class FirebaseAuthenticationFilter extends OncePerRequestFilter {
 
@@ -34,10 +33,12 @@ public class FirebaseAuthenticationFilter extends OncePerRequestFilter {
 
     private final JwtService jwtService;
     private final UserRepository userRepository;
+    private final ActiveSessionRepository activeSessionRepository;
 
-    public FirebaseAuthenticationFilter(JwtService jwtService, UserRepository userRepository) {
+    public FirebaseAuthenticationFilter(JwtService jwtService, UserRepository userRepository, ActiveSessionRepository activeSessionRepository) {
         this.jwtService = jwtService;
         this.userRepository = userRepository;
+        this.activeSessionRepository = activeSessionRepository;
     }
 
     @Override
@@ -55,7 +56,7 @@ public class FirebaseAuthenticationFilter extends OncePerRequestFilter {
                 }
 
                 if (!authenticated) {
-                    log.debug("[Auth] Token present but could not be verified for {}", request.getRequestURI());
+                    log.debug("[Auth] Token present but rejected for {}", request.getRequestURI());
                 }
             }
         } catch (Exception ex) {
@@ -65,6 +66,7 @@ public class FirebaseAuthenticationFilter extends OncePerRequestFilter {
         try {
             filterChain.doFilter(request, response);
         } finally {
+            SecurityContextHolder.clearContext();
             AuthContext.clear();
         }
     }
@@ -78,30 +80,25 @@ public class FirebaseAuthenticationFilter extends OncePerRequestFilter {
             String firebaseUid = decoded.getUid();
             String email = decoded.getEmail();
 
-            log.info("[Auth/Firebase] Verified token: uid={} email={} path={}", firebaseUid, email, request.getRequestURI());
-
-            // Look up user by firebase_uid first, then by email as fallback
             UserEntity user = userRepository.findByFirebaseUid(firebaseUid)
                 .or(() -> userRepository.findByEmailIgnoreCase(email))
                 .orElse(null);
 
-            if (user == null) {
-                log.warn("[Auth/Firebase] No local user found for uid={} email={}", firebaseUid, email);
+            if (user == null || !user.isActive() || !isTokenSessionActive(idToken)) {
                 return false;
             }
 
-            // Link firebase_uid if not already set
             if (user.getFirebaseUid() == null) {
                 try {
                     user.setFirebaseUid(firebaseUid);
                     userRepository.save(user);
-                    log.info("[Auth/Firebase] Linked firebase_uid={} to user id={}", firebaseUid, user.getId());
                 } catch (Exception saveEx) {
                     log.warn("[Auth/Firebase] Could not persist firebase_uid for user id={}: {}", user.getId(), saveEx.getMessage());
                 }
             }
 
             setAuthentication(user);
+            touchSession(idToken);
             return true;
         } catch (Exception ex) {
             log.warn("[Auth/Firebase] Auth failed for path={}: {}", request.getRequestURI(), ex.getMessage());
@@ -111,35 +108,52 @@ public class FirebaseAuthenticationFilter extends OncePerRequestFilter {
 
     private boolean tryLegacyJwtAuth(String token, HttpServletRequest request) {
         try {
-            if (!jwtService.isValid(token)) {
+            if (!jwtService.isValid(token) || !isTokenSessionActive(token)) {
                 return false;
             }
             var claims = jwtService.extractAllClaims(token);
-            String role = claims.get("role", String.class);
+            String tokenRole = claims.get("role", String.class);
             String email = claims.get("email", String.class);
-            String sub = claims.getSubject();
-            Long userId = null;
-            try {
-                userId = Long.parseLong(sub);
-            } catch (NumberFormatException ignored) {
+
+            if (email == null || email.isBlank() || tokenRole == null || tokenRole.isBlank()) {
+                return false;
             }
 
-            log.info("[Auth/Legacy] Verified token: role={} email={} sub={} path={}", role, email, sub, request.getRequestURI());
-
-            if (role != null) {
-                var auth = new UsernamePasswordAuthenticationToken(
-                    email, null,
-                    List.of(new SimpleGrantedAuthority("ROLE_" + role))
-                );
-                SecurityContextHolder.getContext().setAuthentication(auth);
-                AuthContext.set(new AuthUser(userId, email, role));
-                return true;
+            UserEntity user = userRepository.findByEmailIgnoreCase(email).orElse(null);
+            if (user == null || !user.isActive()) {
+                return false;
             }
-            return false;
+
+            String persistedRole = user.getRole().name();
+            if (!persistedRole.equals(tokenRole)) {
+                log.warn("[Auth/Legacy] Role mismatch blocked for email={} tokenRole={} persistedRole={} path={}",
+                    email, tokenRole, persistedRole, request.getRequestURI());
+                return false;
+            }
+
+            var auth = new UsernamePasswordAuthenticationToken(
+                email, null,
+                List.of(new SimpleGrantedAuthority("ROLE_" + persistedRole))
+            );
+            SecurityContextHolder.getContext().setAuthentication(auth);
+            AuthContext.set(new AuthUser(user.getId(), user.getEmail(), persistedRole));
+            touchSession(token);
+            return true;
         } catch (Exception ex) {
             log.debug("[Auth/Legacy] Not a valid legacy JWT: {}", ex.getMessage());
             return false;
         }
+    }
+
+    private boolean isTokenSessionActive(String token) {
+        return activeSessionRepository.findByTokenHash(sha256(token)).isPresent();
+    }
+
+    private void touchSession(String token) {
+        activeSessionRepository.findByTokenHash(sha256(token)).ifPresent(session -> {
+            session.setLastActivity(LocalDateTime.now());
+            activeSessionRepository.save(session);
+        });
     }
 
     private void setAuthentication(UserEntity user) {
@@ -150,5 +164,13 @@ public class FirebaseAuthenticationFilter extends OncePerRequestFilter {
         );
         SecurityContextHolder.getContext().setAuthentication(auth);
         AuthContext.set(new AuthUser(user.getId(), user.getEmail(), role));
+    }
+
+    private String sha256(String value) {
+        try {
+            return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(value.getBytes(StandardCharsets.UTF_8)));
+        } catch (Exception ex) {
+            throw new IllegalStateException(ex);
+        }
     }
 }
