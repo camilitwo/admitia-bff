@@ -39,6 +39,16 @@ public class AuthController {
     @PostMapping("/firebase-register")
     public Map<String, Object> firebaseRegister(@RequestBody Map<String, Object> payload) { return authService.firebaseRegister(payload); }
 
+    /**
+     * Enlaza la cuenta del usuario autenticado con su identidad de Firebase.
+     * Cubre el caso histórico en que un apoderado se registró por password local sin quedar
+     * asociado a su firebase_uid (riesgo de session hijack vía email-only matching).
+     */
+    @PostMapping("/firebase/link")
+    public Map<String, Object> linkFirebase(@RequestBody Map<String, Object> payload) {
+        return authService.linkFirebase(payload);
+    }
+
     @PostMapping("/check-email")
     public Map<String, Object> checkEmail(@RequestBody Map<String, Object> payload) { return authService.checkEmail(payload); }
 

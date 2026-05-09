@@ -77,28 +77,47 @@ public class FirebaseAuthenticationFilter extends OncePerRequestFilter {
             FirebaseToken decoded = FirebaseAuth.getInstance().verifyIdToken(idToken);
             String firebaseUid = decoded.getUid();
             String email = decoded.getEmail();
+            boolean emailVerified = decoded.isEmailVerified();
 
-            log.info("[Auth/Firebase] Verified token: uid={} email={} path={}", firebaseUid, email, request.getRequestURI());
+            log.info("[Auth/Firebase] Verified token: uid={} email={} verified={} path={}",
+                firebaseUid, email, emailVerified, request.getRequestURI());
 
-            // Look up user by firebase_uid first, then by email as fallback
-            UserEntity user = userRepository.findByFirebaseUid(firebaseUid)
-                .or(() -> userRepository.findByEmailIgnoreCase(email))
-                .orElse(null);
+            // 1) Buscar SIEMPRE por firebase_uid primero (fuente de verdad de la identidad federada)
+            UserEntity user = userRepository.findByFirebaseUid(firebaseUid).orElse(null);
 
+            // 2) Si no hay match por UID, NO hacemos linking silencioso por email.
+            //    El linking solo se hace por endpoints explícitos (firebase-login / firebase/link)
+            //    para evitar account takeover (alguien que crea una cuenta Firebase con el email
+            //    de un apoderado existente y se "apropia" de su cuenta en la primera request).
             if (user == null) {
-                log.warn("[Auth/Firebase] No local user found for uid={} email={}", firebaseUid, email);
+                if (email != null) {
+                    UserEntity byEmail = userRepository.findByEmailIgnoreCase(email).orElse(null);
+                    if (byEmail != null && byEmail.getFirebaseUid() == null) {
+                        log.warn("[Auth/Firebase] Cuenta local existe para email={} pero NO está enlazada a firebase_uid={}. "
+                                + "Rechazando request — el usuario debe enlazar su cuenta vía /api/auth/firebase-login o /api/auth/firebase/link.",
+                            email, firebaseUid);
+                    } else if (byEmail != null && !firebaseUid.equals(byEmail.getFirebaseUid())) {
+                        log.warn("[Auth/Firebase] Conflicto de identidad: email={} ya enlazado a otro firebase_uid (existing={}, incoming={}). Rechazado.",
+                            email, byEmail.getFirebaseUid(), firebaseUid);
+                    } else {
+                        log.warn("[Auth/Firebase] No local user para uid={} email={}", firebaseUid, email);
+                    }
+                }
                 return false;
             }
 
-            // Link firebase_uid if not already set
-            if (user.getFirebaseUid() == null) {
-                try {
-                    user.setFirebaseUid(firebaseUid);
-                    userRepository.save(user);
-                    log.info("[Auth/Firebase] Linked firebase_uid={} to user id={}", firebaseUid, user.getId());
-                } catch (Exception saveEx) {
-                    log.warn("[Auth/Firebase] Could not persist firebase_uid for user id={}: {}", user.getId(), saveEx.getMessage());
-                }
+            // 3) Defensa en profundidad: el email del token debe coincidir con el del usuario en BD.
+            //    Si no coincide, alguien podría estar reutilizando un UID con un email distinto.
+            if (email != null && user.getEmail() != null && !email.equalsIgnoreCase(user.getEmail())) {
+                log.error("[Auth/Firebase] Email mismatch para uid={}: token={} bd={}. Rechazado.",
+                    firebaseUid, email, user.getEmail());
+                return false;
+            }
+
+            // 4) Cuenta inactiva → fuera
+            if (!user.isActive()) {
+                log.warn("[Auth/Firebase] Usuario inactivo id={} uid={}", user.getId(), firebaseUid);
+                return false;
             }
 
             setAuthentication(user);
