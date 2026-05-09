@@ -1,6 +1,7 @@
 package cl.mtn.admitiabff.config;
 
 import java.util.Arrays;
+import java.util.List;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -34,6 +35,7 @@ public class SecurityConfig {
             .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(auth -> auth
                 .requestMatchers("/health", "/ready", "/gateway/status").permitAll()
+                // Endpoints de auth abiertos (login/logout/refresh deben ser accesibles sin Bearer válido)
                 .requestMatchers("/api/auth/**", "/api/email/**", "/api/institutional-emails/**").permitAll()
                 .requestMatchers(HttpMethod.GET, "/api/users/roles", "/api/users/public/**", "/api/applications/stats", "/api/applications/statistics",
                     "/api/applications/public/**", "/api/applications/*/contact", "/api/applications/debug/system-info",
@@ -48,9 +50,15 @@ public class SecurityConfig {
     CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration configuration = new CorsConfiguration();
         configuration.setAllowedOrigins(Arrays.stream(allowedOrigins.split(",")).map(String::trim).toList());
-        configuration.setAllowedMethods(java.util.List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
-        configuration.setAllowedHeaders(java.util.List.of("*"));
+        configuration.setAllowedMethods(List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
+        // Headers explícitos en lugar de "*" — exigido por allowCredentials=true en muchos navegadores.
+        configuration.setAllowedHeaders(List.of(
+            "Authorization", "Content-Type", "Accept", "X-Requested-With",
+            "X-CSRF-Token", "X-Forwarded-For", "User-Agent"
+        ));
+        configuration.setExposedHeaders(List.of("Authorization", "Set-Cookie"));
         configuration.setAllowCredentials(true);
+        configuration.setMaxAge(3600L);
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
         source.registerCorsConfiguration("/**", configuration);
         return source;

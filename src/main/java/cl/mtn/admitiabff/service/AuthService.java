@@ -43,15 +43,17 @@ public class AuthService {
     private final ActiveSessionRepository activeSessionRepository;
     private final EmailVerificationCodeRepository verificationCodeRepository;
     private final JwtService jwtService;
+    private final TokenService tokenService;
     private final RsaKeyService rsaKeyService;
     private final PasswordEncoder passwordEncoder;
     private final JsonSupport jsonSupport;
 
-    public AuthService(UserRepository userRepository, ActiveSessionRepository activeSessionRepository, EmailVerificationCodeRepository verificationCodeRepository, JwtService jwtService, RsaKeyService rsaKeyService, PasswordEncoder passwordEncoder, JsonSupport jsonSupport) {
+    public AuthService(UserRepository userRepository, ActiveSessionRepository activeSessionRepository, EmailVerificationCodeRepository verificationCodeRepository, JwtService jwtService, TokenService tokenService, RsaKeyService rsaKeyService, PasswordEncoder passwordEncoder, JsonSupport jsonSupport) {
         this.userRepository = userRepository;
         this.activeSessionRepository = activeSessionRepository;
         this.verificationCodeRepository = verificationCodeRepository;
         this.jwtService = jwtService;
+        this.tokenService = tokenService;
         this.rsaKeyService = rsaKeyService;
         this.passwordEncoder = passwordEncoder;
         this.jsonSupport = jsonSupport;
@@ -88,37 +90,14 @@ public class AuthService {
                     "Su cuenta no tiene acceso a este portal. Por favor use el portal correspondiente a su rol.");
             }
         }
-        // OPCIONAL — linking en línea con Firebase si el cliente envía un idToken válido.
-        // Sólo enlazamos si: (a) el usuario aún no tiene firebase_uid, (b) el idToken pertenece
-        // al MISMO email autenticado por password, y (c) el email está verificado en Firebase.
-        // Esto cierra la brecha del registro de apoderados que nunca quedó asociado a su UID.
+        // Linking opcional con Firebase si el cliente envía un idToken válido (ver FIX_FIREBASE_UID_LINKING.md).
         String optionalIdToken = stringValue(payload.get("firebaseIdToken"));
         if (!optionalIdToken.isBlank()) {
             linkFirebaseInline(user, optionalIdToken);
         }
         user.setLastLoginAt(LocalDateTime.now());
         userRepository.save(user);
-        activeSessionRepository.deleteByUser(user);
-        String token = jwtService.generateToken(user.getId(), user.getEmail(), user.getRole().name());
-        ActiveSessionEntity session = new ActiveSessionEntity();
-        session.setUser(user);
-        session.setTokenHash(sha256(token));
-        session.setCreatedAt(LocalDateTime.now());
-        session.setLastActivity(LocalDateTime.now());
-        session.setUserAgent(userAgent);
-        session.setIpAddress(ipAddress);
-        activeSessionRepository.save(session);
-        return Map.of(
-            "success", true,
-            "token", token,
-            "refreshToken", token,
-            "expiresAt", LocalDateTime.now().plusHours(12).toString(),
-            "refreshExpiresAt", LocalDateTime.now().plusHours(12).toString(),
-            "sessionId", session.getId().toString(),
-            "permissions", List.of(user.getRole().name()),
-            "user", toAuthUser(user),
-            "firebaseLinked", user.getFirebaseUid() != null
-        );
+        return issueAuthResponse(user, userAgent, ipAddress, true);
     }
 
     @Transactional
@@ -233,26 +212,7 @@ public class AuthService {
             user.setEmailVerified(true);
         }
         userRepository.save(user);
-
-        String token = jwtService.generateToken(user.getId(), user.getEmail(), user.getRole().name());
-        activeSessionRepository.deleteByUser(user);
-        ActiveSessionEntity session = new ActiveSessionEntity();
-        session.setUser(user);
-        session.setTokenHash(sha256(token));
-        session.setCreatedAt(LocalDateTime.now());
-        session.setLastActivity(LocalDateTime.now());
-        activeSessionRepository.save(session);
-
-        return Map.of(
-            "success", true,
-            "token", token,
-            "refreshToken", token,
-            "expiresAt", LocalDateTime.now().plusHours(12).toString(),
-            "refreshExpiresAt", LocalDateTime.now().plusHours(12).toString(),
-            "permissions", List.of(user.getRole().name()),
-            "user", toAuthUser(user),
-            "firebaseLinked", true
-        );
+        return issueAuthResponse(user, null, null, true);
     }
 
     @Transactional
@@ -294,25 +254,7 @@ public class AuthService {
         user.setPreferencesJson(jsonSupport.write(Map.of()));
         UserEntity saved = userRepository.save(user);
         log.info("[Auth/Firebase] Registered new user id={} email={} firebase_uid={}", saved.getId(), email, firebaseUid);
-
-        String token = jwtService.generateToken(saved.getId(), saved.getEmail(), saved.getRole().name());
-        ActiveSessionEntity session = new ActiveSessionEntity();
-        session.setUser(saved);
-        session.setTokenHash(sha256(token));
-        session.setCreatedAt(LocalDateTime.now());
-        session.setLastActivity(LocalDateTime.now());
-        activeSessionRepository.save(session);
-
-        return Map.of(
-            "success", true,
-            "token", token,
-            "refreshToken", token,
-            "expiresAt", LocalDateTime.now().plusHours(12).toString(),
-            "refreshExpiresAt", LocalDateTime.now().plusHours(12).toString(),
-            "permissions", List.of(saved.getRole().name()),
-            "user", toAuthUser(saved),
-            "firebaseLinked", true
-        );
+        return issueAuthResponse(saved, null, null, true);
     }
 
     /**
@@ -479,5 +421,118 @@ public class AuthService {
     }
 
     public record AuthContextHolder(Long id, String email, String role) {
+    }
+
+    // ============================================================================================
+    // Emisión de respuestas de autenticación + endpoints de logout/refresh
+    // ============================================================================================
+
+    /**
+     * Construye la respuesta estándar de login/registro: emite access token (JWT) + refresh token
+     * (opaco, persistido) y crea/refresca la sesión activa. Centralizado para evitar duplicación
+     * y garantizar que TODO flujo de login devuelva la misma forma.
+     */
+    @Transactional
+    public Map<String, Object> issueAuthResponse(UserEntity user, String userAgent, String ipAddress, boolean singleSession) {
+        if (singleSession) {
+            // Mantiene el comportamiento histórico de "una sesión activa por usuario".
+            tokenService.revokeAllForUser(user, "LOGIN_NEW_SESSION");
+            activeSessionRepository.deleteByUser(user);
+        }
+
+        JwtService.IssuedToken access = jwtService.issueAccessToken(user.getId(), user.getEmail(), user.getRole().name());
+        TokenService.IssuedRefresh refresh = tokenService.issueNewFamily(user, userAgent, ipAddress);
+
+        ActiveSessionEntity session = new ActiveSessionEntity();
+        session.setUser(user);
+        session.setTokenHash(sha256(access.token()));
+        session.setJti(access.jti());
+        session.setCreatedAt(LocalDateTime.now());
+        session.setLastActivity(LocalDateTime.now());
+        session.setUserAgent(userAgent);
+        session.setIpAddress(ipAddress);
+        activeSessionRepository.save(session);
+
+        Map<String, Object> response = new java.util.LinkedHashMap<>();
+        response.put("success", true);
+        response.put("token", access.token());
+        response.put("expiresIn", access.expiresInSeconds());
+        response.put("expiresAt", access.expiresAt().toString());
+        response.put("refreshToken", refresh.token());
+        response.put("refreshExpiresIn", refresh.expiresInSeconds());
+        response.put("refreshExpiresAt", refresh.expiresAt().toString());
+        response.put("absoluteSessionSeconds", refresh.expiresInSeconds());
+        response.put("sessionId", session.getId().toString());
+        response.put("permissions", List.of(user.getRole().name()));
+        response.put("user", toAuthUser(user));
+        response.put("firebaseLinked", user.getFirebaseUid() != null);
+        return response;
+    }
+
+    /**
+     * Cierra la sesión: revoca el refresh token actual + agrega el jti del access a la blacklist
+     * + borra la fila de active_sessions. Idempotente: nunca falla aunque el token ya esté inválido.
+     */
+    @Transactional
+    public Map<String, Object> logout(String accessToken, String refreshToken) {
+        try {
+            if (accessToken != null && !accessToken.isBlank()) {
+                io.jsonwebtoken.Claims claims = jwtService.extractAllClaims(accessToken);
+                String jti = claims.getId();
+                Long userId = null;
+                try { userId = Long.parseLong(claims.getSubject()); } catch (Exception ignored) {}
+                java.time.Instant exp = claims.getExpiration().toInstant();
+                if (jti != null && userId != null) {
+                    tokenService.blacklistJti(jti, userId, exp, "LOGOUT");
+                    activeSessionRepository.findByTokenHash(sha256(accessToken)).ifPresent(activeSessionRepository::delete);
+                }
+            }
+        } catch (Exception ex) {
+            log.debug("[Auth] logout: access token inválido o ya expirado: {}", ex.getMessage());
+        }
+        if (refreshToken != null && !refreshToken.isBlank()) {
+            tokenService.revokeRefresh(refreshToken, "LOGOUT");
+        }
+        return Map.of("success", true, "message", "Sesión cerrada");
+    }
+
+    /**
+     * Rota el refresh token y emite un nuevo access. La detección de reuso vive en {@link TokenService}.
+     */
+    @Transactional
+    public Map<String, Object> refresh(String rawRefreshToken, String userAgent, String ipAddress) {
+        if (rawRefreshToken == null || rawRefreshToken.isBlank()) {
+            throw new TokenService.InvalidRefreshException("REFRESH_INVALID", "Refresh token requerido");
+        }
+        TokenService.IssuedRefresh next = tokenService.rotate(rawRefreshToken, userAgent, ipAddress);
+        UserEntity user = next.user();
+        if (!user.isActive()) {
+            tokenService.revokeAllForUser(user, "USER_INACTIVE");
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Cuenta inactiva");
+        }
+        JwtService.IssuedToken access = jwtService.issueAccessToken(user.getId(), user.getEmail(), user.getRole().name());
+
+        // Crear/actualizar la sesión activa para el nuevo access token.
+        ActiveSessionEntity session = new ActiveSessionEntity();
+        session.setUser(user);
+        session.setTokenHash(sha256(access.token()));
+        session.setJti(access.jti());
+        session.setCreatedAt(LocalDateTime.now());
+        session.setLastActivity(LocalDateTime.now());
+        session.setUserAgent(userAgent);
+        session.setIpAddress(ipAddress);
+        activeSessionRepository.save(session);
+
+        Map<String, Object> response = new java.util.LinkedHashMap<>();
+        response.put("success", true);
+        response.put("token", access.token());
+        response.put("expiresIn", access.expiresInSeconds());
+        response.put("expiresAt", access.expiresAt().toString());
+        response.put("refreshToken", next.token());
+        response.put("refreshExpiresIn", next.expiresInSeconds());
+        response.put("refreshExpiresAt", next.expiresAt().toString());
+        response.put("user", toAuthUser(user));
+        response.put("firebaseLinked", user.getFirebaseUid() != null);
+        return response;
     }
 }
