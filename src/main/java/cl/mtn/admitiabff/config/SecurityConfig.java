@@ -18,31 +18,6 @@ import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 @Configuration
 @EnableMethodSecurity
 public class SecurityConfig {
-    private static final List<String> PUBLIC_HEALTH_ROUTES = List.of(
-        "/health",
-        "/ready",
-        "/gateway/status"
-    );
-
-    private static final List<String> PUBLIC_AUTH_ROUTES = List.of(
-        "/api/auth/**",
-        "/api/email/**",
-        "/api/institutional-emails/**"
-    );
-
-    private static final String[] PUBLIC_GET_ROUTES = {
-        "/api/users/roles",
-        "/api/users/public/**",
-        "/api/applications/stats",
-        "/api/applications/statistics",
-        "/api/applications/public/**",
-        "/api/applications/*/contact",
-        "/api/applications/debug/system-info",
-        "/api/interviews/public/**"
-    };
-
-    private static final List<String> ALLOWED_METHODS = List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS");
-
     private final FirebaseAuthenticationFilter firebaseAuthenticationFilter;
 
     @Value("${app.cors.allowed-origins}")
@@ -59,9 +34,12 @@ public class SecurityConfig {
             .csrf(csrf -> csrf.disable())
             .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(auth -> auth
-                .requestMatchers(PUBLIC_HEALTH_ROUTES.toArray(String[]::new)).permitAll()
-                .requestMatchers(PUBLIC_AUTH_ROUTES.toArray(String[]::new)).permitAll()
-                .requestMatchers(HttpMethod.GET, PUBLIC_GET_ROUTES).permitAll()
+                .requestMatchers("/health", "/ready", "/gateway/status").permitAll()
+                // Endpoints de auth abiertos (login/logout/refresh deben ser accesibles sin Bearer válido)
+                .requestMatchers("/api/auth/**", "/api/email/**", "/api/institutional-emails/**").permitAll()
+                .requestMatchers(HttpMethod.GET, "/api/users/roles", "/api/users/public/**", "/api/applications/stats", "/api/applications/statistics",
+                    "/api/applications/public/**", "/api/applications/*/contact", "/api/applications/debug/system-info",
+                    "/api/interviews/public/**").permitAll()
                 .anyRequest().authenticated()
             )
             .addFilterBefore(firebaseAuthenticationFilter, UsernamePasswordAuthenticationFilter.class)
@@ -71,20 +49,18 @@ public class SecurityConfig {
     @Bean
     CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration configuration = new CorsConfiguration();
-        configuration.setAllowedOrigins(parseAllowedOrigins());
-        configuration.setAllowedMethods(ALLOWED_METHODS);
-        configuration.setAllowedHeaders(List.of("*"));
+        configuration.setAllowedOrigins(Arrays.stream(allowedOrigins.split(",")).map(String::trim).toList());
+        configuration.setAllowedMethods(List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
+        // Headers explícitos en lugar de "*" — exigido por allowCredentials=true en muchos navegadores.
+        configuration.setAllowedHeaders(List.of(
+            "Authorization", "Content-Type", "Accept", "X-Requested-With",
+            "X-CSRF-Token", "X-Forwarded-For", "User-Agent"
+        ));
+        configuration.setExposedHeaders(List.of("Authorization", "Set-Cookie"));
         configuration.setAllowCredentials(true);
-
+        configuration.setMaxAge(3600L);
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
         source.registerCorsConfiguration("/**", configuration);
         return source;
-    }
-
-    private List<String> parseAllowedOrigins() {
-        return Arrays.stream(allowedOrigins.split(","))
-            .map(String::trim)
-            .filter(origin -> !origin.isBlank())
-            .toList();
     }
 }

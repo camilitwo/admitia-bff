@@ -31,8 +31,18 @@ app:
   jwt:
     secret: ${APP_JWT_SECRET}
     expiration-minutes: ${APP_JWT_EXPIRATION_MINUTES}
+    refresh-token-minutes: ${APP_JWT_REFRESH_MINUTES}
+    issuer: ${APP_JWT_ISSUER}
+    audience: ${APP_JWT_AUDIENCE}
+    clock-skew-seconds: ${APP_JWT_CLOCK_SKEW}
   firebase:
     service-account-json: ${FIREBASE_SERVICE_ACCOUNT_JSON}
+    allowed-providers: ${APP_FIREBASE_ALLOWED_PROVIDERS}
+    max-auth-age-seconds: ${APP_FIREBASE_MAX_AUTH_AGE_SECONDS}
+    check-revoked: ${APP_FIREBASE_CHECK_REVOKED}
+  cookies:
+    secure: ${APP_COOKIES_SECURE}
+    same-site: ${APP_COOKIES_SAME_SITE}
   csrf:
     enabled: false
   uploads-dir: ${APP_UPLOADS_DIR:uploads}
@@ -44,7 +54,7 @@ app:
     from: ${APP_EMAIL_FROM}
     resend:
       api-key: ${RESEND_API_KEY}
-      base-url: ${RESEND_BASE_URL:https://api.resend.com}
+      base-url: ${RESEND_BASE_URL}
   cors:
     allowed-origins: ${APP_CORS_ALLOWED_ORIGINS:http://localhost:5173,http://127.0.0.1:5173}
 
