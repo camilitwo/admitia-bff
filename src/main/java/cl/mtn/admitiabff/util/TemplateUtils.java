@@ -60,6 +60,7 @@ public final class TemplateUtils {
             // Auth
             case "welcome"                           -> WELCOME_BODY;
             case "verification", "email_verification" -> VERIFICATION_BODY;
+            case "email_verification_link"           -> EMAIL_VERIFICATION_LINK_BODY;
             case "password_reset"                    -> PASSWORD_RESET_BODY;
             case "password_changed"                  -> PASSWORD_CHANGED_BODY;
             case "user_invitation"                   -> USER_INVITATION_BODY;
@@ -189,6 +190,42 @@ public final class TemplateUtils {
                 <p style="margin:0 0 14px 0;">
                   Este código expira en <strong>{{expiresInMinutes}} minutos</strong>.
                   Si usted no solicitó esta verificación, puede ignorar este mensaje.
+                </p>
+                <p style="margin:24px 0 0 0;">
+                  Un cordial saludo,<br/>
+                  <strong>Equipo de Admisión</strong><br/>
+                  Colegio Monte Tabor y Nazaret
+                </p>
+              </td>
+            </tr>
+            """;
+
+    private static final String EMAIL_VERIFICATION_LINK_BODY = """
+            <tr>
+              <td class="content" style="padding:40px 30px;color:#333;line-height:1.7;font-family:'Segoe UI',Arial,sans-serif;font-size:15px;">
+                <h2 style="color:#273b7a;margin:0 0 16px 0;font-size:22px;">Verifique su correo electrónico</h2>
+                <p style="margin:0 0 14px 0;">Estimado/a {{recipientName}},</p>
+                <p style="margin:0 0 14px 0;">
+                  Gracias por registrarse en el sistema de admisión del Colegio
+                  Monte Tabor y Nazaret. Para completar la activación de su
+                  cuenta, por favor confirme su correo electrónico haciendo clic
+                  en el siguiente botón:
+                </p>
+                <p style="margin:0 0 18px 0;text-align:center;">
+                  <a href="{{verificationLink}}" class="button"
+                     style="display:inline-block;background:#ff9e18;color:#fff;text-decoration:none;padding:14px 28px;border-radius:4px;font-weight:bold;font-size:15px;">
+                    Verificar mi correo
+                  </a>
+                </p>
+                <p style="margin:0 0 8px 0;color:#666;font-size:13px;">
+                  Si el botón no funciona, copie y pegue la siguiente URL en su navegador:
+                </p>
+                <p style="margin:0 0 18px 0;word-break:break-all;font-size:13px;">
+                  <a href="{{verificationLink}}" style="color:#273b7a;">{{verificationLink}}</a>
+                </p>
+                <p style="margin:0 0 14px 0;color:#666;font-size:13px;">
+                  Si usted no creó esta cuenta, puede ignorar este mensaje con
+                  tranquilidad.
                 </p>
                 <p style="margin:24px 0 0 0;">
                   Un cordial saludo,<br/>
