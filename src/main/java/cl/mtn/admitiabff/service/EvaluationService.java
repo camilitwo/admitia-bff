@@ -2,7 +2,9 @@ package cl.mtn.admitiabff.service;
 
 import cl.mtn.admitiabff.domain.common.EvaluationStatus;
 import cl.mtn.admitiabff.domain.common.InterviewStatus;
+import cl.mtn.admitiabff.domain.email.EmailRequestDTO;
 import cl.mtn.admitiabff.domain.evaluation.EvaluationEntity;
+import cl.mtn.admitiabff.domain.notification.EmailTemplate;
 import cl.mtn.admitiabff.domain.user.UserEntity;
 import cl.mtn.admitiabff.repository.ApplicationRepository;
 import cl.mtn.admitiabff.repository.EvaluationRepository;
@@ -10,6 +12,7 @@ import cl.mtn.admitiabff.repository.InterviewRepository;
 import cl.mtn.admitiabff.repository.UserRepository;
 import cl.mtn.admitiabff.util.CsvUtils;
 import cl.mtn.admitiabff.util.JsonSupport;
+import cl.mtn.admitiabff.util.TemplateUtils;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.LinkedHashMap;
@@ -171,17 +174,38 @@ public class EvaluationService {
             entity.setStatus(EvaluationStatus.IN_PROGRESS);
         }
         EvaluationEntity saved = evaluationRepository.save(entity);
-        //FIXME corregir
-        /*emailComposerService.send(cl.mtn.admitiabff.service.notification.EmailComposerService.EmailRequest.builder()
-                .template(cl.mtn.admitiabff.domain.notification.EmailTemplate.EVALUATION_ASSIGNMENT)
-                .to(saved.getEvaluator().getEmail())
-                .recipientType("USER")
-                .recipientId(saved.getEvaluator().getId())
-                .data(Map.of(
-                        "evaluatorName", saved.getEvaluator().getFirstName() == null ? "" : saved.getEvaluator().getFirstName(),
-                        "evaluationSubject", saved.getSubject() == null ? "" : saved.getSubject()
-                ))
-                .build());*/
+
+        try {
+            UserEntity ev = saved.getEvaluator();
+            String to = ev != null ? ev.getEmail() : null;
+            if (to != null && !to.isBlank()) {
+                String studentName = saved.getApplication() != null && saved.getApplication().getStudent() != null
+                        ? (saved.getApplication().getStudent().getFirstName() + " "
+                                + saved.getApplication().getStudent().getPaternalLastName()).trim()
+                        : "";
+                String gradeApplied = saved.getApplication() != null && saved.getApplication().getStudent() != null
+                        ? String.valueOf(saved.getApplication().getStudent().getGradeApplied())
+                        : "";
+                Map<String, Object> data = new LinkedHashMap<>();
+                data.put("evaluatorName", ev.getFirstName() == null ? "" : ev.getFirstName());
+                data.put("studentName", studentName);
+                data.put("gradeApplied", gradeApplied);
+                data.put("evaluationType", saved.getSubject() == null ? "" : saved.getSubject());
+                data.put("deadline", saved.getEvaluationDate() == null ? "" : String.valueOf(saved.getEvaluationDate()));
+                data.put("evaluationId", saved.getId());
+
+                emailComposerService.send(EmailRequestDTO.builder()
+                        .template(TemplateUtils.generateTemplate(EmailTemplate.EVALUATION_ASSIGNMENT.name(), data))
+                        .to(to)
+                        .subject(EmailTemplate.EVALUATION_ASSIGNMENT.getDefaultSubject())
+                        .recipientType("USER")
+                        .recipientId(ev.getId())
+                        .data(data)
+                        .build());
+            }
+        } catch (Exception ignored) {
+            // Best-effort: el envío no debe romper la asignación.
+        }
         return Map.of("success", true, "message", "Evaluador asignado", "data", toResponse(saved));
     }
 

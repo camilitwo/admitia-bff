@@ -7,6 +7,8 @@ import cl.mtn.admitiabff.domain.common.DocumentApprovalStatus;
 import cl.mtn.admitiabff.domain.common.PaymentStatus;
 import cl.mtn.admitiabff.domain.common.Role;
 import cl.mtn.admitiabff.domain.document.DocumentEntity;
+import cl.mtn.admitiabff.domain.email.EmailRequestDTO;
+import cl.mtn.admitiabff.domain.notification.EmailTemplate;
 import cl.mtn.admitiabff.domain.person.GuardianEntity;
 import cl.mtn.admitiabff.domain.person.ParentEntity;
 import cl.mtn.admitiabff.domain.person.SupporterEntity;
@@ -24,6 +26,7 @@ import cl.mtn.admitiabff.repository.SupporterRepository;
 import cl.mtn.admitiabff.repository.UserRepository;
 import cl.mtn.admitiabff.util.CsvUtils;
 import cl.mtn.admitiabff.util.JsonSupport;
+import cl.mtn.admitiabff.util.TemplateUtils;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.LinkedHashMap;
@@ -253,18 +256,28 @@ public class ApplicationService {
                     ? saved.getApplicantUser().getEmail()
                     : null;
             if (to != null && !to.isBlank()) {
-                //FIXME corregir
-                /*emailComposerService.send(cl.mtn.admitiabff.service.notification.EmailComposerService.EmailRequest.builder()
-                        .template(cl.mtn.admitiabff.domain.notification.EmailTemplate.STATUS_UPDATE)
+                String studentName = saved.getStudent() != null
+                        ? (safe(saved.getStudent().getFirstName()) + " "
+                                + safe(saved.getStudent().getPaternalLastName())).trim()
+                        : "";
+                String parentNames = resolveParentNamesForEmail(saved);
+                String prevStatus = entity.getStatus() != null ? entity.getStatus().name() : "";
+                Map<String, Object> data = new LinkedHashMap<>();
+                data.put("applicationId", id);
+                data.put("studentName", studentName);
+                data.put("parentNames", parentNames.isBlank() ? "apoderado/a" : parentNames);
+                data.put("previousStatus", prevStatus);
+                data.put("currentStatus", newStatus.name());
+                data.put("message", noteOrEmpty == null ? "" : noteOrEmpty);
+
+                emailComposerService.send(EmailRequestDTO.builder()
+                        .template(TemplateUtils.generateTemplate(EmailTemplate.STATUS_UPDATE.name(), data))
                         .to(to)
+                        .subject(EmailTemplate.STATUS_UPDATE.getDefaultSubject())
                         .recipientType("APPLICATION")
                         .recipientId(id)
-                        .data(Map.of(
-                                "newStatus", newStatus.name(),
-                                "notes", noteOrEmpty == null ? "" : noteOrEmpty,
-                                "applicationId", id
-                        ))
-                        .build());*/
+                        .data(data)
+                        .build());
             } else {
                 log.warn("[final-decision] sin email destinatario para applicationId={}", id);
             }
@@ -626,4 +639,15 @@ public class ApplicationService {
     private boolean booleanValue(Object value) { return value instanceof Boolean b ? b : Boolean.parseBoolean(String.valueOf(value)); }
     private Integer integerValue(Object value) { return value == null || String.valueOf(value).isBlank() ? null : value instanceof Number n ? n.intValue() : Integer.parseInt(String.valueOf(value)); }
     private LocalDate parseDate(Object value) { return value == null || String.valueOf(value).isBlank() ? null : value instanceof LocalDate date ? date : LocalDate.parse(String.valueOf(value)); }
+
+    private static String safe(String value) { return value == null ? "" : value; }
+
+    /** "JUAN PEREZ / PRUEBA MAMA" desde Father/Mother/Guardian. Retorna "" si no hay datos. */
+    private static String resolveParentNamesForEmail(ApplicationEntity app) {
+        java.util.List<String> names = new java.util.ArrayList<>();
+        if (app.getFather() != null && app.getFather().getFullName() != null) names.add(app.getFather().getFullName());
+        if (app.getMother() != null && app.getMother().getFullName() != null) names.add(app.getMother().getFullName());
+        if (names.isEmpty() && app.getGuardian() != null && app.getGuardian().getFullName() != null) names.add(app.getGuardian().getFullName());
+        return names.isEmpty() ? "" : String.join(" / ", names);
+    }
 }

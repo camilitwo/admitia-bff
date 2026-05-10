@@ -1,10 +1,12 @@
 package cl.mtn.admitiabff.service;
 
+import cl.mtn.admitiabff.domain.email.EmailRequestDTO;
 import cl.mtn.admitiabff.domain.notification.EmailTemplate;
 import cl.mtn.admitiabff.domain.user.EmailVerificationCodeEntity;
 import cl.mtn.admitiabff.repository.EmailVerificationCodeRepository;
 import cl.mtn.admitiabff.repository.UserRepository;
 import cl.mtn.admitiabff.service.notification.EmailComposerService;
+import cl.mtn.admitiabff.util.TemplateUtils;
 import java.security.SecureRandom;
 import java.time.LocalDateTime;
 import java.util.LinkedHashMap;
@@ -88,13 +90,14 @@ public class EmailVerificationService {
             data.put("code", code);
             data.put("recipientName", (firstName + " " + lastName).trim());
             data.put("expiresInMinutes", EXPIRY_MINUTES);
-//FIXME corregir
-            /*emailComposerService.send(EmailComposerService.EmailRequest.builder()
-                    .template(EmailTemplate.EMAIL_VERIFICATION)
+
+            emailComposerService.send(EmailRequestDTO.builder()
+                    .template(TemplateUtils.generateTemplate(EmailTemplate.EMAIL_VERIFICATION.name(), data))
                     .to(email)
+                    .subject(EmailTemplate.EMAIL_VERIFICATION.getDefaultSubject())
                     .recipientType("USER")
                     .data(data)
-                    .build());*/
+                    .build());
             emailSent = true;
             log.info("Verification code sent to {}", email);
         } catch (Exception ex) {
