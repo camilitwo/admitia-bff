@@ -73,6 +73,16 @@ public class AuthService {
     @Value("${app.firebase.verification.continue-url:}")
     private String firebaseVerificationContinueUrl;
 
+    /**
+     * Path público (a partir de {@link #firebaseVerificationPublicBaseUrl}) bajo el que el
+     * gateway/nginx expone el endpoint de redirección. Por defecto {@code /v1/auth/firebase/verify-redirect},
+     * que es la ruta que NGINX enruta al BFF (el BFF la expone internamente como
+     * {@code /api/auth/firebase/verify-redirect}; nginx hace el rewrite {@code /v1 → /api}).
+     * Se puede sobreescribir vía env si el gateway cambia el prefijo.
+     */
+    @Value("${app.firebase.verification.public-path:/v1/auth/firebase/verify-redirect}")
+    private String firebaseVerificationPublicPath;
+
     public AuthService(UserRepository userRepository, ActiveSessionRepository activeSessionRepository, EmailVerificationCodeRepository verificationCodeRepository, JwtService jwtService, TokenService tokenService, RsaKeyService rsaKeyService, PasswordEncoder passwordEncoder, JsonSupport jsonSupport, EmailComposerService emailComposerService) {
         this.userRepository = userRepository;
         this.activeSessionRepository = activeSessionRepository;
@@ -233,10 +243,31 @@ public class AuthService {
         if (!user.isActive()) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Cuenta inactiva");
         }
-        user.setLastLoginAt(LocalDateTime.now());
-        if (decoded.isEmailVerified()) {
+
+        // Sincronizar el flag local con el estado real de Firebase (puede haber cambiado).
+        boolean firebaseSaysVerified = decoded.isEmailVerified();
+        if (firebaseSaysVerified && !user.isEmailVerified()) {
             user.setEmailVerified(true);
+        } else if (!firebaseSaysVerified && user.isEmailVerified()) {
+            // El usuario perdió la verificación en Firebase (raro, pero posible si se cambió el email).
+            user.setEmailVerified(false);
         }
+
+        // 🔒 Bloqueo de login para apoderados con email no verificado.
+        // Sin esto, un registro recién creado en Firebase (donde emailVerified arranca en false)
+        // podría loguearse al portal antes de hacer clic en el correo de verificación.
+        // Sólo aplica al rol APODERADO; el staff/admin no usa este flujo de auto-registro.
+        if (user.getRole() == Role.APODERADO && !firebaseSaysVerified) {
+            log.warn("[Auth/Firebase] Login bloqueado por email no verificado: user id={} email={}",
+                user.getId(), email);
+            // Persistimos la sincronización del flag antes de salir.
+            userRepository.save(user);
+            throw new cl.mtn.admitiabff.controller.EmailNotVerifiedException(email,
+                "Debe verificar su correo electrónico antes de ingresar. "
+                + "Revise su bandeja de entrada (y la carpeta de spam) o solicite un nuevo enlace.");
+        }
+
+        user.setLastLoginAt(LocalDateTime.now());
         userRepository.save(user);
         return issueAuthResponse(user, null, null, true);
     }
@@ -399,7 +430,12 @@ public class AuthService {
             URI uri = URI.create(firebaseLink);
             String query = uri.getRawQuery() == null ? "" : uri.getRawQuery();
             String base = firebaseVerificationPublicBaseUrl.replaceAll("/+$", "");
-            return base + "/api/auth/firebase/verify-redirect?" + query;
+            String path = firebaseVerificationPublicPath == null || firebaseVerificationPublicPath.isBlank()
+                ? "/v1/auth/firebase/verify-redirect"
+                : (firebaseVerificationPublicPath.startsWith("/")
+                    ? firebaseVerificationPublicPath
+                    : "/" + firebaseVerificationPublicPath);
+            return base + path + "?" + query;
         } catch (Exception ex) {
             log.warn("[Auth/Firebase] No se pudo enmascarar el link de verificación: {}", ex.getMessage());
             return firebaseLink;

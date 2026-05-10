@@ -53,6 +53,10 @@ app:
       # intacto y la verificación se sigue marcando en Firebase Auth (emailVerified=true).
       # Ej: https://api.admitia.cl  (sin slash final)
       public-base-url: ${APP_FIREBASE_VERIFICATION_PUBLIC_BASE_URL:https://admitia-nginx-staging.up.railway.app}
+      # Path público (después del host) que el gateway/nginx enruta al BFF.
+      # Por defecto /v1/auth/firebase/verify-redirect (NGINX reescribe /v1 → /api).
+      # Si NGINX algún día expone el endpoint en otra ruta, override por env.
+      public-path: ${APP_FIREBASE_VERIFICATION_PUBLIC_PATH:/v1/auth/firebase/verify-redirect}
       # URL del front a la que Firebase redirige tras verificar (ActionCodeSettings.continueUrl).
       # Opcional. Si no se configura, Firebase muestra su pantalla por defecto al verificar.
       # Ej: https://admitia.cl/apoderado/email-verificado
