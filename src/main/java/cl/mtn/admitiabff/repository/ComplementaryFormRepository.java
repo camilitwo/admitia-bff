@@ -6,4 +6,5 @@ import org.springframework.data.jpa.repository.JpaRepository;
 
 public interface ComplementaryFormRepository extends JpaRepository<ComplementaryFormEntity, Long> {
     Optional<ComplementaryFormEntity> findByApplicationId(Long applicationId);
+    boolean existsByApplicationIdAndSubmittedTrue(Long applicationId);
 }
