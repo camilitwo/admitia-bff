@@ -151,22 +151,56 @@ public class InterviewService {
 
         // Destinatario: SIEMPRE desde la base de datos (applicantUser de la postulación).
         // Si no hay correo válido se aborta el envío con error explícito (nunca hardcodear).
-        String to = applicationRepository.findActiveById(applicationId)
-                .map(app -> app.getApplicantUser() != null ? app.getApplicantUser().getEmail() : null)
-                .filter(e -> e != null && !e.isBlank())
+        var application = applicationRepository.findActiveById(applicationId)
                 .orElseThrow(() -> new IllegalStateException(
-                        "No se puede enviar el resumen: la postulación " + applicationId
-                                + " no tiene un email de destinatario válido (applicantUser.email)."));
+                        "No se puede enviar el resumen: la postulación " + applicationId + " no existe."));
+        String to = application.getApplicantUser() != null ? application.getApplicantUser().getEmail() : null;
+        if (to == null || to.isBlank()) {
+            throw new IllegalStateException(
+                    "No se puede enviar el resumen: la postulación " + applicationId
+                            + " no tiene un email de destinatario válido (applicantUser.email).");
+        }
+
+        // Datos del alumno y apoderados desde el primer registro disponible.
+        String studentName = interviews.stream()
+                .map(this::toResponse)
+                .map(r -> (String) r.get("studentName"))
+                .filter(s -> s != null && !s.isBlank())
+                .findFirst().orElse("(sin nombre)");
+        String parentNames = interviews.stream()
+                .map(this::toResponse)
+                .map(r -> (String) r.get("parentNames"))
+                .filter(s -> s != null && !s.isBlank())
+                .findFirst().orElse("");
+        String gradeApplied = interviews.stream()
+                .map(this::toResponse)
+                .map(r -> (String) r.get("gradeApplied"))
+                .filter(s -> s != null && !s.isBlank())
+                .findFirst().orElse("");
+
+        // Lista para el {{#each interviews}} del template.
+        List<Map<String, Object>> interviewRows = interviews.stream().map(i -> {
+            Map<String, Object> row = toResponse(i);
+            String second = (String) row.get("secondInterviewerName");
+            row.put("secondInterviewerSuffix", (second == null || second.isBlank()) ? "" : " / " + second);
+            return row;
+        }).toList();
+
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("applicationId", applicationId);
+        data.put("studentName", studentName);
+        data.put("parentNames", parentNames);
+        data.put("gradeApplied", gradeApplied);
+        data.put("totalInterviews", interviewRows.size());
+        data.put("interviews", interviewRows);
 
         emailComposerService.send(EmailRequestDTO.builder()
-                .template(TemplateUtils.generateTemplate("summary"))
+                .template(TemplateUtils.generateTemplate("summary", data))
                 .to(to)
+                .subject("Resumen de entrevistas - Postulación " + applicationId + " - " + studentName)
                 .recipientType("APPLICATION")
                 .recipientId(applicationId)
-                .data(Map.of(
-                        "applicationId", applicationId,
-                        "summary", "Resumen enviado para la postulación " + applicationId
-                ))
+                .data(data)
                 .build());
         return Map.of("success", true, "message", "Resumen enviado", "data", Map.of("applicationId", applicationId, "interviews", interviews.stream().map(this::toResponse).toList()));
     }
