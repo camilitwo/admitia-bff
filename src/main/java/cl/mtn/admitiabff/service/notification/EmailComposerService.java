@@ -4,6 +4,7 @@ import cl.mtn.admitiabff.domain.email.EmailRequestDTO;
 import cl.mtn.admitiabff.domain.notification.EmailTemplate;
 import cl.mtn.admitiabff.service.NotificationService;
 import cl.mtn.admitiabff.service.notification.template.EmailTemplateRegistry;
+import cl.mtn.admitiabff.util.TemplateUtils;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
@@ -18,12 +19,21 @@ import org.springframework.stereotype.Service;
 import org.springframework.util.StreamUtils;
 
 /**
- * Orquestador central para envío de emails con plantilla.
+ * Orquestador central para envío de emails.
  *
  * <p>Carga el layout base {@code templateCorreo.html} desde el classpath
  * (carpeta {@code template/}) y reemplaza el placeholder
  * {@code {{html_replace}}} con el body que viene en
- * {@link EmailRequestDTO#template} (resuelto por {@code TemplateUtils}).
+ * {@link EmailRequestDTO#template} (resuelto por {@link TemplateUtils}).
+ *
+ * <p>Existen dos vías de invocación:
+ * <ul>
+ *   <li>{@link #send(EmailRequestDTO)} — typed, para services que ya
+ *       resolvieron el body con {@code TemplateUtils.generateTemplate(...)}.</li>
+ *   <li>{@link #sendFromPayload(Map)} — para los controllers institucionales
+ *       que pasan el {@code template} (enum) y un {@code data}; aquí mismo
+ *       resolvemos el body por flujo y se delega a {@link #send}.</li>
+ * </ul>
  */
 @Service
 public class EmailComposerService {
@@ -46,14 +56,45 @@ public class EmailComposerService {
         this.notificationService = notificationService;
     }
 
+    // ------------------------------------------------------------------
+    // API por payload Map (controllers institucionales).
+    // ------------------------------------------------------------------
     public Map<String, Object> sendFromPayload(Map<String, Object> payload) {
         Objects.requireNonNull(payload, "payload requerido");
-        // Implementación por payload Map se mantiene como TODO; los services
-        // tipados deben usar #send(EmailRequestDTO).
-        return null;
+
+        String rawTemplate = firstNonBlank(
+                stringOrNull(payload.get("template")),
+                stringOrNull(payload.get("templateName")),
+                stringOrNull(payload.get("type"))
+        );
+        EmailTemplate template = EmailTemplate.from(rawTemplate); // null/blank -> GENERIC
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> data = payload.get("data") instanceof Map
+                ? (Map<String, Object>) payload.get("data")
+                : payload; // si el front no anida, usamos todo el payload como data
+
+        // Resuelve el body HTML específico del flujo (mismo layout, contenido distinto).
+        String bodyHtml = TemplateUtils.generateTemplate(template.name(), data);
+
+        Long recipientId = payload.get("recipientId") instanceof Number n ? n.longValue() : null;
+
+        EmailRequestDTO request = EmailRequestDTO.builder()
+                .template(bodyHtml)
+                .to(stringOrNull(payload.get("to")))
+                .subject(firstNonBlank(stringOrNull(payload.get("subject")), template.getDefaultSubject()))
+                .recipientType(stringOrNull(payload.get("recipientType")))
+                .recipientId(recipientId)
+                .data(data)
+                .build();
+
+        log.debug("Email compose payload template={} to={}", template, request.to);
+        return send(request);
     }
 
-    /** API tipada para invocar desde otros services sin pasar por payload Map. */
+    // ------------------------------------------------------------------
+    // API tipada (services internos).
+    // ------------------------------------------------------------------
     public Map<String, Object> send(EmailRequestDTO request) {
         Objects.requireNonNull(request, "request requerido");
         if (request.to == null || request.to.isBlank() || "null".equalsIgnoreCase(request.to)) {
@@ -64,16 +105,16 @@ public class EmailComposerService {
         Map<String, Object> data = request.data == null ? Map.of() : request.data;
 
         // request.template es el FRAGMENTO HTML (body) que reemplaza {{html_replace}}.
-        // Si viene null/blank, usamos un mensaje por defecto.
+        // Si viene null/blank, usamos un body genérico del flujo GENERIC.
         String body = (request.template == null || request.template.isBlank())
-                ? "<tr><td style=\"padding:30px;\"><p>Notificación MTN</p></td></tr>"
+                ? TemplateUtils.generateTemplate(EmailTemplate.GENERIC.name(), data)
                 : request.template;
 
         String html = loadBaseLayout().replace(BODY_PLACEHOLDER, body);
 
         String subject = firstNonBlank(request.subject, "Notificación MTN");
 
-        log.debug("Email compose to={} subject={}", request.to, subject);
+        log.debug("Email send to={} subject={}", request.to, subject);
 
         Map<String, Object> mailPayload = new LinkedHashMap<>();
         mailPayload.put("to", request.to);
@@ -85,6 +126,10 @@ public class EmailComposerService {
 
         return notificationService.email(mailPayload);
     }
+
+    // ------------------------------------------------------------------
+    // Helpers internos.
+    // ------------------------------------------------------------------
 
     /** Carga (con cache) el HTML del layout base desde {@code classpath:template/templateCorreo.html}. */
     private String loadBaseLayout() {
@@ -112,5 +157,11 @@ public class EmailComposerService {
             if (v != null && !v.isBlank()) return v;
         }
         return null;
+    }
+
+    private static String stringOrNull(Object value) {
+        if (value == null) return null;
+        String s = String.valueOf(value);
+        return s.isBlank() ? null : s;
     }
 }
