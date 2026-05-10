@@ -1,6 +1,7 @@
 package cl.mtn.admitiabff.service;
 
 import cl.mtn.admitiabff.domain.common.InterviewStatus;
+import cl.mtn.admitiabff.domain.email.EmailRequestDTO;
 import cl.mtn.admitiabff.domain.interview.InterviewEntity;
 import cl.mtn.admitiabff.domain.interview.InterviewerScheduleEntity;
 import cl.mtn.admitiabff.repository.ApplicationRepository;
@@ -13,6 +14,8 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+
+import cl.mtn.admitiabff.util.TemplateUtils;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -155,8 +158,8 @@ public class InterviewService {
                         "No se puede enviar el resumen: la postulación " + applicationId
                                 + " no tiene un email de destinatario válido (applicantUser.email)."));
 
-        emailComposerService.send(cl.mtn.admitiabff.service.notification.EmailComposerService.EmailRequest.builder()
-                .template(cl.mtn.admitiabff.domain.notification.EmailTemplate.INTERVIEW_SUMMARY)
+        emailComposerService.send(EmailRequestDTO.builder()
+                .template(TemplateUtils.generateTemplate("summary"))
                 .to(to)
                 .recipientType("APPLICATION")
                 .recipientId(applicationId)

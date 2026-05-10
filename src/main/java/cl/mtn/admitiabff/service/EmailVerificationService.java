@@ -88,13 +88,13 @@ public class EmailVerificationService {
             data.put("code", code);
             data.put("recipientName", (firstName + " " + lastName).trim());
             data.put("expiresInMinutes", EXPIRY_MINUTES);
-
-            emailComposerService.send(EmailComposerService.EmailRequest.builder()
+//FIXME corregir
+            /*emailComposerService.send(EmailComposerService.EmailRequest.builder()
                     .template(EmailTemplate.EMAIL_VERIFICATION)
                     .to(email)
                     .recipientType("USER")
                     .data(data)
-                    .build());
+                    .build());*/
             emailSent = true;
             log.info("Verification code sent to {}", email);
         } catch (Exception ex) {

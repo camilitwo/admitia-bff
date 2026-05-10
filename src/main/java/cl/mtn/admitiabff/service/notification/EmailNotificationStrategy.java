@@ -48,6 +48,7 @@ public class EmailNotificationStrategy implements NotificationChannelStrategy {
         entity.setType(String.valueOf(payload.getOrDefault("type", "EMAIL")));
         entity.setSubject((String) payload.get("subject"));
         entity.setMessage((String) payload.get("message"));
+        //TODO replace template html
         entity.setTemplateName((String) payload.get("templateName"));
         entity.setTemplateData(jsonSupport.write(payload.getOrDefault("templateData", Map.of())));
         entity.setStatus(NotificationStatus.SENT);

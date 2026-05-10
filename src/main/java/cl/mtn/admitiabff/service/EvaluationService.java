@@ -171,7 +171,8 @@ public class EvaluationService {
             entity.setStatus(EvaluationStatus.IN_PROGRESS);
         }
         EvaluationEntity saved = evaluationRepository.save(entity);
-        emailComposerService.send(cl.mtn.admitiabff.service.notification.EmailComposerService.EmailRequest.builder()
+        //FIXME corregir
+        /*emailComposerService.send(cl.mtn.admitiabff.service.notification.EmailComposerService.EmailRequest.builder()
                 .template(cl.mtn.admitiabff.domain.notification.EmailTemplate.EVALUATION_ASSIGNMENT)
                 .to(saved.getEvaluator().getEmail())
                 .recipientType("USER")
@@ -180,7 +181,7 @@ public class EvaluationService {
                         "evaluatorName", saved.getEvaluator().getFirstName() == null ? "" : saved.getEvaluator().getFirstName(),
                         "evaluationSubject", saved.getSubject() == null ? "" : saved.getSubject()
                 ))
-                .build());
+                .build());*/
         return Map.of("success", true, "message", "Evaluador asignado", "data", toResponse(saved));
     }
 
