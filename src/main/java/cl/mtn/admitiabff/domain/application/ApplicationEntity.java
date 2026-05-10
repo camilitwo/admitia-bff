@@ -2,6 +2,7 @@ package cl.mtn.admitiabff.domain.application;
 
 import cl.mtn.admitiabff.domain.common.ApplicationStatus;
 import cl.mtn.admitiabff.domain.common.BaseEntity;
+import cl.mtn.admitiabff.domain.common.PaymentStatus;
 import cl.mtn.admitiabff.domain.person.GuardianEntity;
 import cl.mtn.admitiabff.domain.person.ParentEntity;
 import cl.mtn.admitiabff.domain.person.SupporterEntity;
@@ -67,6 +68,16 @@ public class ApplicationEntity extends BaseEntity {
 
     @Column(name = "documentos_completos", nullable = false)
     private boolean documentosCompletos;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "payment_status", nullable = false)
+    private PaymentStatus paymentStatus = PaymentStatus.UNPAID;
+
+    @Column(name = "payment_required", nullable = false)
+    private boolean paymentRequired = true;
+
+    @Column(name = "paid_at")
+    private LocalDateTime paidAt;
 
     @Column(name = "last_document_notification_at")
     private LocalDateTime lastDocumentNotificationAt;

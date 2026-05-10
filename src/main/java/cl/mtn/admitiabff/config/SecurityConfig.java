@@ -36,7 +36,7 @@ public class SecurityConfig {
             .authorizeHttpRequests(auth -> auth
                 .requestMatchers("/health", "/ready", "/gateway/status").permitAll()
                 // Endpoints de auth abiertos (login/logout/refresh deben ser accesibles sin Bearer válido)
-                .requestMatchers("/api/auth/**", "/api/email/**", "/api/institutional-emails/**").permitAll()
+                .requestMatchers("/api/auth/**", "/api/email/**", "/api/institutional-emails/**", "/api/payments/webhooks/toku").permitAll()
                 .requestMatchers(HttpMethod.GET, "/api/users/roles", "/api/users/public/**", "/api/applications/stats", "/api/applications/statistics",
                     "/api/applications/public/**", "/api/applications/*/contact", "/api/applications/debug/system-info",
                     "/api/interviews/public/**").permitAll()

@@ -57,6 +57,16 @@ app:
       base-url: ${RESEND_BASE_URL}
   cors:
     allowed-origins: ${APP_CORS_ALLOWED_ORIGINS:http://localhost:5173,http://127.0.0.1:5173}
+  payments:
+    application-fee-clp: ${APP_PAYMENTS_APPLICATION_FEE_CLP:0}
+    process-id: ${APP_PAYMENTS_PROCESS_ID:ADMISION}
+    invoice-due-days: ${APP_PAYMENTS_INVOICE_DUE_DAYS:3}
+    webhook-tolerance-seconds: ${APP_PAYMENTS_WEBHOOK_TOLERANCE_SECONDS:300}
+    toku:
+      base-url: ${TOKU_BASE_URL:https://api.trytoku.com}
+      api-key: ${TOKU_API_KEY:}
+      account-key: ${TOKU_ACCOUNT_KEY:}
+      webhook-secret: ${TOKU_WEBHOOK_SECRET:}
 
 management:
   endpoints:

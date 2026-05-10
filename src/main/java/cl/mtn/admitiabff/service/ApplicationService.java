@@ -4,6 +4,7 @@ import cl.mtn.admitiabff.domain.application.ApplicationEntity;
 import cl.mtn.admitiabff.domain.application.ComplementaryFormEntity;
 import cl.mtn.admitiabff.domain.common.ApplicationStatus;
 import cl.mtn.admitiabff.domain.common.DocumentApprovalStatus;
+import cl.mtn.admitiabff.domain.common.PaymentStatus;
 import cl.mtn.admitiabff.domain.common.Role;
 import cl.mtn.admitiabff.domain.document.DocumentEntity;
 import cl.mtn.admitiabff.domain.person.GuardianEntity;
@@ -322,6 +323,9 @@ public class ApplicationService {
     @Transactional
     public Map<String, Object> upsertComplementaryForm(Long applicationId, Map<String, Object> payload) {
         ApplicationEntity application = load(applicationId);
+        if (application.isPaymentRequired() && application.getPaymentStatus() != PaymentStatus.PAID) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Debe pagar la postulación antes de completar el formulario complementario");
+        }
         ComplementaryFormEntity form = complementaryFormRepository.findByApplicationId(applicationId).orElseGet(() -> {
             ComplementaryFormEntity entity = new ComplementaryFormEntity();
             entity.setApplication(application);
@@ -471,6 +475,11 @@ public class ApplicationService {
         response.put("guardianId", entity.getGuardian() == null ? null : entity.getGuardian().getId());
         response.put("applicantUserId", entity.getApplicantUser() == null ? null : entity.getApplicantUser().getId());
         response.put("status", entity.getStatus().name());
+        response.put("paymentStatus", entity.getPaymentStatus().name());
+        response.put("paymentRequired", entity.isPaymentRequired());
+        response.put("paidAt", entity.getPaidAt());
+        response.put("canFillComplementaryForm", !entity.isPaymentRequired() || entity.getPaymentStatus() == PaymentStatus.PAID);
+        response.put("hasComplementaryForm", complementaryFormRepository.existsByApplicationIdAndSubmittedTrue(entity.getId()));
         response.put("submissionDate", entity.getSubmissionDate());
         response.put("createdAt", entity.getCreatedAt());
         response.put("updatedAt", entity.getUpdatedAt());
