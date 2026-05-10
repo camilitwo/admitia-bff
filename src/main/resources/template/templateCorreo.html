@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bienvenido/a a Monte Tabor y Nazaret - Postulación Recibida</title>
+    <style>
+        /* CSS Reset para correos */
+        body, table, td, a { -webkit-text-size-adjust: 100%; -ms-text-size-adjust: 100%; }
+        table, td { mso-table-lspace: 0pt; mso-table-rspace: 0pt; }
+        img { -ms-interpolation-mode: bicubic; border: 0; height: auto; line-height: 100%; outline: none; text-decoration: none; display: block; }
+        table { border-collapse: collapse !important; }
+        body { height: 100% !important; margin: 0 !important; padding: 0 !important; width: 100% !important; font-family: 'Segoe UI', Arial, sans-serif; }
+
+        /* Estilos de la plantilla */
+        .email-container { max-width: 600px; margin: 0 auto; background-color: #ffffff; }
+        /* Encabezado limpio, solo para el logo */
+        .header { padding: 30px 20px; text-align: center; } 
+        .content { padding: 40px 30px; color: #333333; line-height: 1.6; font-size: 15px; }
+        .button { display: inline-block; background-color: #ff9e18; color: #ffffff; text-decoration: none; padding: 14px 28px; border-radius: 4px; font-weight: bold; margin-top: 15px; font-size: 14px; }
+        
+        /* Caja de información destacada */
+        .info-box { background-color: #f8f9fa; padding: 15px 20px; border-radius: 4px; margin-bottom: 25px; border-left: 4px solid #ff9e18; }
+        
+        /* Footer Resumido sin RRSS */
+        .footer { background-color: #273b7a; padding: 30px 20px; color: #ffffff; font-size: 13px; text-align: center; }
+        .footer-title { color: #ff9e18; font-weight: bold; font-size: 15px; margin-bottom: 8px; display: block; }
+        .footer-text { color: #d0d5e8; text-decoration: none; line-height: 1.5; font-size: 13px; margin-bottom: 15px; }
+        .footer-text a { color: #d0d5e8; text-decoration: none; }
+        
+        /* Copyright */
+        .copyright { padding-top: 15px; border-top: 1px solid #3c529b; font-size: 11px; color: #9eaadb; margin-top: 15px; }
+        
+        /* Responsivo */
+        @media screen and (max-width: 600px) {
+            .content { padding: 25px 20px; }
+            .footer-text { font-size: 12px; }
+        }
+    </style>
+</head>
+<body style="background-color: #f4f6f9; padding: 20px 0;">
+
+<table width="100%" border="0" cellpadding="0" cellspacing="0" style="background-color: #f4f6f9;">
+    <tr>
+        <td align="center">
+            <table class="email-container" width="600" border="0" cellpadding="0" cellspacing="0" style="background-color: #ffffff; max-width: 600px; width: 100%;">
+                
+                <tr>
+                    <td class="header">
+                        <img src="https://ik.imagekit.io/cigv/admision/logoMTN.webp" alt="Colegio Monte Tabor y Nazaret" width="180" style="margin: 0 auto; max-width: 100%;">
+                    </td>
+                </tr>
+                
+                <div>
+                    {{html_replace}}
+                </div>
+                
+                <tr>
+                    <td class="footer">
+                        <span class="footer-title">Colegio Monte Tabor y Nazaret</span>
+                        
+                        <div class="footer-text">
+                            Avda. Paseo Pie Andino 5894, Lo Barnechea<br>
+                            Tel: (56-2) 2 7500 900 | <a href="mailto:admision@mtn.cl">admision@mtn.cl</a>
+                        </div>
+                        
+                        <div class="copyright">
+                            &copy; 2026 Colegio Monte Tabor y Nazaret. Todos los derechos reservados.
+                        </div>
+                    </td>
+                </tr>
+                
+            </table>
+        </td>
+    </tr>
+</table>
+
+</body>
+</html>

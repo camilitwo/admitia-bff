@@ -1,6 +1,7 @@
 package cl.mtn.admitiabff.service;
 
 import cl.mtn.admitiabff.domain.common.InterviewStatus;
+import cl.mtn.admitiabff.domain.email.EmailRequestDTO;
 import cl.mtn.admitiabff.domain.interview.InterviewEntity;
 import cl.mtn.admitiabff.domain.interview.InterviewerScheduleEntity;
 import cl.mtn.admitiabff.repository.ApplicationRepository;
@@ -13,6 +14,8 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+
+import cl.mtn.admitiabff.util.TemplateUtils;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -148,22 +151,60 @@ public class InterviewService {
 
         // Destinatario: SIEMPRE desde la base de datos (applicantUser de la postulación).
         // Si no hay correo válido se aborta el envío con error explícito (nunca hardcodear).
-        String to = applicationRepository.findActiveById(applicationId)
-                .map(app -> app.getApplicantUser() != null ? app.getApplicantUser().getEmail() : null)
-                .filter(e -> e != null && !e.isBlank())
+        var application = applicationRepository.findActiveById(applicationId)
                 .orElseThrow(() -> new IllegalStateException(
-                        "No se puede enviar el resumen: la postulación " + applicationId
-                                + " no tiene un email de destinatario válido (applicantUser.email)."));
+                        "No se puede enviar el resumen: la postulación " + applicationId + " no existe."));
+        String to = application.getApplicantUser() != null ? application.getApplicantUser().getEmail() : null;
+        if (to == null || to.isBlank()) {
+            throw new IllegalStateException(
+                    "No se puede enviar el resumen: la postulación " + applicationId
+                            + " no tiene un email de destinatario válido (applicantUser.email).");
+        }
 
-        emailComposerService.send(cl.mtn.admitiabff.service.notification.EmailComposerService.EmailRequest.builder()
-                .template(cl.mtn.admitiabff.domain.notification.EmailTemplate.INTERVIEW_SUMMARY)
+        // Datos del alumno y apoderados desde el primer registro disponible.
+        String studentName = interviews.stream()
+                .map(this::toResponse)
+                .map(r -> (String) r.get("studentName"))
+                .filter(s -> s != null && !s.isBlank())
+                .findFirst().orElse("(sin nombre)");
+        String parentNames = interviews.stream()
+                .map(this::toResponse)
+                .map(r -> (String) r.get("parentNames"))
+                .filter(s -> s != null && !s.isBlank())
+                .findFirst().orElse("");
+        String parentNamesFriendly = toFriendlyParentNames(parentNames);
+        String gradeApplied = interviews.stream()
+                .map(this::toResponse)
+                .map(r -> (String) r.get("gradeApplied"))
+                .filter(s -> s != null && !s.isBlank())
+                .findFirst().orElse("");
+
+        // Lista para el {{#each interviews}} del template.
+        List<Map<String, Object>> interviewRows = interviews.stream().map(i -> {
+            Map<String, Object> row = toResponse(i);
+            String second = (String) row.get("secondInterviewerName");
+            row.put("secondInterviewerSuffix", (second == null || second.isBlank()) ? "" : " / " + toTitleCase(second));
+            row.put("interviewerName", toTitleCase((String) row.get("interviewerName")));
+            row.put("interviewType", prettyInterviewType((String) row.get("interviewType")));
+            row.put("mode", prettyMode((String) row.get("mode")));
+            return row;
+        }).toList();
+
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("applicationId", applicationId);
+        data.put("studentName", toTitleCase(studentName));
+        data.put("parentNames", parentNamesFriendly);
+        data.put("gradeApplied", prettyGrade(gradeApplied));
+        data.put("totalInterviews", interviewRows.size());
+        data.put("interviews", interviewRows);
+
+        emailComposerService.send(EmailRequestDTO.builder()
+                .template(TemplateUtils.generateTemplate("summary", data))
                 .to(to)
+                .subject("Resumen de entrevistas - Postulación " + applicationId + " - " + studentName)
                 .recipientType("APPLICATION")
                 .recipientId(applicationId)
-                .data(Map.of(
-                        "applicationId", applicationId,
-                        "summary", "Resumen enviado para la postulación " + applicationId
-                ))
+                .data(data)
                 .build());
         return Map.of("success", true, "message", "Resumen enviado", "data", Map.of("applicationId", applicationId, "interviews", interviews.stream().map(this::toResponse).toList()));
     }
@@ -265,5 +306,81 @@ public class InterviewService {
         response.put("start", entity.getScheduledDate() + "T" + entity.getScheduledTime());
         response.put("end", entity.getScheduledDate() + "T" + entity.getScheduledTime().plusMinutes(entity.getDuration()));
         return response;
+    }
+
+    // ----------------------------------------------------------------
+    // Helpers de formato para el correo de resumen (tono familiar).
+    // ----------------------------------------------------------------
+
+    /**
+     * Convierte "JUAN PEREZ / PRUEBA MAMA" en "Juan y Prueba" (solo primer
+     * nombre de cada apoderado, capitalizado, unidos con "y").
+     */
+    private String toFriendlyParentNames(String raw) {
+        if (raw == null || raw.isBlank()) return "familia";
+        String[] parts = raw.split("/");
+        List<String> firstNames = new ArrayList<>();
+        for (String part : parts) {
+            String trimmed = part.trim();
+            if (trimmed.isEmpty()) continue;
+            String firstName = trimmed.split("\\s+")[0];
+            firstNames.add(toTitleCase(firstName));
+        }
+        if (firstNames.isEmpty()) return "familia";
+        if (firstNames.size() == 1) return firstNames.get(0);
+        if (firstNames.size() == 2) return firstNames.get(0) + " y " + firstNames.get(1);
+        String last = firstNames.remove(firstNames.size() - 1);
+        return String.join(", ", firstNames) + " y " + last;
+    }
+
+    /** "JUAN PEREZ" -> "Juan Perez". */
+    private String toTitleCase(String text) {
+        if (text == null || text.isBlank()) return "";
+        StringBuilder sb = new StringBuilder(text.length());
+        boolean newWord = true;
+        for (int i = 0; i < text.length(); i++) {
+            char c = text.charAt(i);
+            if (Character.isWhitespace(c) || c == '-' || c == '/') {
+                sb.append(c);
+                newWord = true;
+            } else if (newWord) {
+                sb.append(Character.toUpperCase(c));
+                newWord = false;
+            } else {
+                sb.append(Character.toLowerCase(c));
+            }
+        }
+        return sb.toString();
+    }
+
+    /** "7_BASICO" -> "7° Básico". */
+    private String prettyGrade(String grade) {
+        if (grade == null || grade.isBlank()) return "";
+        String normalized = grade.replace('_', ' ').toLowerCase();
+        // Capitaliza palabras y agrega "°" al primer número si lo hay.
+        String titled = toTitleCase(normalized);
+        return titled.replaceFirst("^(\\d+)\\s", "$1° ");
+    }
+
+    private String prettyInterviewType(String type) {
+        if (type == null) return "";
+        return switch (type.toUpperCase()) {
+            case "FAMILY"          -> "Entrevista familiar";
+            case "CYCLE_DIRECTOR"  -> "Director de ciclo";
+            case "PSYCHOLOGIST"    -> "Psicólogo/a";
+            case "ACADEMIC"        -> "Académica";
+            case "DIRECTOR"        -> "Dirección";
+            default                -> toTitleCase(type.replace('_', ' '));
+        };
+    }
+
+    private String prettyMode(String mode) {
+        if (mode == null) return "";
+        return switch (mode.toUpperCase()) {
+            case "IN_PERSON" -> "Presencial";
+            case "ONLINE"    -> "Online";
+            case "HYBRID"    -> "Híbrida";
+            default          -> toTitleCase(mode.replace('_', ' '));
+        };
     }
 }

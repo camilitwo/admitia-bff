@@ -253,7 +253,8 @@ public class ApplicationService {
                     ? saved.getApplicantUser().getEmail()
                     : null;
             if (to != null && !to.isBlank()) {
-                emailComposerService.send(cl.mtn.admitiabff.service.notification.EmailComposerService.EmailRequest.builder()
+                //FIXME corregir
+                /*emailComposerService.send(cl.mtn.admitiabff.service.notification.EmailComposerService.EmailRequest.builder()
                         .template(cl.mtn.admitiabff.domain.notification.EmailTemplate.STATUS_UPDATE)
                         .to(to)
                         .recipientType("APPLICATION")
@@ -263,7 +264,7 @@ public class ApplicationService {
                                 "notes", noteOrEmpty == null ? "" : noteOrEmpty,
                                 "applicationId", id
                         ))
-                        .build());
+                        .build());*/
             } else {
                 log.warn("[final-decision] sin email destinatario para applicationId={}", id);
             }
