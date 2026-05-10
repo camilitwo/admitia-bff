@@ -12,7 +12,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
-import org.thymeleaf.spring5.SpringTemplateEngine;
+import org.thymeleaf.context.Context;
+import org.thymeleaf.spring6.SpringTemplateEngine;
 
 /**
  * Orquestador central para envío de emails con plantilla.
@@ -42,7 +43,8 @@ public class EmailComposerService {
     private final SpringTemplateEngine templateEngine;
 
     public EmailComposerService(EmailTemplateRegistry registry,
-                                @Lazy NotificationService notificationService, SpringTemplateEngine templateEngine) {
+                                @Lazy NotificationService notificationService,
+                                SpringTemplateEngine templateEngine) {
         this.registry = registry;
         this.notificationService = notificationService;
         this.templateEngine = templateEngine;
@@ -91,12 +93,23 @@ public class EmailComposerService {
         }
 
         //EmailTemplateRenderer renderer = registry.resolve(request.template);
-        String htmlContent = templateEngine.process(
-                "templateCorreo", null);
         Map<String, Object> data = request.data == null ? Map.of() : request.data;
 
-        String html = htmlContent;
-        String subject = "firstNonBlank(request.subject, renderer.subject(data), request.template.getDefaultSubject());";
+        Context ctx = new Context();
+        ctx.setVariables(data);
+        String html = templateEngine.process("templateCorreo", ctx);
+
+        EmailTemplate templateEnum = null;
+        try {
+            templateEnum = EmailTemplate.from(request.template);
+        } catch (Exception ignored) {
+            // template no mapeable a enum, usaremos fallback de subject
+        }
+
+        String subject = firstNonBlank(
+                request.subject,
+                templateEnum != null ? templateEnum.getDefaultSubject() : null,
+                "Notificación MTN");
 
         log.debug("Email compose template={} to={} subject={}", request.template, request.to, subject);
 
