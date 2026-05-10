@@ -10,7 +10,11 @@ import cl.mtn.admitiabff.domain.user.UserEntity;
 import cl.mtn.admitiabff.repository.ActiveSessionRepository;
 import cl.mtn.admitiabff.repository.EmailVerificationCodeRepository;
 import cl.mtn.admitiabff.repository.UserRepository;
+import cl.mtn.admitiabff.service.notification.EmailComposerService;
+import cl.mtn.admitiabff.domain.email.EmailRequestDTO;
+import cl.mtn.admitiabff.domain.notification.EmailTemplate;
 import cl.mtn.admitiabff.util.JsonSupport;
+import cl.mtn.admitiabff.util.TemplateUtils;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.time.LocalDateTime;
@@ -47,8 +51,9 @@ public class AuthService {
     private final RsaKeyService rsaKeyService;
     private final PasswordEncoder passwordEncoder;
     private final JsonSupport jsonSupport;
+    private final EmailComposerService emailComposerService;
 
-    public AuthService(UserRepository userRepository, ActiveSessionRepository activeSessionRepository, EmailVerificationCodeRepository verificationCodeRepository, JwtService jwtService, TokenService tokenService, RsaKeyService rsaKeyService, PasswordEncoder passwordEncoder, JsonSupport jsonSupport) {
+    public AuthService(UserRepository userRepository, ActiveSessionRepository activeSessionRepository, EmailVerificationCodeRepository verificationCodeRepository, JwtService jwtService, TokenService tokenService, RsaKeyService rsaKeyService, PasswordEncoder passwordEncoder, JsonSupport jsonSupport, EmailComposerService emailComposerService) {
         this.userRepository = userRepository;
         this.activeSessionRepository = activeSessionRepository;
         this.verificationCodeRepository = verificationCodeRepository;
@@ -57,6 +62,7 @@ public class AuthService {
         this.rsaKeyService = rsaKeyService;
         this.passwordEncoder = passwordEncoder;
         this.jsonSupport = jsonSupport;
+        this.emailComposerService = emailComposerService;
     }
 
     public Map<String, Object> csrfToken() {
@@ -235,10 +241,10 @@ public class AuthService {
         if (userRepository.findByFirebaseUid(firebaseUid).isPresent()) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Esta identidad de Firebase ya está enlazada a otro usuario");
         }
-        if (!decoded.isEmailVerified()) {
-            throw new ResponseStatusException(HttpStatus.FORBIDDEN,
-                "Debe verificar su email antes de completar el registro");
-        }
+        // NOTA: NO exigimos `decoded.isEmailVerified()` aquí. El usuario acaba de crear su
+        // cuenta en Firebase y aún no ha verificado el email; bloquear el registro aquí causa
+        // un 403 que rompe el flujo. La verificación del correo se envía AHORA mismo (después
+        // de crear la cuenta) desde nuestra casilla vía `sendFirebaseVerificationLink`.
 
         UserEntity user = new UserEntity();
         user.setFirebaseUid(firebaseUid);
@@ -249,12 +255,94 @@ public class AuthService {
         user.setPhone(stringValue(payload.get("phone")));
         user.setRole(Role.APODERADO);
         user.setActive(true);
-        user.setEmailVerified(true);
+        // emailVerified refleja el estado real reportado por Firebase. Inicialmente es false
+        // hasta que el apoderado haga clic en el enlace que enviamos a continuación.
+        user.setEmailVerified(decoded.isEmailVerified());
         user.setPasswordHash("FIREBASE_MANAGED");
         user.setPreferencesJson(jsonSupport.write(Map.of()));
         UserEntity saved = userRepository.save(user);
         log.info("[Auth/Firebase] Registered new user id={} email={} firebase_uid={}", saved.getId(), email, firebaseUid);
         return issueAuthResponse(saved, null, null, true);
+    }
+
+    /**
+     * Envía el correo de verificación de email **desde nuestra casilla** (Resend),
+     * NO desde el dominio por defecto de Firebase. Genera el link de verificación
+     * con la API admin de Firebase ({@code generateEmailVerificationLink}) y lo
+     * incrusta en una plantilla con la imagen institucional de MTN.
+     *
+     * <p>Se invoca DESPUÉS de {@code firebaseRegister} para no bloquear la creación
+     * de la cuenta cuando el usuario aún no tiene su email verificado.
+     *
+     * <p>Acepta:
+     * <ul>
+     *   <li>{@code idToken} (preferido): se valida y se usa el email del token.</li>
+     *   <li>{@code email} + {@code firstName}/{@code lastName} (fallback): cuando el
+     *       front aún no tiene el idToken refrescado.</li>
+     * </ul>
+     */
+    public Map<String, Object> sendFirebaseVerificationLink(Map<String, Object> payload) {
+        String idToken = stringValue(payload.get("idToken"));
+        String email = stringValue(payload.get("email")).trim().toLowerCase();
+        String firstName = stringValue(payload.get("firstName"));
+        String lastName = stringValue(payload.get("lastName"));
+
+        if (!idToken.isBlank()) {
+            try {
+                com.google.firebase.auth.FirebaseToken decoded =
+                    com.google.firebase.auth.FirebaseAuth.getInstance().verifyIdToken(idToken);
+                if (decoded.getEmail() != null && !decoded.getEmail().isBlank()) {
+                    email = decoded.getEmail().trim().toLowerCase();
+                }
+                if (firstName.isBlank() && decoded.getName() != null) {
+                    firstName = decoded.getName();
+                }
+            } catch (Exception ex) {
+                log.warn("[Auth/Firebase] verify idToken falló al enviar verificación: {}", ex.getMessage());
+            }
+        }
+
+        if (email.isBlank()) {
+            throw new IllegalArgumentException("Email requerido para enviar verificación");
+        }
+
+        // Si ya existe en local y está verificado, no enviamos nada (idempotente).
+        UserEntity local = userRepository.findByEmailIgnoreCase(email).orElse(null);
+        if (local != null && local.isEmailVerified()) {
+            return Map.of("success", true, "alreadyVerified", true, "email", email);
+        }
+
+        String verificationLink;
+        try {
+            // Sin ActionCodeSettings → Firebase usa la URL de "continue" del proyecto.
+            verificationLink = com.google.firebase.auth.FirebaseAuth.getInstance()
+                .generateEmailVerificationLink(email);
+        } catch (Exception ex) {
+            log.error("[Auth/Firebase] No se pudo generar link de verificación para {}: {}", email, ex.getMessage());
+            throw new ResponseStatusException(HttpStatus.BAD_GATEWAY,
+                "No se pudo generar el link de verificación de email");
+        }
+
+        Map<String, Object> data = new java.util.LinkedHashMap<>();
+        data.put("verificationLink", verificationLink);
+        data.put("recipientName", (firstName + " " + lastName).trim());
+
+        try {
+            emailComposerService.send(EmailRequestDTO.builder()
+                .template(TemplateUtils.generateTemplate(EmailTemplate.EMAIL_VERIFICATION_LINK.name(), data))
+                .to(email)
+                .subject(EmailTemplate.EMAIL_VERIFICATION_LINK.getDefaultSubject())
+                .recipientType("USER")
+                .data(data)
+                .build());
+            log.info("[Auth/Firebase] Verification email (institutional) sent to {}", email);
+        } catch (Exception ex) {
+            log.error("[Auth/Firebase] Error enviando verificación a {}: {}", email, ex.getMessage(), ex);
+            throw new ResponseStatusException(HttpStatus.BAD_GATEWAY,
+                "No se pudo enviar el correo de verificación");
+        }
+
+        return Map.of("success", true, "email", email, "sent", true);
     }
 
     /**

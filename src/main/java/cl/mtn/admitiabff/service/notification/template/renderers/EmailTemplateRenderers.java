@@ -47,6 +47,26 @@ public final class EmailTemplateRenderers {
     }
 
     @Component
+    public static class EmailVerificationLinkRenderer implements EmailTemplateRenderer {
+        @Override public EmailTemplate template() { return EmailTemplate.EMAIL_VERIFICATION_LINK; }
+        @Override public String render(Map<String, Object> data) {
+            String name = EmailLayout.str(data, "recipientName", "");
+            String link = EmailLayout.str(data, "verificationLink", "#");
+            String greeting = name.isBlank() ? "¡Hola!" : "¡Hola " + name + "!";
+            String body = EmailLayout.heading("Verifica tu correo electrónico")
+                    + EmailLayout.paragraph(greeting)
+                    + EmailLayout.paragraph("Gracias por registrarte en el sistema de admisión MTN. "
+                        + "Para completar la activación de tu cuenta, confirma tu correo electrónico haciendo clic en el siguiente botón:")
+                    + "<p style=\"text-align:center;margin:24px 0;\"><a href=\"" + EmailLayout.escape(link) + "\" "
+                    + "style=\"background:#0d3b66;color:#fff;padding:12px 24px;border-radius:6px;text-decoration:none;font-weight:bold;\">Verificar mi correo</a></p>"
+                    + EmailLayout.paragraph("Si el botón no funciona, copia y pega esta URL en tu navegador:")
+                    + EmailLayout.paragraph("<span style=\"word-break:break-all;color:#0d3b66;\">" + EmailLayout.escape(link) + "</span>")
+                    + EmailLayout.paragraph("Si no creaste esta cuenta, puedes ignorar este mensaje.");
+            return EmailLayout.wrap(template().getDefaultSubject(), body);
+        }
+    }
+
+    @Component
     public static class PasswordResetRenderer implements EmailTemplateRenderer {
         @Override public EmailTemplate template() { return EmailTemplate.PASSWORD_RESET; }
         @Override public String render(Map<String, Object> data) {

@@ -66,6 +66,16 @@ public class AuthController {
     }
 
     /**
+     * Envía el correo de verificación de email DESDE NUESTRA CASILLA (no desde el dominio
+     * por defecto de Firebase). Se llama después de {@code /firebase-register} para no
+     * bloquear la creación de la cuenta cuando el email aún no está verificado.
+     */
+    @PostMapping("/firebase/send-verification-email")
+    public Map<String, Object> sendFirebaseVerificationEmail(@RequestBody(required = false) Map<String, Object> payload) {
+        return authService.sendFirebaseVerificationLink(payload == null ? Map.of() : payload);
+    }
+
+    /**
      * Enlaza la cuenta del usuario autenticado con su identidad de Firebase.
      */
     @PostMapping("/firebase/link")

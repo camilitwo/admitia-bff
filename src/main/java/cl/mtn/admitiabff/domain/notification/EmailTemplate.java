@@ -22,6 +22,7 @@ public enum EmailTemplate {
     // ---------- Auth ----------
     WELCOME("¡Bienvenido a MTN!", Category.AUTH),
     EMAIL_VERIFICATION("Código de verificación", Category.AUTH),
+    EMAIL_VERIFICATION_LINK("Verifica tu correo electrónico - MTN", Category.AUTH),
     PASSWORD_RESET("Recupera tu contraseña", Category.AUTH),
     PASSWORD_CHANGED("Tu contraseña fue actualizada", Category.AUTH),
     USER_INVITATION("Invitación a la plataforma MTN", Category.AUTH),
