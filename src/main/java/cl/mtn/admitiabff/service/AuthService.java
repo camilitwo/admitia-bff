@@ -15,14 +15,18 @@ import cl.mtn.admitiabff.domain.email.EmailRequestDTO;
 import cl.mtn.admitiabff.domain.notification.EmailTemplate;
 import cl.mtn.admitiabff.util.JsonSupport;
 import cl.mtn.admitiabff.util.TemplateUtils;
+import java.net.URI;
+import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.time.LocalDateTime;
 import java.util.HexFormat;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
@@ -52,6 +56,22 @@ public class AuthService {
     private final PasswordEncoder passwordEncoder;
     private final JsonSupport jsonSupport;
     private final EmailComposerService emailComposerService;
+
+    /**
+     * URL pública base del BFF (sin slash final), p.ej. {@code https://api.admitia.dedyn.io}.
+     * Se usa para reescribir el link de verificación de Firebase y camuflar el host
+     * {@code firebaseapp.com} detrás de nuestro dominio.
+     */
+    @Value("${app.firebase.verification.public-base-url:}")
+    private String firebaseVerificationPublicBaseUrl;
+
+    /**
+     * URL del front a la que se redirige al usuario DESPUÉS de que Firebase confirme la
+     * verificación (si Firebase lo respeta vía continueUrl). Por defecto la home del portal
+     * de apoderados.
+     */
+    @Value("${app.firebase.verification.continue-url:}")
+    private String firebaseVerificationContinueUrl;
 
     public AuthService(UserRepository userRepository, ActiveSessionRepository activeSessionRepository, EmailVerificationCodeRepository verificationCodeRepository, JwtService jwtService, TokenService tokenService, RsaKeyService rsaKeyService, PasswordEncoder passwordEncoder, JsonSupport jsonSupport, EmailComposerService emailComposerService) {
         this.userRepository = userRepository;
@@ -314,17 +334,32 @@ public class AuthService {
 
         String verificationLink;
         try {
-            // Sin ActionCodeSettings → Firebase usa la URL de "continue" del proyecto.
-            verificationLink = com.google.firebase.auth.FirebaseAuth.getInstance()
-                .generateEmailVerificationLink(email);
+            // Generamos el link con ActionCodeSettings cuando hay continueUrl configurada,
+            // así Firebase respeta el "continue" hacia nuestro front después de verificar.
+            if (firebaseVerificationContinueUrl != null && !firebaseVerificationContinueUrl.isBlank()) {
+                com.google.firebase.auth.ActionCodeSettings settings =
+                    com.google.firebase.auth.ActionCodeSettings.builder()
+                        .setUrl(firebaseVerificationContinueUrl)
+                        .setHandleCodeInApp(false)
+                        .build();
+                verificationLink = com.google.firebase.auth.FirebaseAuth.getInstance()
+                    .generateEmailVerificationLink(email, settings);
+            } else {
+                verificationLink = com.google.firebase.auth.FirebaseAuth.getInstance()
+                    .generateEmailVerificationLink(email);
+            }
         } catch (Exception ex) {
             log.error("[Auth/Firebase] No se pudo generar link de verificación para {}: {}", email, ex.getMessage());
             throw new ResponseStatusException(HttpStatus.BAD_GATEWAY,
                 "No se pudo generar el link de verificación de email");
         }
 
-        Map<String, Object> data = new java.util.LinkedHashMap<>();
-        data.put("verificationLink", verificationLink);
+        // Camuflamos el link: en lugar de exponer firebaseapp.com directamente en el correo,
+        // generamos una URL hacia nuestro propio BFF que redirige al endpoint real de Firebase.
+        String maskedLink = maskFirebaseVerificationLink(verificationLink);
+
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("verificationLink", maskedLink);
         data.put("recipientName", (firstName + " " + lastName).trim());
 
         try {
@@ -343,6 +378,83 @@ public class AuthService {
         }
 
         return Map.of("success", true, "email", email, "sent", true);
+    }
+
+    /**
+     * Reescribe el link de verificación de Firebase para que el correo muestre nuestro
+     * dominio en lugar de {@code <project>.firebaseapp.com}. El link real se preserva
+     * íntegro como query string y se desempaqueta en {@link #resolveFirebaseVerificationTarget(Map)}
+     * cuando el usuario hace clic.
+     */
+    private String maskFirebaseVerificationLink(String firebaseLink) {
+        if (firebaseLink == null || firebaseLink.isBlank()) return firebaseLink;
+        if (firebaseVerificationPublicBaseUrl == null || firebaseVerificationPublicBaseUrl.isBlank()) {
+            // Sin base configurada, no podemos camuflar. Devolvemos el link original
+            // para no romper la verificación. (En prod SIEMPRE debería estar configurada.)
+            log.warn("[Auth/Firebase] app.firebase.verification.public-base-url no está configurada; "
+                + "el correo expondrá el dominio firebaseapp.com.");
+            return firebaseLink;
+        }
+        try {
+            URI uri = URI.create(firebaseLink);
+            String query = uri.getRawQuery() == null ? "" : uri.getRawQuery();
+            String base = firebaseVerificationPublicBaseUrl.replaceAll("/+$", "");
+            return base + "/api/auth/firebase/verify-redirect?" + query;
+        } catch (Exception ex) {
+            log.warn("[Auth/Firebase] No se pudo enmascarar el link de verificación: {}", ex.getMessage());
+            return firebaseLink;
+        }
+    }
+
+    /**
+     * Reconstruye la URL real de Firebase a partir de los parámetros recibidos en
+     * {@code GET /api/auth/firebase/verify-redirect}. Devuelve la URL final a la que
+     * el controller emitirá una redirección 302.
+     *
+     * <p>Acepta los parámetros estándar de Firebase Auth ActionCode:
+     * {@code mode}, {@code oobCode}, {@code apiKey}, {@code lang}, {@code continueUrl}.
+     */
+    public String resolveFirebaseVerificationTarget(Map<String, String> params) {
+        if (params == null || params.isEmpty()) {
+            throw new IllegalArgumentException("Parámetros de verificación faltantes");
+        }
+        String mode = params.getOrDefault("mode", "verifyEmail");
+        String oobCode = params.get("oobCode");
+        String apiKey = params.get("apiKey");
+        String lang = params.getOrDefault("lang", "es");
+        if (oobCode == null || oobCode.isBlank() || apiKey == null || apiKey.isBlank()) {
+            throw new IllegalArgumentException("oobCode y apiKey son requeridos");
+        }
+
+        String authDomain = resolveFirebaseAuthDomain(apiKey);
+        StringBuilder sb = new StringBuilder("https://").append(authDomain)
+            .append("/__/auth/action")
+            .append("?mode=").append(URLEncoder.encode(mode, StandardCharsets.UTF_8))
+            .append("&oobCode=").append(URLEncoder.encode(oobCode, StandardCharsets.UTF_8))
+            .append("&apiKey=").append(URLEncoder.encode(apiKey, StandardCharsets.UTF_8))
+            .append("&lang=").append(URLEncoder.encode(lang, StandardCharsets.UTF_8));
+        String continueUrl = params.get("continueUrl");
+        if (continueUrl != null && !continueUrl.isBlank()) {
+            sb.append("&continueUrl=").append(URLEncoder.encode(continueUrl, StandardCharsets.UTF_8));
+        }
+        return sb.toString();
+    }
+
+    /**
+     * Devuelve el {@code authDomain} del proyecto Firebase. Por defecto usa el del
+     * service-account configurado ({@code <project-id>.firebaseapp.com}); se puede
+     * sobreescribir en propiedades.
+     */
+    private String resolveFirebaseAuthDomain(String apiKey) {
+        try {
+            String projectId = com.google.firebase.FirebaseApp.getInstance()
+                .getOptions().getProjectId();
+            if (projectId != null && !projectId.isBlank()) {
+                return projectId + ".firebaseapp.com";
+            }
+        } catch (Exception ignored) { /* fallback */ }
+        // Último recurso: dominio fijo conocido del proyecto.
+        return "admitia-55514.firebaseapp.com";
     }
 
     /**

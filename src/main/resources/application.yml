@@ -46,6 +46,17 @@ app:
     allowed-providers: ${APP_FIREBASE_ALLOWED_PROVIDERS}
     max-auth-age-seconds: ${APP_FIREBASE_MAX_AUTH_AGE_SECONDS}
     check-revoked: ${APP_FIREBASE_CHECK_REVOKED}
+    verification:
+      # URL pública del BFF que se usa para reescribir el link de verificación de email
+      # y camuflar el dominio firebaseapp.com en el correo institucional.
+      # Sólo se cambia el host visible: el oobCode dinámico generado por Firebase viaja
+      # intacto y la verificación se sigue marcando en Firebase Auth (emailVerified=true).
+      # Ej: https://api.admitia.cl  (sin slash final)
+      public-base-url: ${APP_FIREBASE_VERIFICATION_PUBLIC_BASE_URL:https://admitia-nginx-staging.up.railway.app}
+      # URL del front a la que Firebase redirige tras verificar (ActionCodeSettings.continueUrl).
+      # Opcional. Si no se configura, Firebase muestra su pantalla por defecto al verificar.
+      # Ej: https://admitia.cl/apoderado/email-verificado
+      continue-url: ${APP_FIREBASE_VERIFICATION_CONTINUE_URL:}
   cookies:
     secure: ${APP_COOKIES_SECURE}
     same-site: ${APP_COOKIES_SAME_SITE}

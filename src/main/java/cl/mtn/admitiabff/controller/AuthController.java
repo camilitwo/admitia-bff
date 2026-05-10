@@ -4,16 +4,20 @@ import cl.mtn.admitiabff.service.AuthService;
 import jakarta.servlet.http.Cookie;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import java.net.URI;
 import java.time.Duration;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.ResponseCookie;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
@@ -81,6 +85,30 @@ public class AuthController {
     @PostMapping("/firebase/link")
     public Map<String, Object> linkFirebase(@RequestBody Map<String, Object> payload) {
         return authService.linkFirebase(payload);
+    }
+
+    /**
+     * Endpoint público (sin Bearer) que recibe el clic del correo de verificación.
+     * Recibe los mismos query params que Firebase ({@code mode}, {@code oobCode},
+     * {@code apiKey}, {@code lang}, {@code continueUrl}) y emite una redirección 302
+     * a la URL real de Firebase. Esto permite camuflar {@code firebaseapp.com}
+     * detrás de nuestro dominio en el cuerpo del correo.
+     */
+    @GetMapping("/firebase/verify-redirect")
+    public ResponseEntity<Void> firebaseVerifyRedirect(
+            @RequestParam(value = "mode", required = false) String mode,
+            @RequestParam(value = "oobCode", required = false) String oobCode,
+            @RequestParam(value = "apiKey", required = false) String apiKey,
+            @RequestParam(value = "lang", required = false) String lang,
+            @RequestParam(value = "continueUrl", required = false) String continueUrl) {
+        Map<String, String> params = new LinkedHashMap<>();
+        if (mode != null) params.put("mode", mode);
+        if (oobCode != null) params.put("oobCode", oobCode);
+        if (apiKey != null) params.put("apiKey", apiKey);
+        if (lang != null) params.put("lang", lang);
+        if (continueUrl != null) params.put("continueUrl", continueUrl);
+        String target = authService.resolveFirebaseVerificationTarget(params);
+        return ResponseEntity.status(302).location(URI.create(target)).build();
     }
 
     /**
