@@ -117,7 +117,8 @@ public class ApplicationService {
 
     public Map<String, Object> list(Integer page, Integer size, String status, String gradeApplying, String search) {
         Page<ApplicationEntity> result = applicationRepository.search(parseStatus(status), emptyToNull(gradeApplying), emptyToNull(search), PageRequest.of(page == null ? 0 : page, size == null ? 15 : size));
-        return pageResponse(result.map(this::toSummaryResponse));
+        List<Map<String, Object>> data = result.getContent().stream().map(this::toDataTableResponse).toList();
+        return Map.of("success", true, "count", result.getTotalElements(), "data", data);
     }
 
     public Map<String, Object> recent(int limit) {
@@ -361,6 +362,19 @@ public class ApplicationService {
         return Map.of("success", true, "message", "El monolito no usa caché distribuido para postulaciones");
     }
 
+    public Map<String, Object> listDebug() {
+        long total = applicationRepository.countByDeletedAtIsNull();
+        long active = applicationRepository.findAllActive(PageRequest.of(0, 1)).getTotalElements();
+        long archived = applicationRepository.countByDeletedAtIsNull() - active;
+
+        return Map.of("success", true, "data", Map.of(
+            "totalWithoutDeletedAt", total,
+            "totalActive(notArchived)", active,
+            "totalArchived", archived,
+            "query", "Esto muestra si hay datos que están siendo excluidos por is_archived=true"
+        ));
+    }
+
     public Map<String, Object> systemInfo() {
         java.nio.file.Path path = java.nio.file.Path.of(uploadsDir).toAbsolutePath();
         return Map.of("success", true, "data", Map.of("uploadsDir", path.toString(), "exists", java.nio.file.Files.exists(path), "writable", java.nio.file.Files.isWritable(path)));
@@ -477,6 +491,90 @@ public class ApplicationService {
             "student_paternal_last_name", entity.getStudent().getPaternalLastName(),
             "student_maternal_last_name", entity.getStudent().getMaternalLastName()
         );
+    }
+
+    private Map<String, Object> toDataTableResponse(ApplicationEntity entity) {
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("id", entity.getId());
+        response.put("status", entity.getStatus().name());
+        response.put("submissionDate", entity.getSubmissionDate());
+
+        // Student data - completo
+        Map<String, Object> studentMap = new LinkedHashMap<>();
+        StudentEntity student = entity.getStudent();
+        studentMap.put("id", student.getId());
+        studentMap.put("firstName", student.getFirstName());
+        studentMap.put("lastName", (value(student.getPaternalLastName()) + " " + value(student.getMaternalLastName())).trim());
+        studentMap.put("paternalLastName", value(student.getPaternalLastName()));
+        studentMap.put("maternalLastName", value(student.getMaternalLastName()));
+        studentMap.put("rut", student.getRut());
+        studentMap.put("birthDate", student.getBirthDate());
+        studentMap.put("email", student.getEmail());
+        studentMap.put("address", student.getAddress());
+        studentMap.put("gradeApplied", student.getGradeApplied());
+        studentMap.put("currentSchool", student.getCurrentSchool());
+        studentMap.put("targetSchool", student.getTargetSchool());
+        studentMap.put("additionalNotes", student.getAdditionalNotes());
+        studentMap.put("isEmployeeChild", student.isEmployeeChild());
+        studentMap.put("employeeParentName", student.getEmployeeParentName());
+        studentMap.put("isAlumniChild", student.isAlumniChild());
+        studentMap.put("alumniParentYear", student.getAlumniParentYear());
+        studentMap.put("isInclusionStudent", student.isInclusionStudent());
+        studentMap.put("inclusionType", student.getInclusionType());
+        studentMap.put("inclusionNotes", student.getInclusionNotes());
+        response.put("student", studentMap);
+
+        // Father
+        if (entity.getFather() != null) {
+            Map<String, Object> fatherMap = new LinkedHashMap<>();
+            fatherMap.put("fullName", entity.getFather().getFullName());
+            fatherMap.put("rut", entity.getFather().getRut());
+            fatherMap.put("email", value(entity.getFather().getEmail()));
+            fatherMap.put("phone", value(entity.getFather().getPhone()));
+            fatherMap.put("address", value(entity.getFather().getAddress()));
+            fatherMap.put("profession", value(entity.getFather().getProfession()));
+            response.put("father", fatherMap);
+        }
+
+        // Mother
+        if (entity.getMother() != null) {
+            Map<String, Object> motherMap = new LinkedHashMap<>();
+            motherMap.put("fullName", entity.getMother().getFullName());
+            motherMap.put("rut", entity.getMother().getRut());
+            motherMap.put("email", value(entity.getMother().getEmail()));
+            motherMap.put("phone", value(entity.getMother().getPhone()));
+            motherMap.put("address", value(entity.getMother().getAddress()));
+            motherMap.put("profession", value(entity.getMother().getProfession()));
+            response.put("mother", motherMap);
+        }
+
+        // Guardian
+        if (entity.getGuardian() != null) {
+            Map<String, Object> guardianMap = new LinkedHashMap<>();
+            guardianMap.put("fullName", entity.getGuardian().getFullName());
+            guardianMap.put("email", value(entity.getGuardian().getEmail()));
+            guardianMap.put("phone", value(entity.getGuardian().getPhone()));
+            guardianMap.put("relationship", value(entity.getGuardian().getRelationship()));
+            response.put("guardian", guardianMap);
+        }
+
+        // Documents - lista simplificada
+        List<DocumentEntity> docs = documentRepository.findByApplicationIdOrderByUploadDateDesc(entity.getId());
+        List<Map<String, Object>> documentsArray = docs.stream().map(d -> {
+            Map<String, Object> doc = new LinkedHashMap<>();
+            doc.put("id", d.getId());
+            doc.put("type", d.getDocumentType());
+            doc.put("status", d.getApprovalStatus().name());
+            return doc;
+        }).toList();
+        response.put("documents", documentsArray);
+
+        // Applicant user
+        if (entity.getApplicantUser() != null) {
+            response.put("applicantUser", Map.of("email", entity.getApplicantUser().getEmail()));
+        }
+
+        return response;
     }
 
     private Map<String, Object> toSummaryResponse(ApplicationEntity entity) {
