@@ -30,8 +30,14 @@ public class InterviewerScheduleService {
         this.authService = authService;
     }
 
-    public List<Map<String, Object>> byInterviewer(Long interviewerId) { return scheduleRepository.findByInterviewerIdOrderByYearDescDayOfWeekAscStartTimeAsc(interviewerId).stream().map(this::toResponse).toList(); }
-    public List<Map<String, Object>> byInterviewerAndYear(Long interviewerId, Integer year) { return scheduleRepository.findByInterviewerIdAndYearOrderByDayOfWeekAscStartTimeAsc(interviewerId, year).stream().map(this::toResponse).toList(); }
+    public List<Map<String, Object>> byInterviewer(Long interviewerId) {
+        enforceViewAccess(interviewerId);
+        return scheduleRepository.findByInterviewerIdOrderByYearDescDayOfWeekAscStartTimeAsc(interviewerId).stream().map(this::toResponse).toList();
+    }
+    public List<Map<String, Object>> byInterviewerAndYear(Long interviewerId, Integer year) {
+        enforceViewAccess(interviewerId);
+        return scheduleRepository.findByInterviewerIdAndYearOrderByDayOfWeekAscStartTimeAsc(interviewerId, year).stream().map(this::toResponse).toList();
+    }
 
     public Map<String, Object> available(String date, String time) {
         LocalDate targetDate = LocalDate.parse(date);
@@ -144,6 +150,7 @@ public class InterviewerScheduleService {
     @Transactional
     public Map<String, Object> update(Long id, Map<String, Object> payload) {
         InterviewerScheduleEntity entity = scheduleRepository.findById(id).orElseThrow(() -> new IllegalArgumentException("Horario no encontrado"));
+        enforceOwnership(entity.getInterviewer().getId());
         merge(entity, payload, entity.getInterviewer().getId());
         return Map.of("success", true, "message", "Horario actualizado", "data", toResponse(scheduleRepository.save(entity)));
     }
@@ -151,12 +158,15 @@ public class InterviewerScheduleService {
     @Transactional
     public Map<String, Object> deactivate(Long id) {
         InterviewerScheduleEntity entity = scheduleRepository.findById(id).orElseThrow(() -> new IllegalArgumentException("Horario no encontrado"));
+        enforceOwnership(entity.getInterviewer().getId());
         entity.setActive(false);
         return Map.of("success", true, "message", "Horario desactivado", "data", toResponse(scheduleRepository.save(entity)));
     }
 
     @Transactional
     public Map<String, Object> delete(Long id) {
+        InterviewerScheduleEntity entity = scheduleRepository.findById(id).orElseThrow(() -> new IllegalArgumentException("Horario no encontrado"));
+        enforceOwnership(entity.getInterviewer().getId());
         scheduleRepository.deleteById(id);
         return Map.of("success", true, "message", "Horario eliminado correctamente");
     }
@@ -180,10 +190,21 @@ public class InterviewerScheduleService {
         throw new IllegalArgumentException("Debe indicar interviewerId");
     }
 
+    private void enforceViewAccess(Long interviewerId) {
+        AuthService.AuthContextHolder auth = authService.requireAuth();
+        boolean isOwner = auth.id().equals(interviewerId);
+        boolean isAdmin = Role.ADMIN.name().equals(auth.role());
+        if (!isOwner && !isAdmin) {
+            throw new IllegalArgumentException("No tienes permiso para ver estos horarios");
+        }
+    }
+
     private void enforceOwnership(Long interviewerId) {
         AuthService.AuthContextHolder auth = authService.requireAuth();
-        if (Role.INTERVIEWER.name().equals(auth.role()) && !auth.id().equals(interviewerId)) {
-            throw new IllegalArgumentException("Un entrevistador solo puede gestionar sus propios horarios");
+        boolean isOwner = auth.id().equals(interviewerId);
+        boolean isAdmin = Role.ADMIN.name().equals(auth.role());
+        if (!isOwner && !isAdmin) {
+            throw new IllegalArgumentException("No tienes permiso para gestionar este horario");
         }
     }
 
