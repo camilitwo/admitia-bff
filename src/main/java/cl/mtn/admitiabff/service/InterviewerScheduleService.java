@@ -137,7 +137,7 @@ public class InterviewerScheduleService {
         LocalTime end = LocalTime.parse(String.valueOf(payload.get("endTime")));
         List<Map<String, Object>> processed = new ArrayList<>();
         while (current.isBefore(end)) {
-            LocalTime next = current.plusMinutes(30);
+            LocalTime next = current.plusMinutes(60);
             Map<String, Object> request = new LinkedHashMap<>(payload);
             request.put("startTime", current.toString());
             request.put("endTime", next.toString());
