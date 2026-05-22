@@ -659,6 +659,18 @@ public class AuthService {
     public record AuthContextHolder(Long id, String email, String role) {
     }
 
+    public boolean isAdminContext(AuthContextHolder auth) {
+        return auth != null && auth.role() != null && Role.ADMIN.name().equalsIgnoreCase(auth.role());
+    }
+
+    public boolean hasAnyRoleContext(AuthContextHolder auth, Role... roles) {
+        if (auth == null || auth.role() == null) return false;
+        for (Role role : roles) {
+            if (role.name().equalsIgnoreCase(auth.role())) return true;
+        }
+        return false;
+    }
+
     // ============================================================================================
     // Emisión de respuestas de autenticación + endpoints de logout/refresh
     // ============================================================================================

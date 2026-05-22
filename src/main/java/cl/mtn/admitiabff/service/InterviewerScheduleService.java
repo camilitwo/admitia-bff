@@ -193,7 +193,7 @@ public class InterviewerScheduleService {
     private void enforceViewAccess(Long interviewerId) {
         AuthService.AuthContextHolder auth = authService.requireAuth();
         boolean isOwner = auth.id().equals(interviewerId);
-        boolean isAdmin = Role.ADMIN.name().equals(auth.role());
+        boolean isAdmin = authService.isAdminContext(auth);
         if (!isOwner && !isAdmin) {
             throw new IllegalArgumentException("No tienes permiso para ver estos horarios");
         }
@@ -202,7 +202,7 @@ public class InterviewerScheduleService {
     private void enforceOwnership(Long interviewerId) {
         AuthService.AuthContextHolder auth = authService.requireAuth();
         boolean isOwner = auth.id().equals(interviewerId);
-        boolean isAdmin = Role.ADMIN.name().equals(auth.role());
+        boolean isAdmin = authService.isAdminContext(auth);
         if (!isOwner && !isAdmin) {
             throw new IllegalArgumentException("No tienes permiso para gestionar este horario");
         }
