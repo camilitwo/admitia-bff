@@ -10,10 +10,14 @@ import cl.mtn.admitiabff.repository.InterviewerScheduleRepository;
 import cl.mtn.admitiabff.repository.UserRepository;
 import java.time.LocalDate;
 import java.time.LocalTime;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Locale;
 
 import cl.mtn.admitiabff.util.TemplateUtils;
 import org.springframework.stereotype.Service;
@@ -99,6 +103,100 @@ public class InterviewService {
             }
         }
         return Map.of("success", true, "data", Map.of("availableSlots", slots, "date", date, "interviewerId", interviewerId, "duration", interviewDuration));
+    }
+
+    public Map<String, Object> nextAvailableSlots(String date, Integer days, Integer duration) {
+        LocalDate startDate = date == null || date.isBlank() ? LocalDate.now() : LocalDate.parse(date);
+        int daysToSearch = Math.max(1, Math.min(days == null ? 5 : days, 14));
+        int interviewDuration = Math.max(15, Math.min(duration == null ? 30 : duration, 240));
+        LocalDate endDate = startDate.plusDays(daysToSearch - 1L);
+
+        List<Map<String, Object>> slotsByDate = new ArrayList<>();
+        Map<String, Object> nextAvailable = null;
+
+        for (int offset = 0; offset < daysToSearch; offset++) {
+            LocalDate targetDate = startDate.plusDays(offset);
+            Map<LocalTime, Map<Long, Map<String, Object>>> availabilityByTime = new HashMap<>();
+
+            scheduleRepository.findInterviewersWithSchedules(targetDate.getYear()).forEach(interviewer -> {
+                List<InterviewerScheduleEntity> schedules = scheduleRepository.findAvailableTemplates(
+                    interviewer.getInterviewerId(),
+                    targetDate,
+                    dayName(targetDate),
+                    targetDate.getYear()
+                );
+                List<InterviewEntity> booked = interviewRepository.findBlockingForInterviewer(
+                    interviewer.getInterviewerId(),
+                    targetDate,
+                    List.of(InterviewStatus.CANCELLED, InterviewStatus.RESCHEDULED)
+                );
+
+                for (InterviewerScheduleEntity schedule : schedules) {
+                    LocalTime current = schedule.getStartTime();
+                    while (!current.plusMinutes(interviewDuration).isAfter(schedule.getEndTime())) {
+                        LocalTime slot = current;
+                        LocalTime slotEnd = slot.plusMinutes(interviewDuration);
+                        boolean occupied = booked.stream().anyMatch(interview ->
+                            overlaps(slot, slotEnd, interview.getScheduledTime(), interview.getScheduledTime().plusMinutes(interview.getDuration() == null ? 60 : interview.getDuration()))
+                        );
+                        if (!occupied) {
+                            availabilityByTime
+                                .computeIfAbsent(slot, ignored -> new LinkedHashMap<>())
+                                .putIfAbsent(interviewer.getInterviewerId(), interviewerInfo(interviewer));
+                        }
+                        current = current.plusMinutes(30);
+                    }
+                }
+            });
+
+            List<Map<String, Object>> daySlots = availabilityByTime.entrySet().stream()
+                .filter(entry -> entry.getValue().size() >= 2)
+                .sorted(Map.Entry.comparingByKey())
+                .map(entry -> {
+                    List<Map<String, Object>> availableInterviewers = new ArrayList<>(entry.getValue().values());
+                    Map<String, Object> suggestedPair = pickBestPair(availableInterviewers);
+
+                    Map<String, Object> slot = new LinkedHashMap<>();
+                    slot.put("time", entry.getKey().toString());
+                    slot.put("availableInterviewers", availableInterviewers);
+                    slot.put("interviewerCount", availableInterviewers.size());
+                    slot.put("suggestedPair", suggestedPair);
+                    return slot;
+                })
+                .toList();
+
+            if (nextAvailable == null && !daySlots.isEmpty()) {
+                Map<String, Object> firstSlot = daySlots.get(0);
+                Map<String, Object> next = new LinkedHashMap<>();
+                next.put("date", targetDate.toString());
+                next.put("time", firstSlot.get("time"));
+                next.put("dayOfWeek", targetDate.getDayOfWeek().name());
+                next.put("interviewers", List.of(
+                    ((Map<?, ?>) firstSlot.get("suggestedPair")).get("interviewer1"),
+                    ((Map<?, ?>) firstSlot.get("suggestedPair")).get("interviewer2")
+                ));
+                nextAvailable = next;
+            }
+
+            Map<String, Object> day = new LinkedHashMap<>();
+            day.put("date", targetDate.toString());
+            day.put("dayOfWeek", targetDate.getDayOfWeek().name());
+            day.put("dayLabel", formatDayLabel(targetDate));
+            day.put("slots", daySlots);
+            slotsByDate.add(day);
+        }
+
+        Map<String, Object> searchRange = new LinkedHashMap<>();
+        searchRange.put("from", startDate.toString());
+        searchRange.put("to", endDate.toString());
+        searchRange.put("daysSearched", daysToSearch);
+
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("searchRange", searchRange);
+        data.put("nextAvailable", nextAvailable);
+        data.put("slotsByDate", slotsByDate);
+        data.put("duration", interviewDuration);
+        return Map.of("success", true, "data", data);
     }
 
     public Map<String, Object> get(Long id) { return toResponse(load(id)); }
@@ -271,6 +369,51 @@ public class InterviewService {
 
     private String dayName(LocalDate date) {
         return date.getDayOfWeek().name();
+    }
+
+    private Map<String, Object> interviewerInfo(InterviewerScheduleRepository.InterviewerWithCountView interviewer) {
+        Map<String, Object> item = new LinkedHashMap<>();
+        item.put("id", interviewer.getInterviewerId());
+        item.put("name", (interviewer.getFirstName() + " " + interviewer.getLastName()).trim());
+        item.put("role", String.valueOf(interviewer.getRole()));
+        item.put("subject", interviewer.getSubject());
+        item.put("scheduleCount", interviewer.getScheduleCount());
+        return item;
+    }
+
+    private Map<String, Object> pickBestPair(List<Map<String, Object>> interviewers) {
+        List<Map<String, Object>> sorted = interviewers.stream()
+            .sorted(Comparator
+                .comparingInt((Map<String, Object> item) -> rolePriority(String.valueOf(item.get("role"))))
+                .thenComparing(item -> String.valueOf(item.get("name"))))
+            .toList();
+
+        Map<String, Object> first = sorted.get(0);
+        Map<String, Object> second = sorted.stream()
+            .filter(item -> !String.valueOf(item.get("role")).equals(String.valueOf(first.get("role"))))
+            .findFirst()
+            .orElse(sorted.get(1));
+
+        Map<String, Object> pair = new LinkedHashMap<>();
+        pair.put("interviewer1", first);
+        pair.put("interviewer2", second);
+        return pair;
+    }
+
+    private int rolePriority(String role) {
+        return switch (role) {
+            case "CYCLE_DIRECTOR" -> 0;
+            case "PSYCHOLOGIST" -> 1;
+            case "COORDINATOR" -> 2;
+            case "INTERVIEWER" -> 3;
+            default -> 4;
+        };
+    }
+
+    private String formatDayLabel(LocalDate date) {
+        DateTimeFormatter formatter = DateTimeFormatter.ofPattern("EEEE d 'de' MMMM", Locale.forLanguageTag("es-CL"));
+        String label = date.format(formatter);
+        return label.substring(0, 1).toUpperCase(Locale.forLanguageTag("es-CL")) + label.substring(1);
     }
 
     private Map<String, Object> wrap(List<InterviewEntity> entities) {
