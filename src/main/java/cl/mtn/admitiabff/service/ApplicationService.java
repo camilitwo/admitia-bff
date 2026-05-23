@@ -394,7 +394,16 @@ public class ApplicationService {
         student.setFirstName(firstNonNull(source.get("firstName"), payload.get("firstName"), payload.get("studentFirstName")));
         student.setPaternalLastName(firstNonNull(source.get("paternalLastName"), payload.get("paternalLastName"), payload.get("studentPaternalLastName")));
         student.setMaternalLastName(firstNonNull(source.get("maternalLastName"), payload.get("maternalLastName"), payload.get("studentMaternalLastName")));
-        student.setRut(firstNonNull(source.get("rut"), payload.get("rut"), payload.get("studentRUT"), payload.get("studentRut")));
+        String rut = firstNonNull(source.get("rut"), payload.get("rut"), payload.get("studentRUT"), payload.get("studentRut"));
+        student.setRut(rut);
+
+        if (rut != null) {
+            var existingStudent = studentRepository.findByRut(rut);
+            if (existingStudent.isPresent() && applicationRepository.existsByStudentIdAndDeletedAtIsNull(existingStudent.get().getId())) {
+                throw new IllegalStateException("Ya existe una postulación activa para el RUT " + rut);
+            }
+        }
+
         student.setBirthDate(parseDate(firstNonNullRaw(source.get("birthDate"), payload.get("birthDate"), payload.get("studentDateOfBirth"), payload.get("studentBirthDate"))));
         student.setEmail(firstNonNull(source.get("email"), payload.get("studentEmail")));
         student.setAddress(firstNonNull(source.get("address"), payload.get("studentAddress")));
