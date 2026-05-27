@@ -31,8 +31,8 @@ public class InterviewsController {
 
     @PostMapping("/{id}/send-invitation")
     public Map<String, Object> sendInvitation(@PathVariable Long id, @RequestHeader(value = "X-Base-Url", required = false) String baseUrl) {
-        // Si no viene header, usar el origen de la petición o default
-        String bffBaseUrl = baseUrl != null ? baseUrl : "https://admitia-nginx-staging.up.railway.app";
+        // Usar nginx como pasarela (ignorar header, siempre usar nginx)
+        String bffBaseUrl = "https://admitia-nginx-production.up.railway.app";
         return interviewService.sendInterviewInvitation(id, bffBaseUrl);
     }
 }
