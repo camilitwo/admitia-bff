@@ -31,13 +31,15 @@ public class InterviewService {
     private final ApplicationRepository applicationRepository;
     private final UserRepository userRepository;
     private final cl.mtn.admitiabff.service.notification.EmailComposerService emailComposerService;
+    private final InterviewConfirmationService confirmationService;
 
-    public InterviewService(InterviewRepository interviewRepository, InterviewerScheduleRepository scheduleRepository, ApplicationRepository applicationRepository, UserRepository userRepository, cl.mtn.admitiabff.service.notification.EmailComposerService emailComposerService) {
+    public InterviewService(InterviewRepository interviewRepository, InterviewerScheduleRepository scheduleRepository, ApplicationRepository applicationRepository, UserRepository userRepository, cl.mtn.admitiabff.service.notification.EmailComposerService emailComposerService, InterviewConfirmationService confirmationService) {
         this.interviewRepository = interviewRepository;
         this.scheduleRepository = scheduleRepository;
         this.applicationRepository = applicationRepository;
         this.userRepository = userRepository;
         this.emailComposerService = emailComposerService;
+        this.confirmationService = confirmationService;
     }
 
     public List<Map<String, Object>> publicInterviewers() {
@@ -305,6 +307,51 @@ public class InterviewService {
                 .data(data)
                 .build());
         return Map.of("success", true, "message", "Resumen enviado", "data", Map.of("applicationId", applicationId, "interviews", interviews.stream().map(this::toResponse).toList()));
+    }
+
+    @Transactional
+    public Map<String, Object> sendInterviewInvitation(Long interviewId, String bffBaseUrl) {
+        InterviewEntity interview = load(interviewId);
+        var application = interview.getApplication();
+
+        // Obtener email del apoderado
+        String to = application.getApplicantUser() != null ? application.getApplicantUser().getEmail() : null;
+        if (to == null || to.isBlank()) {
+            throw new IllegalStateException("No se puede enviar la invitación: la postulación no tiene email de destinatario.");
+        }
+
+        // Datos del estudiante
+        String studentName = application.getStudent() != null
+                ? application.getStudent().getFirstName() + " " + application.getStudent().getPaternalLastName()
+                : "Estudiante";
+
+        // Generar URLs de confirmación (patrón pasarela)
+        String confirmUrl = confirmationService.generateConfirmationUrl(bffBaseUrl, interviewId, true);
+        String rejectUrl = confirmationService.generateConfirmationUrl(bffBaseUrl, interviewId, false);
+
+        // Datos para el template
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("applicationId", application.getId());
+        data.put("studentName", toTitleCase(studentName));
+        data.put("parentNames", toFriendlyParentNames(resolveParentNames(interview)));
+        data.put("interviewDate", interview.getScheduledDate().toString());
+        data.put("interviewTime", interview.getScheduledTime().toString());
+        data.put("interviewType", prettyInterviewType(interview.getInterviewType()));
+        data.put("interviewLocation", interview.getLocation());
+        data.put("confirmUrl", confirmUrl);
+        data.put("rejectUrl", rejectUrl);
+
+        // Enviar email con template INTERVIEW_INVITATION
+        emailComposerService.send(EmailRequestDTO.builder()
+                .template(TemplateUtils.generateTemplate("interview_invitation", data))
+                .to(to)
+                .subject("Invitación a entrevista - " + toTitleCase(studentName))
+                .recipientType("APPLICATION")
+                .recipientId(application.getId())
+                .data(data)
+                .build());
+
+        return Map.of("success", true, "message", "Invitación enviada con confirmación", "data", toResponse(interview));
     }
 
     private void merge(InterviewEntity entity, Map<String, Object> payload) {

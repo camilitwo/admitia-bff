@@ -28,4 +28,11 @@ public class InterviewsController {
     @PatchMapping("/{id}/cancel") public Map<String, Object> cancel(@PathVariable Long id, @RequestBody(required = false) Map<String, Object> payload) { return interviewService.cancel(id, payload == null ? Map.of() : payload); }
     @PatchMapping("/{id}/reschedule") public Map<String, Object> reschedule(@PathVariable Long id, @RequestBody Map<String, Object> payload) { return interviewService.reschedule(id, payload); }
     @PostMapping("/application/{applicationId}/send-summary") public Map<String, Object> sendSummary(@PathVariable Long applicationId) { return interviewService.sendSummary(applicationId); }
+
+    @PostMapping("/{id}/send-invitation")
+    public Map<String, Object> sendInvitation(@PathVariable Long id, @RequestHeader(value = "X-Base-Url", required = false) String baseUrl) {
+        // Si no viene header, usar el origen de la petición o default
+        String bffBaseUrl = baseUrl != null ? baseUrl : "https://admitia-nginx-staging.up.railway.app";
+        return interviewService.sendInterviewInvitation(id, bffBaseUrl);
+    }
 }
