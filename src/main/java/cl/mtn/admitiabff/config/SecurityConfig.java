@@ -54,7 +54,7 @@ public class SecurityConfig {
         // Headers explícitos en lugar de "*" — exigido por allowCredentials=true en muchos navegadores.
         configuration.setAllowedHeaders(List.of(
             "Authorization", "Content-Type", "Accept", "X-Requested-With",
-            "X-CSRF-Token", "X-Forwarded-For", "User-Agent"
+            "X-CSRF-Token", "X-Forwarded-For", "User-Agent", "X-Base-Url"
         ));
         configuration.setExposedHeaders(List.of("Authorization", "Set-Cookie"));
         configuration.setAllowCredentials(true);
