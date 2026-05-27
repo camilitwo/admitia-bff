@@ -329,15 +329,19 @@ public class InterviewService {
         String confirmUrl = confirmationService.generateConfirmationUrl(bffBaseUrl, interviewId, true);
         String rejectUrl = confirmationService.generateConfirmationUrl(bffBaseUrl, interviewId, false);
 
-        // Datos para el template
+        // Datos para el template (deben coincidir con INTERVIEW_INVITATION_BODY)
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("applicationId", application.getId());
         data.put("studentName", toTitleCase(studentName));
         data.put("parentNames", toFriendlyParentNames(resolveParentNames(interview)));
-        data.put("interviewDate", interview.getScheduledDate().toString());
-        data.put("interviewTime", interview.getScheduledTime().toString());
+        data.put("scheduledDate", interview.getScheduledDate().toString());
+        data.put("scheduledTime", interview.getScheduledTime().toString());
         data.put("interviewType", prettyInterviewType(interview.getInterviewType()));
-        data.put("interviewLocation", interview.getLocation());
+        data.put("mode", prettyMode(interview.getMode()));
+        data.put("location", interview.getLocation());
+        data.put("interviewerName", interview.getInterviewer() != null
+                ? toTitleCase(interview.getInterviewer().getFirstName() + " " + interview.getInterviewer().getLastName())
+                : "Por confirmar");
         data.put("confirmUrl", confirmUrl);
         data.put("rejectUrl", rejectUrl);
 

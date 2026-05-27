@@ -576,6 +576,20 @@ public final class TemplateUtils {
                   <strong>Lugar:</strong> {{location}}<br/>
                   <strong>A cargo de:</strong> {{interviewerName}}
                 </div>
+                <div style="background:#e8f5e9;padding:20px;border-radius:6px;margin:25px 0;text-align:center;">
+                  <p style="margin:0 0 15px 0;font-weight:bold;color:#2e7d32;">
+                    ¿Puede asistir a la entrevista?
+                  </p>
+                  <div style="display:inline-block;margin:5px;">
+                    <a href="{{confirmUrl}}" style="display:inline-block;padding:12px 30px;background:#4caf50;color:#fff;text-decoration:none;border-radius:5px;font-weight:bold;">✓ Confirmar asistencia</a>
+                  </div>
+                  <div style="display:inline-block;margin:5px;">
+                    <a href="{{rejectUrl}}" style="display:inline-block;padding:12px 30px;background:#f44336;color:#fff;text-decoration:none;border-radius:5px;font-weight:bold;">✗ No puedo asistir</a>
+                  </div>
+                  <p style="margin:10px 0 0 0;font-size:12px;color:#666;">
+                    Haga clic en uno de los botones para confirmar o rechazar la entrevista.
+                  </p>
+                </div>
                 <p style="margin:0 0 14px 0;">
                   Si la fecha u horario presenta inconvenientes, escríbannos
                   a <a href="mailto:admision@mtn.cl" style="color:#273b7a;">admision@mtn.cl</a>
