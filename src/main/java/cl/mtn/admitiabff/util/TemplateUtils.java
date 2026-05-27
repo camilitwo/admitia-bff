@@ -42,6 +42,8 @@ public final class TemplateUtils {
             // Application
             case "application_received"              -> APPLICATION_RECEIVED_BODY;
             case "document_review"                   -> DOCUMENT_REVIEW_BODY;
+            case "document_rejected"                 -> DOCUMENT_REJECTED_BODY;
+            case "document_all_approved"             -> DOCUMENT_ALL_APPROVED_BODY;
             case "document_reminder"                 -> DOCUMENT_REMINDER_BODY;
             case "status_update"                     -> STATUS_UPDATE_BODY;
             case "admission_result"                  -> ADMISSION_RESULT_BODY;
@@ -368,6 +370,100 @@ public final class TemplateUtils {
                   corresponda. De lo contrario, continuaremos con la siguiente
                   etapa del proceso.
                 </p>
+                <p style="margin:24px 0 0 0;">
+                  Un cordial saludo,<br/>
+                  <strong>Equipo de Admisión</strong><br/>
+                  Colegio Monte Tabor y Nazaret
+                </p>
+              </td>
+            </tr>
+            """;
+
+    private static final String DOCUMENT_REJECTED_BODY = """
+            <tr>
+              <td class="content" style="padding:40px 30px;color:#333;line-height:1.7;font-family:'Segoe UI',Arial,sans-serif;font-size:15px;">
+                <h2 style="color:#273b7a;margin:0 0 16px 0;font-size:22px;">Estimados {{parentNames}}</h2>
+                <p style="margin:0 0 14px 0;">
+                  Les informamos que el siguiente documento de la postulación de
+                  <strong>{{studentName}}</strong> requiere ser corregido y subido nuevamente:
+                </p>
+                <div class="info-box" style="background:#fef2f2;padding:15px 20px;border-radius:6px;margin:0 0 18px 0;border-left:4px solid #ef4444;">
+                  <strong>Documento:</strong> {{documentName}}<br/>
+                  <strong>N° de postulación:</strong> {{applicationId}}<br/>
+                  <strong>Motivo del rechazo:</strong> {{rejectionReason}}
+                </div>
+                <p style="margin:0 0 14px 0;">
+                  Por favor, acceda a su <strong>panel de apoderado</strong> para subir el documento corregido a la brevedad.
+                </p>
+                <p style="margin:0 0 18px 0;text-align:center;">
+                  <a href="{{portalUrl}}"
+                     style="display:inline-block;background:#ff9e18;color:#fff;text-decoration:none;padding:12px 28px;border-radius:6px;font-weight:bold;">
+                    Ir al panel de apoderado
+                  </a>
+                </p>
+                <p style="margin:24px 0 0 0;">
+                  Un cordial saludo,<br/>
+                  <strong>Equipo de Admisión</strong><br/>
+                  Colegio Monte Tabor y Nazaret
+                </p>
+              </td>
+            </tr>
+            """;
+
+    private static final String DOCUMENT_ALL_APPROVED_BODY = """
+            <tr>
+              <td class="content" style="padding:40px 30px;color:#333;line-height:1.7;font-family:'Segoe UI',Arial,sans-serif;font-size:15px;">
+                <h2 style="color:#273b7a;margin:0 0 16px 0;font-size:22px;">¡Felicidades {{parentNames}}!</h2>
+                <p style="margin:0 0 14px 0;">
+                  Nos complace informarles que <strong>todos los documentos</strong> de la postulación de
+                  <strong>{{studentName}}</strong> han sido <strong style="color:#10b981;">aprobados</strong>.
+                </p>
+                <div class="info-box" style="background:#ecfdf5;padding:15px 20px;border-radius:6px;margin:0 0 18px 0;border-left:4px solid #10b981;">
+                  <strong>N° de postulación:</strong> {{applicationId}}<br/>
+                  <strong>Documentos aprobados:</strong> {{totalDocuments}}/{{totalDocuments}}<br/>
+                  <strong>Estado:</strong> ✅ Documentación completa
+                </div>
+
+                <h3 style="color:#273b7a;margin:24px 0 12px 0;font-size:17px;">Siguiente paso: Confirmar entrevista</h3>
+                <p style="margin:0 0 14px 0;">
+                  Su entrevista ha sido programada para:
+                </p>
+                <div style="background:#f8f9fa;padding:15px 20px;border-radius:6px;margin:0 0 18px 0;">
+                  <strong>Fecha:</strong> {{interviewDate}}<br/>
+                  <strong>Hora:</strong> {{interviewTime}}<br/>
+                  <strong>Tipo:</strong> {{interviewType}}<br/>
+                  <strong>Lugar:</strong> {{interviewLocation}}
+                </div>
+
+                <p style="margin:0 0 18px 0;">
+                  Por favor, confirme su asistencia haciendo clic en uno de los siguientes botones:
+                </p>
+
+                <!-- BOTONES DE CONFIRMACIÓN - URLs apuntan al BFF (pasarela) -->
+                <table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:20px 0;">
+                  <tr>
+                    <td width="48%" style="padding-right:10px;">
+                      <a href="{{confirmUrl}}"
+                         style="display:block;background:#10b981;color:#fff;text-decoration:none;padding:14px 20px;border-radius:6px;text-align:center;font-weight:bold;">
+                        ✅ Confirmar asistencia
+                      </a>
+                    </td>
+                    <td width="48%" style="padding-left:10px;">
+                      <a href="{{rejectUrl}}"
+                         style="display:block;background:#ef4444;color:#fff;text-decoration:none;padding:14px 20px;border-radius:6px;text-align:center;font-weight:bold;">
+                        ❌ No puedo asistir
+                      </a>
+                    </td>
+                  </tr>
+                </table>
+
+                <p style="margin:14px 0 0 0;font-size:13px;color:#666;">
+                  Si necesita reprogramar, haga clic en "No puedo asistir" y el coordinador le contactará.
+                </p>
+                <p style="margin:10px 0 0 0;font-size:12px;color:#999;">
+                  Los enlaces expiran en 7 días.
+                </p>
+
                 <p style="margin:24px 0 0 0;">
                   Un cordial saludo,<br/>
                   <strong>Equipo de Admisión</strong><br/>

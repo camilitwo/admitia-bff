@@ -30,6 +30,8 @@ public enum EmailTemplate {
     // ---------- Application ----------
     APPLICATION_RECEIVED("Hemos recibido tu postulación", Category.APPLICATION),
     DOCUMENT_REVIEW("Revisión de documentos", Category.APPLICATION),
+    DOCUMENT_REJECTED("Documento rechazado - requiere corrección", Category.APPLICATION),
+    DOCUMENT_ALL_APPROVED("¡Todos tus documentos fueron aprobados!", Category.APPLICATION),
     DOCUMENT_REMINDER("Recordatorio: documentos pendientes", Category.APPLICATION),
     STATUS_UPDATE("Actualización de tu postulación", Category.APPLICATION),
     ADMISSION_RESULT("Resultado de admisión", Category.APPLICATION),

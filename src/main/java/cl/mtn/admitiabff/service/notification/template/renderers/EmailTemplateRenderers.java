@@ -134,6 +134,37 @@ public final class EmailTemplateRenderers {
     }
 
     @Component
+    public static class DocumentRejectedRenderer implements EmailTemplateRenderer {
+        @Override public EmailTemplate template() { return EmailTemplate.DOCUMENT_REJECTED; }
+        @Override public String render(Map<String, Object> data) {
+            String documentName = EmailLayout.str(data, "documentName", "Documento");
+            String rejectionReason = EmailLayout.str(data, "rejectionReason", "");
+            String studentName = EmailLayout.str(data, "studentName", "el postulante");
+            String body = EmailLayout.heading("Documento rechazado")
+                    + EmailLayout.paragraph("El documento <strong>" + EmailLayout.escape(documentName) + "</strong> de la postulación de " + EmailLayout.escape(studentName) + " ha sido rechazado.")
+                    + (rejectionReason.isBlank() ? "" : EmailLayout.callout("<strong>Motivo:</strong> " + EmailLayout.escape(rejectionReason)))
+                    + EmailLayout.paragraph("Por favor, suba nuevamente el documento corregido desde su panel de apoderado.");
+            return EmailLayout.wrap(template().getDefaultSubject(), body);
+        }
+    }
+
+    @Component
+    public static class DocumentAllApprovedRenderer implements EmailTemplateRenderer {
+        @Override public EmailTemplate template() { return EmailTemplate.DOCUMENT_ALL_APPROVED; }
+        @Override public String render(Map<String, Object> data) {
+            String studentName = EmailLayout.str(data, "studentName", "el postulante");
+            String totalDocuments = EmailLayout.str(data, "totalDocuments", "");
+            String interviewDate = EmailLayout.str(data, "interviewDate", "");
+            String interviewTime = EmailLayout.str(data, "interviewTime", "");
+            String body = EmailLayout.heading("¡Todos los documentos aprobados!")
+                    + EmailLayout.paragraph("La postulación de " + EmailLayout.escape(studentName) + " tiene todos los documentos aprobados." + (totalDocuments.isBlank() ? "" : " <strong>Total: " + EmailLayout.escape(totalDocuments) + " documentos</strong>."))
+                    + (interviewDate.isBlank() ? "" : EmailLayout.callout("<strong>Entrevista programada:</strong> " + EmailLayout.escape(interviewDate) + (interviewTime.isBlank() ? "" : " a las " + EmailLayout.escape(interviewTime))))
+                    + EmailLayout.paragraph("Por favor confirme su asistencia usando los botones del correo.");
+            return EmailLayout.wrap(template().getDefaultSubject(), body);
+        }
+    }
+
+    @Component
     public static class DocumentReminderRenderer implements EmailTemplateRenderer {
         @Override public EmailTemplate template() { return EmailTemplate.DOCUMENT_REMINDER; }
         @Override public String render(Map<String, Object> data) {

@@ -86,6 +86,16 @@ public class NotificationsController {
         return institutionalForApplication(EmailTemplate.DOCUMENT_REVIEW, applicationId, payload);
     }
 
+    @PostMapping("/api/institutional-emails/document-rejected/{applicationId}")
+    public Map<String, Object> documentRejected(@PathVariable Long applicationId, @RequestBody(required = false) Map<String, Object> payload) {
+        return institutionalForApplication(EmailTemplate.DOCUMENT_REJECTED, applicationId, payload);
+    }
+
+    @PostMapping("/api/institutional-emails/document-all-approved/{applicationId}")
+    public Map<String, Object> documentAllApproved(@PathVariable Long applicationId, @RequestBody(required = false) Map<String, Object> payload) {
+        return institutionalForApplication(EmailTemplate.DOCUMENT_ALL_APPROVED, applicationId, payload);
+    }
+
     @PostMapping("/api/institutional-emails/application-received/{applicationId}")
     public Map<String, Object> applicationReceived(@PathVariable Long applicationId, @RequestBody(required = false) Map<String, Object> payload) {
         return institutionalForApplication(EmailTemplate.APPLICATION_RECEIVED, applicationId, payload);

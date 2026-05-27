@@ -1,0 +1,214 @@
+package cl.mtn.admitiabff.service;
+
+import cl.mtn.admitiabff.domain.common.InterviewStatus;
+import cl.mtn.admitiabff.domain.interview.InterviewEntity;
+import cl.mtn.admitiabff.repository.InterviewRepository;
+import io.jsonwebtoken.Claims;
+import io.jsonwebtoken.Jwts;
+import io.jsonwebtoken.io.Decoders;
+import io.jsonwebtoken.security.Keys;
+import java.nio.charset.StandardCharsets;
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
+import java.util.Date;
+import javax.crypto.SecretKey;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.util.UriComponentsBuilder;
+import org.springframework.web.util.UriUtils;
+
+/**
+ * Servicio de confirmación de entrevistas mediante patrón pasarela.
+ * <p>
+ * El flujo es:
+ * 1. Se genera un JWT con interviewId y action (CONFIRM/REJECT)
+ * 2. El email contiene URL al BFF: /api/public/interview/confirm?token=JWT
+ * 3. El padre hace clic → llega al BFF
+ * 4. BFF valida JWT, actualiza entrevista
+ * 5. BFF redirige al frontend con el resultado
+ */
+@Service
+public class InterviewConfirmationService {
+
+    private static final Logger log = LoggerFactory.getLogger(InterviewConfirmationService.class);
+
+    private final InterviewRepository interviewRepository;
+    private final SecretKey signingKey;
+    private final String frontendBaseUrl;
+    private final String resultPath;
+    private final long tokenExpiryHours;
+
+    public InterviewConfirmationService(
+            InterviewRepository interviewRepository,
+            @Value("${app.jwt.secret}") String jwtSecret,
+            @Value("${app.frontend.base-url:http://localhost:5173}") String frontendBaseUrl,
+            @Value("${app.confirmation.result-path:/interview/confirmation-result}") String resultPath,
+            @Value("${app.confirmation.token-expiry-hours:168}") long tokenExpiryHours) {
+        this.interviewRepository = interviewRepository;
+        this.signingKey = initSigningKey(jwtSecret);
+        this.frontendBaseUrl = frontendBaseUrl;
+        this.resultPath = resultPath;
+        this.tokenExpiryHours = tokenExpiryHours;
+    }
+
+    private SecretKey initSigningKey(String secret) {
+        byte[] keyBytes;
+        try {
+            keyBytes = Decoders.BASE64.decode(secret);
+        } catch (IllegalArgumentException ex) {
+            keyBytes = secret.getBytes(StandardCharsets.UTF_8);
+        }
+        if (keyBytes.length < 32) {
+            throw new IllegalStateException(
+                "APP_JWT_SECRET inseguro: requiere al menos 32 bytes (256 bits).");
+        }
+        return Keys.hmacShaKeyFor(keyBytes);
+    }
+
+    /**
+     * Genera URL de confirmación completa (para incluir en el email).
+     * La URL apunta al BFF (pasarela), no directamente al frontend.
+     *
+     * @param baseUrl URL base del BFF (ej: https://api.mtn.cl o se obtiene del request)
+     * @param interviewId ID de la entrevista
+     * @param confirm true para confirmar, false para rechazar
+     * @return URL completa del BFF con token JWT
+     */
+    public String generateConfirmationUrl(String baseUrl, Long interviewId, boolean confirm) {
+        String token = generateToken(interviewId, confirm ? "CONFIRM" : "REJECT");
+
+        // Construir URL completa apuntando al BFF
+        return UriComponentsBuilder.fromUriString(baseUrl)
+                .path("/api/public/interview/confirm")
+                .queryParam("token", token)
+                .toUriString();
+    }
+
+    /**
+     * Procesa la confirmación desde el token JWT y retorna la URL de redirección al frontend.
+     *
+     * @param token JWT recibido
+     * @return URL del frontend con el resultado
+     */
+    @Transactional
+    public String processConfirmationAndGetRedirectUrl(String token) {
+        // 1. Validar y decodificar token
+        ConfirmationClaims claims = parseToken(token);
+        Long interviewId = claims.interviewId();
+        String action = claims.action();
+
+        log.info("[process-confirmation] Procesando {} para interviewId={}", action, interviewId);
+
+        // 2. Buscar entrevista
+        InterviewEntity interview = interviewRepository.findById(interviewId)
+                .orElseThrow(() -> new IllegalArgumentException("Entrevista no encontrada: " + interviewId));
+
+        // 3. Validar que no esté ya completada/cancelada
+        if (interview.getStatus() == InterviewStatus.COMPLETED ||
+            interview.getStatus() == InterviewStatus.CANCELLED) {
+            throw new IllegalStateException("La entrevista ya no puede ser modificada");
+        }
+
+        // 4. Procesar según acción
+        String status;
+        String message;
+
+        if ("CONFIRM".equals(action)) {
+            interview.setStatus(InterviewStatus.CONFIRMED);
+            status = "confirmed";
+            message = "Entrevista confirmada exitosamente";
+            log.info("[process-confirmation] Entrevista {} confirmada", interviewId);
+        } else if ("REJECT".equals(action)) {
+            interview.setStatus(InterviewStatus.REJECTED_BY_FAMILY);
+            status = "rejected";
+            message = "Ha indicado que no puede asistir. El coordinador le contactará para reprogramar.";
+            log.info("[process-confirmation] Entrevista {} rechazada por familia", interviewId);
+
+            // TODO: Notificar al coordinador de la reprogramación
+            notifyCoordinatorOfRejection(interview);
+        } else {
+            throw new IllegalArgumentException("Acción no válida: " + action);
+        }
+
+        interviewRepository.save(interview);
+
+        // 5. Construir URL de redirección al frontend
+        return buildResultUrl(status, interviewId, message);
+    }
+
+    /**
+     * Construye URL de error para redirección al frontend.
+     */
+    public String buildErrorUrl(String errorMessage) {
+        return UriComponentsBuilder.fromUriString(frontendBaseUrl)
+                .path(resultPath)
+                .queryParam("status", "error")
+                .queryParam("message", UriUtils.encodeQueryParam(errorMessage, StandardCharsets.UTF_8))
+                .toUriString();
+    }
+
+    /**
+     * Construye URL de resultado exitoso.
+     */
+    private String buildResultUrl(String status, Long interviewId, String message) {
+        return UriComponentsBuilder.fromUriString(frontendBaseUrl)
+                .path(resultPath)
+                .queryParam("status", status)
+                .queryParam("interviewId", interviewId)
+                .queryParam("message", UriUtils.encodeQueryParam(message, StandardCharsets.UTF_8))
+                .toUriString();
+    }
+
+    /**
+     * Genera JWT con interviewId y action.
+     */
+    private String generateToken(Long interviewId, String action) {
+        Instant now = Instant.now();
+        Instant expiry = now.plus(tokenExpiryHours, ChronoUnit.HOURS);
+
+        return Jwts.builder()
+                .subject(String.valueOf(interviewId))
+                .claim("interviewId", interviewId)
+                .claim("action", action)
+                .issuedAt(Date.from(now))
+                .expiration(Date.from(expiry))
+                .signWith(signingKey, Jwts.SIG.HS256)
+                .compact();
+    }
+
+    /**
+     * Parsea y valida el JWT.
+     */
+    private ConfirmationClaims parseToken(String token) {
+        try {
+            Claims claims = Jwts.parser()
+                    .verifyWith(signingKey)
+                    .build()
+                    .parseSignedClaims(token)
+                    .getPayload();
+
+            Long interviewId = claims.get("interviewId", Long.class);
+            String action = claims.get("action", String.class);
+
+            if (interviewId == null || action == null) {
+                throw new IllegalArgumentException("Token inválido: faltan claims");
+            }
+
+            return new ConfirmationClaims(interviewId, action);
+        } catch (Exception e) {
+            log.warn("[parse-token] Error validando token: {}", e.getMessage());
+            throw new IllegalArgumentException("Token inválido o expirado");
+        }
+    }
+
+    private void notifyCoordinatorOfRejection(InterviewEntity interview) {
+        // TODO: Implementar notificación al coordinador
+        // Esto podría ser un email, SMS, o notificación en la plataforma
+        log.info("[notify-coordinator] Entrevista {} rechazada - notificar coordinador", interview.getId());
+    }
+
+    private record ConfirmationClaims(Long interviewId, String action) {}
+}
