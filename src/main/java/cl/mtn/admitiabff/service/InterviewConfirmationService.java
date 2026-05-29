@@ -5,6 +5,7 @@ import cl.mtn.admitiabff.domain.email.EmailRequestDTO;
 import cl.mtn.admitiabff.domain.interview.InterviewEntity;
 import cl.mtn.admitiabff.repository.InterviewRepository;
 import cl.mtn.admitiabff.service.notification.EmailComposerService;
+import cl.mtn.admitiabff.util.TemplateUtils;
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.io.Decoders;
@@ -262,8 +263,12 @@ public class InterviewConfirmationService {
                     ? "Entrevista CONFIRMADA - " + studentName
                     : "Entrevista RECHAZADA - " + studentName;
             
+            // Renderizar el template HTML antes de enviar
+            String templateName = confirmed ? "interview_confirmed" : "interview_rejected_by_family";
+            String bodyHtml = TemplateUtils.generateTemplate(templateName, data);
+            
             emailComposerService.send(EmailRequestDTO.builder()
-                    .template(confirmed ? "interview_confirmed" : "interview_rejected_by_family")
+                    .template(bodyHtml)
                     .to(admissionsEmail)
                     .subject(subject)
                     .recipientType("SYSTEM")
