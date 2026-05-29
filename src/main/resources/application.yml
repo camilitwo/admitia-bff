@@ -89,7 +89,6 @@ app:
   # Email de admisiones para notificaciones de confirmación/rechazo de entrevistas
   admissions:
     email: ${APP_ADMISSIONS_EMAIL:camilo.igv@gmail.com}
-
   payments:
     application-fee-clp: ${APP_PAYMENTS_APPLICATION_FEE_CLP:0}
     process-id: ${APP_PAYMENTS_PROCESS_ID:ADMISION}
