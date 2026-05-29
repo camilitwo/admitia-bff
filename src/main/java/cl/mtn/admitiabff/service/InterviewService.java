@@ -222,6 +222,14 @@ public class InterviewService {
     public Map<String, Object> create(Map<String, Object> payload) {
         InterviewEntity entity = new InterviewEntity();
         merge(entity, payload);
+
+        // Validar que no exista una entrevista activa del mismo tipo para esta postulación
+        Long applicationId = entity.getApplication() != null ? entity.getApplication().getId() : null;
+        String interviewType = entity.getInterviewType();
+        if (applicationId != null && interviewType != null) {
+            ensureNoDuplicateInterview(applicationId, interviewType, null);
+        }
+
         ensureInterviewersAvailable(entity);
         return Map.of("success", true, "message", "Entrevista creada correctamente", "data", toResponse(interviewRepository.save(entity)));
     }
@@ -422,6 +430,27 @@ public class InterviewService {
 
     private boolean overlaps(LocalTime start, LocalTime end, LocalTime bookedStart, LocalTime bookedEnd) {
         return start.isBefore(bookedEnd) && end.isAfter(bookedStart);
+    }
+
+    /**
+     * Valida que no exista una entrevista activa del mismo tipo para la postulación.
+     * Lanza IllegalArgumentException si ya existe una entrevista no cancelada/rechazada del mismo tipo.
+     */
+    private void ensureNoDuplicateInterview(Long applicationId, String interviewType, Long excludeInterviewId) {
+        List<InterviewEntity> existingInterviews = interviewRepository.findByApplicationIdOrderByScheduledDateDesc(applicationId);
+
+        boolean hasDuplicate = existingInterviews.stream()
+            .filter(i -> excludeInterviewId == null || !i.getId().equals(excludeInterviewId))
+            .filter(i -> i.getInterviewType() != null && i.getInterviewType().equals(interviewType))
+            .anyMatch(i -> i.getStatus() != InterviewStatus.CANCELLED
+                        && i.getStatus() != InterviewStatus.REJECTED_BY_FAMILY);
+
+        if (hasDuplicate) {
+            throw new IllegalArgumentException(
+                "Ya existe una entrevista de tipo " + interviewType + " activa para esta postulación. " +
+                "Cancele la entrevista existente antes de agendar una nueva."
+            );
+        }
     }
 
     private String resolveParentNames(InterviewEntity entity) {
