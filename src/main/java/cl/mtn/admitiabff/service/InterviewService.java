@@ -87,15 +87,22 @@ public class InterviewService {
 
     public Map<String, Object> availableSlots(Long interviewerId, String date, Integer duration) {
         LocalDate targetDate = LocalDate.parse(date);
+        LocalDate today = LocalDate.now();
+        LocalTime now = LocalTime.now();
         int interviewDuration = duration == null ? 60 : duration;
         List<InterviewerScheduleEntity> schedules = scheduleRepository.findAvailableTemplates(interviewerId, targetDate, dayName(targetDate), targetDate.getYear());
-        List<InterviewEntity> booked = interviewRepository.findBlockingForInterviewer(interviewerId, targetDate, 
+        List<InterviewEntity> booked = interviewRepository.findBlockingForInterviewer(interviewerId, targetDate,
                 List.of(InterviewStatus.CANCELLED, InterviewStatus.RESCHEDULED, InterviewStatus.CONFIRMED, InterviewStatus.REJECTED_BY_FAMILY));
         List<Map<String, Object>> slots = new ArrayList<>();
         for (InterviewerScheduleEntity schedule : schedules) {
             LocalTime current = schedule.getStartTime();
             while (current.isBefore(schedule.getEndTime())) {
                 LocalTime slot = current;
+                // Skip slots in the past for today's date
+                if (targetDate.equals(today) && slot.isBefore(now)) {
+                    current = current.plusMinutes(30);
+                    continue;
+                }
                 LocalTime slotEnd = slot.plusMinutes(interviewDuration);
                 boolean canFitDuration = !slotEnd.isAfter(schedule.getEndTime());
                 boolean occupied = booked.stream().anyMatch(interview -> overlaps(slot, slotEnd, interview.getScheduledTime(), interview.getScheduledTime().plusMinutes(interview.getDuration() == null ? 60 : interview.getDuration())));
@@ -110,6 +117,8 @@ public class InterviewService {
 
     public Map<String, Object> nextAvailableSlots(String date, Integer days, Integer duration) {
         LocalDate startDate = date == null || date.isBlank() ? LocalDate.now() : LocalDate.parse(date);
+        LocalDate today = LocalDate.now();
+        LocalTime now = LocalTime.now();
         int daysToSearch = Math.max(1, Math.min(days == null ? 5 : days, 14));
         int interviewDuration = Math.max(15, Math.min(duration == null ? 30 : duration, 240));
         LocalDate endDate = startDate.plusDays(daysToSearch - 1L);
@@ -138,6 +147,11 @@ public class InterviewService {
                     LocalTime current = schedule.getStartTime();
                     while (!current.plusMinutes(interviewDuration).isAfter(schedule.getEndTime())) {
                         LocalTime slot = current;
+                        // Skip slots in the past for today's date
+                        if (targetDate.equals(today) && slot.isBefore(now)) {
+                            current = current.plusMinutes(30);
+                            continue;
+                        }
                         LocalTime slotEnd = slot.plusMinutes(interviewDuration);
                         boolean occupied = booked.stream().anyMatch(interview ->
                             overlaps(slot, slotEnd, interview.getScheduledTime(), interview.getScheduledTime().plusMinutes(interview.getDuration() == null ? 60 : interview.getDuration()))
