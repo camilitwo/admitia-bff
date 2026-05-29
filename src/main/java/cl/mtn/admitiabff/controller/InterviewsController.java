@@ -31,8 +31,9 @@ public class InterviewsController {
 
     @PostMapping("/{id}/send-invitation")
     public Map<String, Object> sendInvitation(@PathVariable Long id, @RequestHeader(value = "X-Base-Url", required = false) String baseUrl) {
-        // Usar BFF directo (nginx no está disponible, usar BFF con /api/public/ expuesto)
-        String bffBaseUrl = "https://admitia-bff-production.up.railway.app";
-        return interviewService.sendInterviewInvitation(id, bffBaseUrl);
+        // Usar nginx como URL pública (para que el email tenga el link correcto)
+        // El nginx enruta /api/public/interview/confirm al BFF
+        String publicBaseUrl = baseUrl != null ? baseUrl : "https://admitia-nginx-staging.up.railway.app";
+        return interviewService.sendInterviewInvitation(id, publicBaseUrl);
     }
 }

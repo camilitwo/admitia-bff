@@ -78,6 +78,10 @@ app:
       base-url: ${RESEND_BASE_URL}
   cors:
     allowed-origins: ${APP_CORS_ALLOWED_ORIGINS:http://localhost:5173,http://127.0.0.1:5173}
+  # URL base para redirecciones (debe ser la URL pública del nginx)
+  # El nginx enruta /interview/confirmation-result al frontend
+  frontend:
+    base-url: ${APP_FRONTEND_BASE_URL:https://admitia-nginx-staging.up.railway.app}
   # Configuración de confirmación de entrevistas vía email (patrón pasarela)
   confirmation:
     # Usa APP_FRONTEND_BASE_URL (misma que VITE_API_BASE_URL en frontend)
