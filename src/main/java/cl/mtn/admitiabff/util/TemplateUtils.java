@@ -52,6 +52,8 @@ public final class TemplateUtils {
             case "interview", "interview_invitation" -> INTERVIEW_INVITATION_BODY;
             case "interview_rescheduled"             -> INTERVIEW_RESCHEDULED_BODY;
             case "interview_cancelled"               -> INTERVIEW_CANCELLED_BODY;
+            case "interview_confirmed"               -> INTERVIEW_CONFIRMED_BODY;
+            case "interview_rejected_by_family"      -> INTERVIEW_REJECTED_BY_FAMILY_BODY;
 
             // Evaluation
             case "evaluation_assignment", "evaluation" -> EVALUATION_ASSIGNMENT_BODY;
@@ -653,6 +655,41 @@ public final class TemplateUtils {
                   Un cordial saludo,<br/>
                   <strong>Equipo de Admisión</strong><br/>
                   Colegio Monte Tabor y Nazaret
+                </p>
+              </td>
+            </tr>
+            """;
+
+    private static final String INTERVIEW_CONFIRMED_BODY = """
+            <tr>
+              <td class="content" style="padding:40px 30px;color:#333;line-height:1.7;font-family:'Segoe UI',Arial,sans-serif;font-size:15px;">
+                <h2 style="color:#28a745;margin:0 0 16px 0;font-size:22px;">✓ Entrevista Confirmada por Apoderado</h2>
+                <p style="margin:0 0 14px 0;"><strong>ID Entrevista:</strong> {{interviewId}}</p>
+                <p style="margin:0 0 14px 0;"><strong>Estudiante:</strong> {{studentName}}</p>
+                <p style="margin:0 0 14px 0;"><strong>Email del apoderado:</strong> {{applicantEmail}}</p>
+                <p style="margin:0 0 14px 0;"><strong>Fecha y hora:</strong> {{scheduledDate}} a las {{scheduledTime}}</p>
+                <p style="margin:0 0 14px 0;"><strong>Modalidad:</strong> {{mode}}</p>
+                <p style="margin:0 0 14px 0;"><strong>Ubicación:</strong> {{location}}</p>
+                <p style="margin:24px 0 0 0;font-style:italic;color:#666;">
+                  Esta entrevista ha sido confirmada por la familia a través del portal de apoderados.
+                </p>
+              </td>
+            </tr>
+            """;
+
+    private static final String INTERVIEW_REJECTED_BY_FAMILY_BODY = """
+            <tr>
+              <td class="content" style="padding:40px 30px;color:#333;line-height:1.7;font-family:'Segoe UI',Arial,sans-serif;font-size:15px;">
+                <h2 style="color:#dc3545;margin:0 0 16px 0;font-size:22px;">✗ Entrevista Rechazada por Apoderado</h2>
+                <p style="margin:0 0 14px 0;"><strong>ID Entrevista:</strong> {{interviewId}}</p>
+                <p style="margin:0 0 14px 0;"><strong>Estudiante:</strong> {{studentName}}</p>
+                <p style="margin:0 0 14px 0;"><strong>Email del apoderado:</strong> {{applicantEmail}}</p>
+                <p style="margin:0 0 14px 0;"><strong>Fecha y hora original:</strong> {{scheduledDate}} a las {{scheduledTime}}</p>
+                <p style="margin:0 0 14px 0;"><strong>Modalidad:</strong> {{mode}}</p>
+                <p style="margin:0 0 14px 0;"><strong>Ubicación:</strong> {{location}}</p>
+                <p style="margin:24px 0 0 0;font-style:italic;color:#666;">
+                  La familia ha indicado que no puede asistir en el horario propuesto. 
+                  El slot ha sido liberado automáticamente para otra entrevista.
                 </p>
               </td>
             </tr>

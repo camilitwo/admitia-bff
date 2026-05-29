@@ -85,6 +85,10 @@ app:
     result-path: /interview/confirmation-result
     # Expiración del token en horas (7 días por defecto)
     token-expiry-hours: ${APP_CONFIRMATION_TOKEN_EXPIRY_HOURS:168}
+  
+  # Email de admisiones para notificaciones de confirmación/rechazo de entrevistas
+  admissions:
+    email: ${APP_ADMISSIONS_EMAIL:camilo.igv@gmail.com}
 
   payments:
     application-fee-clp: ${APP_PAYMENTS_APPLICATION_FEE_CLP:0}

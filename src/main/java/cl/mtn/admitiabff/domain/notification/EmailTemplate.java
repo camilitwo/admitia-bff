@@ -41,6 +41,8 @@ public enum EmailTemplate {
     INTERVIEW_RESCHEDULED("Tu entrevista fue reprogramada", Category.INTERVIEW),
     INTERVIEW_CANCELLED("Tu entrevista fue cancelada", Category.INTERVIEW),
     INTERVIEW_SUMMARY("Resumen de entrevistas", Category.INTERVIEW),
+    INTERVIEW_CONFIRMED("Entrevista confirmada por apoderado", Category.INTERVIEW),
+    INTERVIEW_REJECTED_BY_FAMILY("Entrevista rechazada por apoderado", Category.INTERVIEW),
 
     // ---------- Evaluation ----------
     EVALUATION_ASSIGNMENT("Nueva evaluación asignada", Category.EVALUATION),

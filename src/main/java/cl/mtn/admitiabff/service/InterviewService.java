@@ -89,7 +89,8 @@ public class InterviewService {
         LocalDate targetDate = LocalDate.parse(date);
         int interviewDuration = duration == null ? 60 : duration;
         List<InterviewerScheduleEntity> schedules = scheduleRepository.findAvailableTemplates(interviewerId, targetDate, dayName(targetDate), targetDate.getYear());
-        List<InterviewEntity> booked = interviewRepository.findBlockingForInterviewer(interviewerId, targetDate, List.of(InterviewStatus.CANCELLED, InterviewStatus.RESCHEDULED));
+        List<InterviewEntity> booked = interviewRepository.findBlockingForInterviewer(interviewerId, targetDate, 
+                List.of(InterviewStatus.CANCELLED, InterviewStatus.RESCHEDULED, InterviewStatus.CONFIRMED, InterviewStatus.REJECTED_BY_FAMILY));
         List<Map<String, Object>> slots = new ArrayList<>();
         for (InterviewerScheduleEntity schedule : schedules) {
             LocalTime current = schedule.getStartTime();
@@ -130,7 +131,7 @@ public class InterviewService {
                 List<InterviewEntity> booked = interviewRepository.findBlockingForInterviewer(
                     interviewer.getInterviewerId(),
                     targetDate,
-                    List.of(InterviewStatus.CANCELLED, InterviewStatus.RESCHEDULED)
+                    List.of(InterviewStatus.CANCELLED, InterviewStatus.RESCHEDULED, InterviewStatus.CONFIRMED, InterviewStatus.REJECTED_BY_FAMILY)
                 );
 
                 for (InterviewerScheduleEntity schedule : schedules) {
@@ -398,7 +399,7 @@ public class InterviewService {
         if (!coveredBySchedule) {
             throw new IllegalArgumentException("El entrevistador no tiene horario disponible para la fecha y hora seleccionadas");
         }
-        boolean hasConflict = interviewRepository.findBlockingForInterviewer(interviewerId, date, List.of(InterviewStatus.CANCELLED, InterviewStatus.RESCHEDULED)).stream()
+        boolean hasConflict = interviewRepository.findBlockingForInterviewer(interviewerId, date, List.of(InterviewStatus.CANCELLED, InterviewStatus.RESCHEDULED, InterviewStatus.CONFIRMED, InterviewStatus.REJECTED_BY_FAMILY)).stream()
             .anyMatch(interview -> overlaps(time, end, interview.getScheduledTime(), interview.getScheduledTime().plusMinutes(interview.getDuration() == null ? 60 : interview.getDuration())));
         if (hasConflict) {
             throw new IllegalArgumentException("El entrevistador ya tiene una entrevista programada en este horario");

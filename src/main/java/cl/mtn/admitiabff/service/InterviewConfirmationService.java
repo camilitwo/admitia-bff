@@ -1,8 +1,10 @@
 package cl.mtn.admitiabff.service;
 
 import cl.mtn.admitiabff.domain.common.InterviewStatus;
+import cl.mtn.admitiabff.domain.email.EmailRequestDTO;
 import cl.mtn.admitiabff.domain.interview.InterviewEntity;
 import cl.mtn.admitiabff.repository.InterviewRepository;
+import cl.mtn.admitiabff.service.notification.EmailComposerService;
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.io.Decoders;
@@ -11,6 +13,8 @@ import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.Date;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import javax.crypto.SecretKey;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -36,22 +40,28 @@ public class InterviewConfirmationService {
     private static final Logger log = LoggerFactory.getLogger(InterviewConfirmationService.class);
 
     private final InterviewRepository interviewRepository;
+    private final EmailComposerService emailComposerService;
     private final SecretKey signingKey;
     private final String frontendBaseUrl;
     private final String resultPath;
     private final long tokenExpiryHours;
+    private final String admissionsEmail;
 
     public InterviewConfirmationService(
             InterviewRepository interviewRepository,
+            EmailComposerService emailComposerService,
             @Value("${app.jwt.secret}") String jwtSecret,
             @Value("${app.frontend.base-url:http://localhost:5173}") String frontendBaseUrl,
             @Value("${app.confirmation.result-path:/interview/confirmation-result}") String resultPath,
-            @Value("${app.confirmation.token-expiry-hours:168}") long tokenExpiryHours) {
+            @Value("${app.confirmation.token-expiry-hours:168}") long tokenExpiryHours,
+            @Value("${app.admissions.email:camilo.igv@gmail.com}") String admissionsEmail) {
         this.interviewRepository = interviewRepository;
+        this.emailComposerService = emailComposerService;
         this.signingKey = initSigningKey(jwtSecret);
         this.frontendBaseUrl = frontendBaseUrl;
         this.resultPath = resultPath;
         this.tokenExpiryHours = tokenExpiryHours;
+        this.admissionsEmail = admissionsEmail;
     }
 
     private SecretKey initSigningKey(String secret) {
@@ -118,16 +128,21 @@ public class InterviewConfirmationService {
 
         if ("CONFIRM".equals(action)) {
             interview.setStatus(InterviewStatus.CONFIRMED);
+            interview.setConfirmationStatus(InterviewStatus.CONFIRMED);  // Marcamos respuesta del apoderado
             status = "confirmed";
             message = "Entrevista confirmada exitosamente";
             log.info("[process-confirmation] Entrevista {} confirmada", interviewId);
+            
+            // Notificar a admisiones
+            notifyAdmissionsOfConfirmation(interview, true);
         } else if ("REJECT".equals(action)) {
             interview.setStatus(InterviewStatus.REJECTED_BY_FAMILY);
+            interview.setConfirmationStatus(InterviewStatus.REJECTED_BY_FAMILY);  // Marcamos respuesta del apoderado
             status = "rejected";
             message = "Ha indicado que no puede asistir. El coordinador le contactará para reprogramar.";
             log.info("[process-confirmation] Entrevista {} rechazada por familia", interviewId);
 
-            // TODO: Notificar al coordinador de la reprogramación
+            // Notificar a admisiones y liberar slot
             notifyCoordinatorOfRejection(interview);
         } else {
             throw new IllegalArgumentException("Acción no válida: " + action);
@@ -205,9 +220,56 @@ public class InterviewConfirmationService {
     }
 
     private void notifyCoordinatorOfRejection(InterviewEntity interview) {
-        // TODO: Implementar notificación al coordinador
-        // Esto podría ser un email, SMS, o notificación en la plataforma
-        log.info("[notify-coordinator] Entrevista {} rechazada - notificar coordinador", interview.getId());
+        // Notificar a admisiones del rechazo
+        notifyAdmissionsOfConfirmation(interview, false);
+        
+        // Liberar el slot (la entrevista queda marcada como REJECTED_BY_FAMILY
+        // y el slot ya no bloquea el horario porque findBlockingForInterviewer excluye este estado)
+        log.info("[notify-coordinator] Entrevista {} rechazada - slot liberado automáticamente", interview.getId());
+    }
+    
+    /**
+     * Notifica a admisiones (coordinador) sobre la confirmación o rechazo de la entrevista.
+     */
+    private void notifyAdmissionsOfConfirmation(InterviewEntity interview, boolean confirmed) {
+        try {
+            var application = interview.getApplication();
+            String studentName = application.getStudent() != null 
+                    ? application.getStudent().getFirstName() + " " + application.getStudent().getPaternalLastName()
+                    : "Estudiante";
+            String applicantEmail = application.getApplicantUser() != null 
+                    ? application.getApplicantUser().getEmail() 
+                    : "Sin email";
+            
+            Map<String, Object> data = new LinkedHashMap<>();
+            data.put("interviewId", interview.getId());
+            data.put("studentName", studentName);
+            data.put("applicantEmail", applicantEmail);
+            data.put("scheduledDate", interview.getScheduledDate().toString());
+            data.put("scheduledTime", interview.getScheduledTime().toString());
+            data.put("mode", interview.getMode());
+            data.put("location", interview.getLocation());
+            data.put("action", confirmed ? "CONFIRMED" : "REJECTED");
+            data.put("statusText", confirmed ? "Confirmada por la familia" : "Rechazada por la familia");
+            
+            String subject = confirmed 
+                    ? "Entrevista CONFIRMADA - " + studentName
+                    : "Entrevista RECHAZADA - " + studentName;
+            
+            emailComposerService.send(EmailRequestDTO.builder()
+                    .template(confirmed ? "interview_confirmed" : "interview_rejected_by_family")
+                    .to(admissionsEmail)
+                    .subject(subject)
+                    .recipientType("SYSTEM")
+                    .data(data)
+                    .build());
+            
+            log.info("[notify-admissions] Email enviado a {} para entrevista {} - {}", 
+                    admissionsEmail, interview.getId(), confirmed ? "confirmada" : "rechazada");
+        } catch (Exception e) {
+            log.error("[notify-admissions] Error enviando email a admisiones para entrevista {}: {}", 
+                    interview.getId(), e.getMessage(), e);
+        }
     }
 
     private record ConfirmationClaims(Long interviewId, String action) {}

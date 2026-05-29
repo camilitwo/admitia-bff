@@ -63,6 +63,10 @@ public class InterviewEntity extends BaseEntity {
     @Column(nullable = false)
     private InterviewStatus status = InterviewStatus.SCHEDULED;
 
+    @Enumerated(EnumType.STRING)
+    @Column(name = "confirmation_status")
+    private InterviewStatus confirmationStatus;  // Respuesta del apoderado (CONFIRMED, REJECTED_BY_FAMILY)
+
     @Column(columnDefinition = "text")
     private String notes;
 
