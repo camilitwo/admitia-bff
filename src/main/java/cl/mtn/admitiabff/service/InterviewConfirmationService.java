@@ -116,10 +116,16 @@ public class InterviewConfirmationService {
         InterviewEntity interview = interviewRepository.findById(interviewId)
                 .orElseThrow(() -> new IllegalArgumentException("Entrevista no encontrada: " + interviewId));
 
-        // 3. Validar que no esté ya completada/cancelada
+        // 3. Validar que no esté ya procesada (completada, cancelada, confirmada o rechazada)
         if (interview.getStatus() == InterviewStatus.COMPLETED ||
             interview.getStatus() == InterviewStatus.CANCELLED) {
             throw new IllegalStateException("La entrevista ya no puede ser modificada");
+        }
+        if (interview.getStatus() == InterviewStatus.CONFIRMED) {
+            throw new IllegalStateException("La entrevista ya fue confirmada anteriormente");
+        }
+        if (interview.getStatus() == InterviewStatus.REJECTED_BY_FAMILY) {
+            throw new IllegalStateException("La entrevista ya fue rechazada anteriormente");
         }
 
         // 4. Procesar según acción
