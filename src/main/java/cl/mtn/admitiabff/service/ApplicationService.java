@@ -204,6 +204,10 @@ public class ApplicationService {
         ApplicationEntity entity = load(id);
         if (payload.containsKey("status")) entity.setStatus(parseStatus(value(payload.get("status"))));
         if (payload.containsKey("notes")) entity.setNotes(value(payload.get("notes")));
+        if (payload.containsKey("studentTargetSchool")) {
+            StudentEntity student = entity.getStudent();
+            student.setTargetSchool(value(payload.get("studentTargetSchool")));
+        }
         return Map.of("success", true, "message", "Postulación actualizada correctamente", "data", toFullResponse(applicationRepository.save(entity)));
     }
 
