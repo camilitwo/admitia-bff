@@ -204,9 +204,9 @@ public class ApplicationService {
         ApplicationEntity entity = load(id);
         if (payload.containsKey("status")) entity.setStatus(parseStatus(value(payload.get("status"))));
         if (payload.containsKey("notes")) entity.setNotes(value(payload.get("notes")));
-        if (payload.containsKey("studentTargetSchool")) {
+        if (payload.containsKey("studentGender")) {
             StudentEntity student = entity.getStudent();
-            student.setTargetSchool(value(payload.get("studentTargetSchool")));
+            student.setGender(value(payload.get("studentGender")));
         }
         return Map.of("success", true, "message", "Postulación actualizada correctamente", "data", toFullResponse(applicationRepository.save(entity)));
     }
@@ -412,7 +412,7 @@ public class ApplicationService {
         student.setEmail(firstNonNull(source.get("email"), payload.get("studentEmail")));
         student.setAddress(firstNonNull(source.get("address"), payload.get("studentAddress")));
         student.setGradeApplied(firstNonNull(source.get("gradeApplied"), payload.get("grade"), payload.get("gradeApplied"), payload.get("gradeAppliedFor")));
-        student.setTargetSchool(firstNonNull(source.get("targetSchool"), payload.get("schoolApplied"), payload.get("targetSchool"), payload.get("studentAdmissionPreference")));
+        student.setGender(mapTargetSchoolToGender(firstNonNull(source.get("targetSchool"), payload.get("schoolApplied"), payload.get("targetSchool"), payload.get("studentAdmissionPreference"))));
         student.setCurrentSchool(firstNonNull(source.get("currentSchool"), payload.get("currentSchool"), payload.get("studentCurrentSchool")));
         student.setSpecialNeeds(booleanValue(source.getOrDefault("specialNeeds", false)));
         student.setSpecialNeedsDescription(value(source.get("specialNeedsDescription")));
@@ -526,7 +526,7 @@ public class ApplicationService {
         studentMap.put("address", student.getAddress());
         studentMap.put("gradeApplied", student.getGradeApplied());
         studentMap.put("currentSchool", student.getCurrentSchool());
-        studentMap.put("targetSchool", student.getTargetSchool());
+        studentMap.put("gender", student.getGender());
         studentMap.put("additionalNotes", student.getAdditionalNotes());
         studentMap.put("isEmployeeChild", student.isEmployeeChild());
         studentMap.put("employeeParentName", student.getEmployeeParentName());
@@ -622,7 +622,7 @@ public class ApplicationService {
         studentMap.put("currentSchool", entity.getStudent().getCurrentSchool());
         studentMap.put("specialNeeds", entity.getStudent().isSpecialNeeds());
         studentMap.put("specialNeedsDescription", entity.getStudent().getSpecialNeedsDescription());
-        studentMap.put("targetSchool", entity.getStudent().getTargetSchool());
+        studentMap.put("gender", entity.getStudent().getGender());
         response.put("student", studentMap);
         if (entity.getGuardian() != null) {
             Map<String, Object> guardianMap = new LinkedHashMap<>();
@@ -746,6 +746,15 @@ public class ApplicationService {
             return v;
         }
         return null;
+    }
+
+    private String mapTargetSchoolToGender(String targetSchool) {
+        if (targetSchool == null) return null;
+        return switch (targetSchool) {
+            case "MONTE_TABOR" -> "MALE";
+            case "NAZARET" -> "FEMALE";
+            default -> null;
+        };
     }
     private boolean booleanValue(Object value) { return value instanceof Boolean b ? b : Boolean.parseBoolean(String.valueOf(value)); }
     private Integer integerValue(Object value) { return value == null || String.valueOf(value).isBlank() ? null : value instanceof Number n ? n.intValue() : Integer.parseInt(String.valueOf(value)); }
