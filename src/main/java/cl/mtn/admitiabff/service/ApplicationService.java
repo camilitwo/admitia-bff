@@ -747,6 +747,9 @@ public class ApplicationService {
         }
         return null;
     }
+    private boolean booleanValue(Object value) { return value instanceof Boolean b ? b : Boolean.parseBoolean(String.valueOf(value)); }
+    private Integer integerValue(Object value) { return value == null || String.valueOf(value).isBlank() ? null : value instanceof Number n ? n.intValue() : Integer.parseInt(String.valueOf(value)); }
+    private LocalDate parseDate(Object value) { return value == null || String.valueOf(value).isBlank() ? null : value instanceof LocalDate date ? date : LocalDate.parse(String.valueOf(value)); }
 
     private String mapTargetSchoolToGender(String targetSchool) {
         if (targetSchool == null) return null;
@@ -756,9 +759,6 @@ public class ApplicationService {
             default -> null;
         };
     }
-    private boolean booleanValue(Object value) { return value instanceof Boolean b ? b : Boolean.parseBoolean(String.valueOf(value)); }
-    private Integer integerValue(Object value) { return value == null || String.valueOf(value).isBlank() ? null : value instanceof Number n ? n.intValue() : Integer.parseInt(String.valueOf(value)); }
-    private LocalDate parseDate(Object value) { return value == null || String.valueOf(value).isBlank() ? null : value instanceof LocalDate date ? date : LocalDate.parse(String.valueOf(value)); }
 
     private static String safe(String value) { return value == null ? "" : value; }
 
