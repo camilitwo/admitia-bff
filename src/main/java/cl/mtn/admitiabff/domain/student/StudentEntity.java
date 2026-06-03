@@ -44,8 +44,8 @@ public class StudentEntity extends BaseEntity {
     @Column(name = "grade_applied")
     private String gradeApplied;
 
-    @Column(name = "target_school")
-    private String targetSchool;
+    @Column(name = "gender")
+    private String gender;
 
     @Column(name = "current_school")
     private String currentSchool;
