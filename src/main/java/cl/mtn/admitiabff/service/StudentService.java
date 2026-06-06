@@ -29,6 +29,14 @@ public class StudentService {
         return Map.of("success", true, "data", Map.of("rut", rut, "isValid", RutUtils.isValid(rut)));
     }
 
+    public Map<String, Object> rutExists(String rut) {
+        if (rut == null || rut.isBlank()) {
+            return Map.of("exists", false);
+        }
+        boolean exists = studentRepository.existsByNormalizedRut(rut);
+        return Map.of("exists", exists);
+    }
+
     public Map<String, Object> statisticsByGrade() {
         List<Map<String, Object>> data = studentRepository.countByGrade().stream()
             .<Map<String, Object>>map(item -> Map.of("grade", item.getGrade(), "count", item.getTotal()))

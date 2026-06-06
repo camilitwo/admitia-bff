@@ -12,6 +12,7 @@ public class StudentsController {
     public StudentsController(StudentService studentService) { this.studentService = studentService; }
 
     @PostMapping("/validate-rut") public Map<String, Object> validateRut(@RequestBody Map<String, Object> payload) { return studentService.validateRut(payload); }
+    @GetMapping("/rut-exists/{rut}") public Map<String, Object> rutExists(@PathVariable String rut) { return studentService.rutExists(rut); }
     @GetMapping("/statistics/by-grade") public Map<String, Object> statisticsByGrade() { return studentService.statisticsByGrade(); }
     @GetMapping("/search/{term}") public Map<String, Object> search(@PathVariable String term) { return studentService.search(term); }
     @GetMapping("/grade/{grade}") public Map<String, Object> byGrade(@PathVariable String grade) { return studentService.byGrade(grade); }
