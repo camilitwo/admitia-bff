@@ -620,6 +620,7 @@ public class ApplicationService {
         studentMap.put("gradeApplied", entity.getStudent().getGradeApplied());
         studentMap.put("grade", entity.getStudent().getGradeApplied());
         studentMap.put("currentSchool", entity.getStudent().getCurrentSchool());
+        studentMap.put("address", entity.getStudent().getAddress());
         studentMap.put("specialNeeds", entity.getStudent().isSpecialNeeds());
         studentMap.put("specialNeedsDescription", entity.getStudent().getSpecialNeedsDescription());
         studentMap.put("gender", entity.getStudent().getGender());
