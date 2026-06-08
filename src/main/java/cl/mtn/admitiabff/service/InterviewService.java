@@ -650,12 +650,15 @@ public class InterviewService {
                 i.getStatus() == InterviewStatus.REJECTED_BY_FAMILY
             ).count();
 
+            // Calcular slots disponibles para este día
+            List<Map<String, Object>> availableSlots = calculateAvailableSlotsForDay(dayDate, duration);
+
             Map<String, Object> dayData = new LinkedHashMap<>();
             dayData.put("date", dayDate.toString());
             dayData.put("dayOfWeek", dayDate.getDayOfWeek().toString().substring(0, 3).toUpperCase());
             dayData.put("dayLabel", formatDayLabel(dayDate));
             dayData.put("scheduled", scheduled);
-            dayData.put("available", List.of()); // Se llena desde el frontend con slots disponibles
+            dayData.put("available", availableSlots);
             dayData.put("summary", Map.of(
                 "scheduledCount", scheduledCount,
                 "completedCount", completedCount,
@@ -681,6 +684,15 @@ public class InterviewService {
             i.getStatus() == InterviewStatus.REJECTED_BY_FAMILY
         ).count();
 
+        // Contar slots disponibles totales
+        long totalAvailableSlots = days.stream()
+            .flatMap(d -> ((List<Map<String, Object>>) d.get("available")).stream())
+            .count();
+        long singleInterviewerSlots = days.stream()
+            .flatMap(d -> ((List<Map<String, Object>>) d.get("available")).stream())
+            .filter(s -> (int) s.getOrDefault("interviewerCount", 0) == 1)
+            .count();
+
         Map<String, Object> response = new LinkedHashMap<>();
         response.put("success", true);
         response.put("data", Map.of(
@@ -694,14 +706,146 @@ public class InterviewService {
                 "completedCount", totalCompleted,
                 "cancelledCount", totalCancelled,
                 "rejectedCount", totalRejected,
-                "availableSlotsCount", 0,
-                "singleInterviewerSlotsCount", 0
+                "availableSlotsCount", totalAvailableSlots,
+                "singleInterviewerSlotsCount", singleInterviewerSlots
             ),
             "interviewerLoad", List.of(),
             "days", days
         ));
 
         return response;
+    }
+
+    /**
+     * Calcula los slots disponibles para un día específico.
+     * Agrupa entrevistadores disponibles por horario.
+     */
+    private List<Map<String, Object>> calculateAvailableSlotsForDay(LocalDate date, int duration) {
+        LocalDate today = LocalDate.now();
+        LocalTime now = LocalTime.now();
+
+        // Obtener entrevistadores con horarios para este día
+        List<Map<String, Object>> interviewersWithSchedules = scheduleRepository.findInterviewersWithSchedules(date.getYear()).stream()
+            .filter(interviewer -> {
+                List<InterviewerScheduleEntity> schedules = scheduleRepository.findAvailableTemplates(
+                    interviewer.getInterviewerId(), date, dayName(date), date.getYear()
+                );
+                return !schedules.isEmpty();
+            })
+            .map(interviewer -> {
+                List<InterviewerScheduleEntity> schedules = scheduleRepository.findAvailableTemplates(
+                    interviewer.getInterviewerId(), date, dayName(date), date.getYear()
+                );
+                List<InterviewEntity> booked = interviewRepository.findBlockingForInterviewer(
+                    interviewer.getInterviewerId(), date,
+                    List.of(InterviewStatus.CANCELLED, InterviewStatus.RESCHEDULED, InterviewStatus.CONFIRMED, InterviewStatus.REJECTED_BY_FAMILY)
+                );
+
+                // Generar slots para este entrevistador
+                List<LocalTime> availableSlots = new ArrayList<>();
+                for (InterviewerScheduleEntity schedule : schedules) {
+                    LocalTime current = schedule.getStartTime();
+                    while (current.isBefore(schedule.getEndTime())) {
+                        LocalTime slot = current;
+                        // Skip slots en el pasado
+                        if (date.equals(today) && slot.isBefore(now)) {
+                            current = current.plusMinutes(30);
+                            continue;
+                        }
+                        LocalTime slotEnd = slot.plusMinutes(duration);
+                        boolean canFitDuration = !slotEnd.isAfter(schedule.getEndTime());
+                        boolean occupied = booked.stream().anyMatch(interview ->
+                            overlaps(slot, slotEnd, interview.getScheduledTime(),
+                                interview.getScheduledTime().plusMinutes(interview.getDuration() == null ? 60 : interview.getDuration()))
+                        );
+                        if (canFitDuration && !occupied) {
+                            availableSlots.add(slot);
+                        }
+                        current = current.plusMinutes(30);
+                    }
+                }
+
+                return Map.of(
+                    "interviewerId", interviewer.getInterviewerId(),
+                    "name", (interviewer.getFirstName() + " " + interviewer.getLastName()).trim(),
+                    "role", String.valueOf(interviewer.getRole()),
+                    "availableSlots", availableSlots
+                );
+            })
+            .toList();
+
+        // Agrupar slots por horario y recolectar entrevistadores disponibles
+        Map<LocalTime, List<Map<String, Object>>> slotsByTime = new HashMap<>();
+        for (Map<String, Object> interviewerData : interviewersWithSchedules) {
+            @SuppressWarnings("unchecked")
+            List<LocalTime> slots = (List<LocalTime>) interviewerData.get("availableSlots");
+            for (LocalTime slot : slots) {
+                slotsByTime.computeIfAbsent(slot, k -> new ArrayList<>()).add(Map.of(
+                    "id", interviewerData.get("interviewerId"),
+                    "name", interviewerData.get("name"),
+                    "role", interviewerData.get("role")
+                ));
+            }
+        }
+
+        // Construir resultado final ordenado por hora
+        return slotsByTime.entrySet().stream()
+            .sorted(Map.Entry.comparingByKey())
+            .map(entry -> {
+                LocalTime time = entry.getKey();
+                List<Map<String, Object>> availableInterviewers = entry.getValue();
+
+                Map<String, Object> slotData = new LinkedHashMap<>();
+                slotData.put("time", time.toString());
+                slotData.put("availableInterviewers", availableInterviewers);
+                slotData.put("interviewerCount", availableInterviewers.size());
+
+                // Sugerir pareja si hay 2+ entrevistadores
+                if (availableInterviewers.size() >= 2) {
+                    Map<String, Object> pair = pickBestInterviewersPair(availableInterviewers);
+                    if (pair != null) {
+                        slotData.put("suggestedPair", pair);
+                    }
+                }
+
+                return slotData;
+            })
+            .toList();
+    }
+
+    /**
+     * Selecciona la mejor pareja de entrevistadores basada en roles.
+     */
+    private Map<String, Object> pickBestInterviewersPair(List<Map<String, Object>> interviewers) {
+        if (interviewers.size() < 2) return null;
+
+        // Ordenar por prioridad de rol
+        List<Map<String, Object>> sorted = interviewers.stream()
+            .sorted(Comparator.comparingInt((Map<String, Object> i) -> {
+                String role = String.valueOf(i.getOrDefault("role", "UNKNOWN"));
+                return switch (role) {
+                    case "CYCLE_DIRECTOR" -> 0;
+                    case "PSYCHOLOGIST" -> 1;
+                    case "COORDINATOR" -> 2;
+                    case "INTERVIEWER" -> 3;
+                    default -> 4;
+                };
+            }).thenComparing(i -> String.valueOf(i.getOrDefault("name", ""))))
+            .toList();
+
+        Map<String, Object> first = sorted.get(0);
+        Map<String, Object> second = sorted.stream()
+            .filter(i -> !String.valueOf(i.getOrDefault("role", ""))
+                .equals(String.valueOf(first.getOrDefault("role", ""))))
+            .findFirst()
+            .orElse(sorted.size() > 1 ? sorted.get(1) : null);
+
+        if (second == null) return null;
+
+        return Map.of(
+            "interviewer1", first,
+            "interviewer2", second
+        );
     }
 
     private String toTitleCase(String text) {
