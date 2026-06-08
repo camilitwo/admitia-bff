@@ -23,7 +23,6 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.util.UriComponentsBuilder;
-import org.springframework.web.util.UriUtils;
 
 /**
  * Servicio de confirmación de entrevistas mediante patrón pasarela.
@@ -168,7 +167,8 @@ public class InterviewConfirmationService {
         return UriComponentsBuilder.fromUriString(frontendBaseUrl)
                 .path(resultPath)
                 .queryParam("status", "error")
-                .queryParam("message", UriUtils.encodeQueryParam(errorMessage, StandardCharsets.UTF_8))
+                .queryParam("message", errorMessage)
+                .encode(StandardCharsets.UTF_8)
                 .toUriString();
     }
 
@@ -180,7 +180,8 @@ public class InterviewConfirmationService {
                 .path(resultPath)
                 .queryParam("status", status)
                 .queryParam("interviewId", interviewId)
-                .queryParam("message", UriUtils.encodeQueryParam(message, StandardCharsets.UTF_8))
+                .queryParam("message", message)
+                .encode(StandardCharsets.UTF_8)
                 .toUriString();
     }
 
