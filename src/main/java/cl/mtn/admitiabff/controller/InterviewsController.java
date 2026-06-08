@@ -21,6 +21,7 @@ public class InterviewsController {
     @GetMapping("/application/{applicationId}/summary-status") public Map<String, Object> summaryStatus(@PathVariable Long applicationId) { return interviewService.summaryStatus(applicationId); }
     @GetMapping("/interviewer/{interviewerId}") public Map<String, Object> byInterviewer(@PathVariable Long interviewerId) { return interviewService.byInterviewer(interviewerId); }
     @GetMapping("/available-slots") public Map<String, Object> availableSlots(@RequestParam Long interviewerId, @RequestParam String date, @RequestParam(required = false) Integer duration) { return interviewService.availableSlots(interviewerId, date, duration); }
+    @GetMapping("/slot-availability") public Map<String, Object> slotAvailability(@RequestParam String date, @RequestParam String time, @RequestParam(required = false) Integer duration) { return interviewService.slotAvailability(date, time, duration); }
     @GetMapping("/next-available-slots") public Map<String, Object> nextAvailableSlots(@RequestParam(required = false) String date, @RequestParam(required = false) Integer days, @RequestParam(required = false) Integer duration) { return interviewService.nextAvailableSlots(date, days, duration); }
     @GetMapping("/{id}") public Map<String, Object> get(@PathVariable Long id) { return interviewService.get(id); }
     @PostMapping public Map<String, Object> create(@RequestBody Map<String, Object> payload) { return interviewService.create(payload); }

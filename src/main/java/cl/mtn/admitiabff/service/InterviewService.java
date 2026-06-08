@@ -85,6 +85,52 @@ public class InterviewService {
         return Map.of("success", true, "data", data, "count", data.size());
     }
 
+    /**
+     * Devuelve todos los entrevistadores disponibles para un slot específico (fecha + hora + duración).
+     * Útil para mostrar parejas adicionales en slots ya agendados.
+     */
+    public Map<String, Object> slotAvailability(String dateStr, String timeStr, Integer duration) {
+        LocalDate date = LocalDate.parse(dateStr);
+        LocalTime time = LocalTime.parse(timeStr);
+        int interviewDuration = duration == null ? 60 : duration;
+        LocalTime slotEnd = time.plusMinutes(interviewDuration);
+
+        List<Map<String, Object>> freeInterviewers = scheduleRepository.findInterviewersWithSchedules(date.getYear()).stream()
+            .filter(interviewer -> {
+                List<InterviewerScheduleEntity> schedules = scheduleRepository.findAvailableTemplates(
+                    interviewer.getInterviewerId(), date, dayName(date), date.getYear()
+                );
+                boolean coveredBySchedule = schedules.stream()
+                    .anyMatch(s -> !time.isBefore(s.getStartTime()) && !slotEnd.isAfter(s.getEndTime()));
+                if (!coveredBySchedule) return false;
+                List<InterviewEntity> booked = interviewRepository.findBlockingForInterviewer(
+                    interviewer.getInterviewerId(), date,
+                    List.of(InterviewStatus.CANCELLED, InterviewStatus.RESCHEDULED, InterviewStatus.REJECTED_BY_FAMILY)
+                );
+                return booked.stream().noneMatch(interview ->
+                    overlaps(time, slotEnd, interview.getScheduledTime(),
+                        interview.getScheduledTime().plusMinutes(interview.getDuration() == null ? 60 : interview.getDuration()))
+                );
+            })
+            .map(interviewer -> Map.<String, Object>of(
+                "id", interviewer.getInterviewerId(),
+                "name", (interviewer.getFirstName() + " " + interviewer.getLastName()).trim(),
+                "role", String.valueOf(interviewer.getRole())
+            ))
+            .toList();
+
+        return Map.of(
+            "success", true,
+            "data", Map.of(
+                "date", dateStr,
+                "time", timeStr,
+                "duration", interviewDuration,
+                "availableInterviewers", freeInterviewers,
+                "interviewerCount", freeInterviewers.size()
+            )
+        );
+    }
+
     public Map<String, Object> availableSlots(Long interviewerId, String date, Integer duration) {
         LocalDate targetDate = LocalDate.parse(date);
         LocalDate today = LocalDate.now();
