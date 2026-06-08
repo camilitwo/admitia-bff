@@ -56,7 +56,7 @@ public class EmailComposerService {
 
     public EmailComposerService(EmailTemplateRegistry registry,
                                 @Lazy NotificationService notificationService,
-                                InterviewConfirmationService confirmationService,
+                                @Lazy InterviewConfirmationService confirmationService,
                                 @Value("${app.bff.public-base-url:http://localhost:8080}") String bffPublicBaseUrl) {
         this.registry = registry;
         this.notificationService = notificationService;
