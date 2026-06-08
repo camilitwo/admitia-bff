@@ -79,10 +79,17 @@ app:
   cors:
     allowed-origins: ${APP_CORS_ALLOWED_ORIGINS:http://localhost:5173,http://127.0.0.1:5173}
   # URL base para redirecciones (debe ser la URL pública del frontend)
-  # En dev: https://admin.dev.admitia.dedyn.io
+  # URL del frontend: https://admisiones.dev.admitia.dedyn.io/#/
   # En staging/prod: configurar via APP_FRONTEND_BASE_URL en Railway
   frontend:
-    base-url: ${APP_FRONTEND_BASE_URL:https://admin.dev.admitia.dedyn.io}
+    base-url: ${APP_FRONTEND_BASE_URL:https://admisiones.dev.admitia.dedyn.io}
+  # URL base pública del BFF (para URLs de confirmación de entrevistas)
+  # NOTA: Como el BFF no está expuesto públicamente, esta URL debe ser la del NGINX
+  # que expone el endpoint /api/public/interview/confirm y lo reenvía al BFF
+  # En dev: https://admisiones.dev.admitia.dedyn.io (misma URL que el frontend)
+  # En staging/prod: configurar via APP_BFF_PUBLIC_BASE_URL en Railway
+  bff:
+    public-base-url: ${APP_BFF_PUBLIC_BASE_URL:https://admisiones.dev.admitia.dedyn.io}
   # Configuración de confirmación de entrevistas vía email (patrón pasarela)
   confirmation:
     # Usa APP_FRONTEND_BASE_URL (misma que VITE_API_BASE_URL en frontend)
