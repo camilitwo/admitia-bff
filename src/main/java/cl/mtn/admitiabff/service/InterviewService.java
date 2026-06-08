@@ -587,6 +587,123 @@ public class InterviewService {
     }
 
     /** "JUAN PEREZ" -> "Juan Perez". */
+    /**
+     * Genera un resumen semanal de entrevistas para el centro operativo.
+     * Incluye entrevistas rechazadas por familia para gestión.
+     */
+    public Map<String, Object> weeklyOverview(String startDateStr, String endDateStr, Integer defaultDuration) {
+        LocalDate startDate = LocalDate.parse(startDateStr);
+        LocalDate endDate = LocalDate.parse(endDateStr);
+        int duration = defaultDuration != null ? defaultDuration : 30;
+
+        // Obtener todas las entrevistas del rango (INCLUYENDO rechazadas para gestión)
+        List<InterviewEntity> allInterviews = interviewRepository
+            .findByScheduledDateGreaterThanEqualAndScheduledDateLessThanEqualOrderByScheduledDateAscScheduledTimeAsc(startDate, endDate);
+
+        // Agrupar por día
+        List<Map<String, Object>> days = new ArrayList<>();
+        LocalDate current = startDate;
+        while (!current.isAfter(endDate)) {
+            final LocalDate dayDate = current;
+            List<InterviewEntity> dayInterviews = allInterviews.stream()
+                .filter(i -> i.getScheduledDate().equals(dayDate))
+                .toList();
+
+            // Entrevistas programadas del día (incluye rechazadas para gestión)
+            List<Map<String, Object>> scheduled = dayInterviews.stream().map(i -> {
+                Map<String, Object> item = new LinkedHashMap<>();
+                item.put("id", i.getId());
+                item.put("time", i.getScheduledTime().toString());
+                item.put("endTime", i.getScheduledTime().plusMinutes(i.getDuration()).toString());
+                item.put("studentName", i.getApplication().getStudent() != null
+                    ? i.getApplication().getStudent().getFirstName() + " " + i.getApplication().getStudent().getPaternalLastName()
+                    : "Sin nombre");
+                item.put("applicationId", i.getApplication().getId());
+                item.put("interviewType", i.getInterviewType());
+                item.put("mode", i.getMode());
+                item.put("status", i.getStatus().name());
+                item.put("interviewer1", Map.of(
+                    "id", i.getInterviewer() != null ? i.getInterviewer().getId() : 0,
+                    "name", i.getInterviewer() != null ? i.getInterviewer().getFirstName() + " " + i.getInterviewer().getLastName() : "Sin asignar",
+                    "role", i.getInterviewer() != null ? String.valueOf(i.getInterviewer().getRole()) : "UNKNOWN"
+                ));
+                if (i.getSecondInterviewer() != null) {
+                    item.put("interviewer2", Map.of(
+                        "id", i.getSecondInterviewer().getId(),
+                        "name", i.getSecondInterviewer().getFirstName() + " " + i.getSecondInterviewer().getLastName(),
+                        "role", String.valueOf(i.getSecondInterviewer().getRole())
+                    ));
+                }
+                return item;
+            }).toList();
+
+            // Contar para estadísticas
+            long scheduledCount = dayInterviews.stream().filter(i ->
+                i.getStatus() == InterviewStatus.SCHEDULED ||
+                i.getStatus() == InterviewStatus.CONFIRMED
+            ).count();
+            long completedCount = dayInterviews.stream().filter(i ->
+                i.getStatus() == InterviewStatus.COMPLETED
+            ).count();
+            long cancelledCount = dayInterviews.stream().filter(i ->
+                i.getStatus() == InterviewStatus.CANCELLED ||
+                i.getStatus() == InterviewStatus.REJECTED_BY_FAMILY
+            ).count();
+
+            Map<String, Object> dayData = new LinkedHashMap<>();
+            dayData.put("date", dayDate.toString());
+            dayData.put("dayOfWeek", dayDate.getDayOfWeek().toString().substring(0, 3).toUpperCase());
+            dayData.put("dayLabel", formatDayLabel(dayDate));
+            dayData.put("scheduled", scheduled);
+            dayData.put("available", List.of()); // Se llena desde el frontend con slots disponibles
+            dayData.put("summary", Map.of(
+                "scheduledCount", scheduledCount,
+                "completedCount", completedCount,
+                "cancelledCount", cancelledCount,
+                "totalCount", dayInterviews.size()
+            ));
+            days.add(dayData);
+
+            current = current.plusDays(1);
+        }
+
+        // Estadísticas generales
+        long totalScheduled = allInterviews.stream().filter(i ->
+            i.getStatus() == InterviewStatus.SCHEDULED || i.getStatus() == InterviewStatus.CONFIRMED
+        ).count();
+        long totalCompleted = allInterviews.stream().filter(i ->
+            i.getStatus() == InterviewStatus.COMPLETED
+        ).count();
+        long totalCancelled = allInterviews.stream().filter(i ->
+            i.getStatus() == InterviewStatus.CANCELLED
+        ).count();
+        long totalRejected = allInterviews.stream().filter(i ->
+            i.getStatus() == InterviewStatus.REJECTED_BY_FAMILY
+        ).count();
+
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("success", true);
+        response.put("data", Map.of(
+            "range", Map.of(
+                "startDate", startDateStr,
+                "endDate", endDateStr,
+                "totalDays", java.time.temporal.ChronoUnit.DAYS.between(startDate, endDate) + 1
+            ),
+            "summary", Map.of(
+                "scheduledCount", totalScheduled,
+                "completedCount", totalCompleted,
+                "cancelledCount", totalCancelled,
+                "rejectedCount", totalRejected,
+                "availableSlotsCount", 0,
+                "singleInterviewerSlotsCount", 0
+            ),
+            "interviewerLoad", List.of(),
+            "days", days
+        ));
+
+        return response;
+    }
+
     private String toTitleCase(String text) {
         if (text == null || text.isBlank()) return "";
         StringBuilder sb = new StringBuilder(text.length());
