@@ -30,7 +30,10 @@ public interface InterviewRepository extends JpaRepository<InterviewEntity, Long
     List<InterviewEntity> findAllByOrderByScheduledDateAscScheduledTimeAsc();
 
     default List<InterviewEntity> findForCalendar(LocalDate startDate, LocalDate endDate) {
-        // Excluir entrevistas rechazadas por la familia (no deben aparecer en el calendario)
+        return findForCalendar(startDate, endDate, false);
+    }
+
+    default List<InterviewEntity> findForCalendar(LocalDate startDate, LocalDate endDate, boolean includeRejected) {
         List<InterviewEntity> interviews;
         if (startDate != null && endDate != null)
             interviews = findByScheduledDateGreaterThanEqualAndScheduledDateLessThanEqualOrderByScheduledDateAscScheduledTimeAsc(startDate, endDate);
@@ -41,9 +44,14 @@ public interface InterviewRepository extends JpaRepository<InterviewEntity, Long
         else
             interviews = findAllByOrderByScheduledDateAscScheduledTimeAsc();
 
-        return interviews.stream()
-            .filter(i -> i.getStatus() != InterviewStatus.REJECTED_BY_FAMILY)
-            .toList();
+        // Excluir entrevistas rechazadas por la familia a menos que se solicite incluirlas
+        if (!includeRejected) {
+            interviews = interviews.stream()
+                .filter(i -> i.getStatus() != InterviewStatus.REJECTED_BY_FAMILY)
+                .toList();
+        }
+
+        return interviews;
     }
 
     interface KeyCountView {

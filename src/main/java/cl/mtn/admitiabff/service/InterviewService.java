@@ -71,10 +71,10 @@ public class InterviewService {
         return Map.of("success", true, "data", Map.of("overview", Map.of("total", total, "scheduled", scheduled, "completed", completed, "cancelled", cancelled, "upcoming", upcoming, "completionRate", total == 0 ? 0 : (completed * 100.0) / total, "cancellationRate", total == 0 ? 0 : (cancelled * 100.0) / total), "byStatus", byStatus, "byType", byType, "upcoming", upcomingItems));
     }
 
-    public Map<String, Object> calendar(String startDate, String endDate) {
+    public Map<String, Object> calendar(String startDate, String endDate, boolean includeRejected) {
         LocalDate start = startDate == null || startDate.isBlank() ? null : LocalDate.parse(startDate);
         LocalDate end = endDate == null || endDate.isBlank() ? null : LocalDate.parse(endDate);
-        List<Map<String, Object>> data = interviewRepository.findForCalendar(start, end).stream().map(this::toCalendarResponse).toList();
+        List<Map<String, Object>> data = interviewRepository.findForCalendar(start, end, includeRejected).stream().map(this::toCalendarResponse).toList();
         return Map.of("success", true, "data", data, "count", data.size());
     }
 
@@ -264,6 +264,21 @@ public class InterviewService {
         entity.setStatus(InterviewStatus.RESCHEDULED);
         entity.setNotes(payload.get("notes") == null ? entity.getNotes() : String.valueOf(payload.get("notes")));
         return Map.of("success", true, "message", "Entrevista reprogramada", "data", toResponse(interviewRepository.save(entity)));
+    }
+
+    @Transactional
+    public Map<String, Object> release(Long id, Map<String, Object> payload) {
+        InterviewEntity entity = load(id);
+        // Solo se pueden liberar entrevistas rechazadas por la familia
+        if (entity.getStatus() != InterviewStatus.REJECTED_BY_FAMILY) {
+            throw new IllegalStateException("Solo se pueden liberar entrevistas rechazadas por la familia");
+        }
+        entity.setStatus(InterviewStatus.CANCELLED);
+        String reason = payload != null && payload.get("reason") != null 
+            ? String.valueOf(payload.get("reason")) 
+            : "Liberada por administrador después de rechazo de familia";
+        entity.setNotes(reason);
+        return Map.of("success", true, "message", "Entrevista liberada - ahora puede reprogramarse", "data", toResponse(interviewRepository.save(entity)));
     }
 
     @Transactional

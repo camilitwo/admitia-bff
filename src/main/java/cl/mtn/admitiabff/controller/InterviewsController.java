@@ -15,7 +15,7 @@ public class InterviewsController {
     @GetMapping("/public/interviewers") public Object publicInterviewers() { return interviewService.publicInterviewers(); }
     @GetMapping public Map<String, Object> all() { return interviewService.all(); }
     @GetMapping("/statistics") public Map<String, Object> statistics() { return interviewService.statistics(); }
-    @GetMapping("/calendar") public Map<String, Object> calendar(@RequestParam(required = false) String startDate, @RequestParam(required = false) String endDate) { return interviewService.calendar(startDate, endDate); }
+    @GetMapping("/calendar") public Map<String, Object> calendar(@RequestParam(required = false) String startDate, @RequestParam(required = false) String endDate, @RequestParam(required = false, defaultValue = "false") boolean includeRejected) { return interviewService.calendar(startDate, endDate, includeRejected); }
     @GetMapping("/application/{applicationId}") public Map<String, Object> byApplication(@PathVariable Long applicationId) { return interviewService.byApplication(applicationId); }
     @GetMapping("/application/{applicationId}/summary-status") public Map<String, Object> summaryStatus(@PathVariable Long applicationId) { return interviewService.summaryStatus(applicationId); }
     @GetMapping("/interviewer/{interviewerId}") public Map<String, Object> byInterviewer(@PathVariable Long interviewerId) { return interviewService.byInterviewer(interviewerId); }
@@ -27,6 +27,7 @@ public class InterviewsController {
     @DeleteMapping("/{id}") public Map<String, Object> delete(@PathVariable Long id) { return interviewService.delete(id); }
     @PatchMapping("/{id}/cancel") public Map<String, Object> cancel(@PathVariable Long id, @RequestBody(required = false) Map<String, Object> payload) { return interviewService.cancel(id, payload == null ? Map.of() : payload); }
     @PatchMapping("/{id}/reschedule") public Map<String, Object> reschedule(@PathVariable Long id, @RequestBody Map<String, Object> payload) { return interviewService.reschedule(id, payload); }
+    @PatchMapping("/{id}/release") public Map<String, Object> release(@PathVariable Long id, @RequestBody(required = false) Map<String, Object> payload) { return interviewService.release(id, payload == null ? Map.of() : payload); }
     @PostMapping("/application/{applicationId}/send-summary") public Map<String, Object> sendSummary(@PathVariable Long applicationId) { return interviewService.sendSummary(applicationId); }
 
     @PostMapping("/{id}/send-invitation")
