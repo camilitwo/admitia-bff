@@ -3,6 +3,7 @@ package cl.mtn.admitiabff.service;
 import cl.mtn.admitiabff.domain.common.InterviewStatus;
 import cl.mtn.admitiabff.domain.email.EmailRequestDTO;
 import cl.mtn.admitiabff.domain.interview.InterviewEntity;
+import cl.mtn.admitiabff.domain.user.UserEntity;
 import cl.mtn.admitiabff.repository.InterviewRepository;
 import cl.mtn.admitiabff.service.notification.EmailComposerService;
 import cl.mtn.admitiabff.util.TemplateUtils;
@@ -10,6 +11,7 @@ import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.io.Decoders;
 import io.jsonwebtoken.security.Keys;
+import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
@@ -141,6 +143,8 @@ public class InterviewConfirmationService {
             
             // Notificar a admisiones
             notifyAdmissionsOfConfirmation(interview, true);
+            // Notificar a los entrevistadores asignados
+            notifyInterviewersOfConfirmation(interview);
         } else if ("REJECT".equals(action)) {
             interview.setStatus(InterviewStatus.REJECTED_BY_FAMILY);
             interview.setConfirmationStatus(InterviewStatus.REJECTED_BY_FAMILY);  // Marcamos respuesta del apoderado
@@ -162,27 +166,24 @@ public class InterviewConfirmationService {
 
     /**
      * Construye URL de error para redirección al frontend.
+     * Compatible con HashRouter: los query params van DESPUÉS del hash path.
      */
     public String buildErrorUrl(String errorMessage) {
-        return UriComponentsBuilder.fromUriString(frontendBaseUrl)
-                .path(resultPath)
-                .queryParam("status", "error")
-                .queryParam("message", errorMessage)
-                .encode(StandardCharsets.UTF_8)
-                .toUriString();
+        String encodedMessage = URLEncoder.encode(errorMessage, StandardCharsets.UTF_8);
+        return frontendBaseUrl + resultPath + "?status=error&message=" + encodedMessage;
     }
 
     /**
      * Construye URL de resultado exitoso.
+     * Compatible con HashRouter: los query params van DESPUÉS del hash path.
+     * Ejemplo: https://domain.com/#/interview/confirmation-result?status=confirmed&interviewId=123&message=...
      */
     private String buildResultUrl(String status, Long interviewId, String message) {
-        return UriComponentsBuilder.fromUriString(frontendBaseUrl)
-                .path(resultPath)
-                .queryParam("status", status)
-                .queryParam("interviewId", interviewId)
-                .queryParam("message", message)
-                .encode(StandardCharsets.UTF_8)
-                .toUriString();
+        String encodedMessage = URLEncoder.encode(message, StandardCharsets.UTF_8);
+        return frontendBaseUrl + resultPath
+                + "?status=" + status
+                + "&interviewId=" + interviewId
+                + "&message=" + encodedMessage;
     }
 
     /**
@@ -281,6 +282,60 @@ public class InterviewConfirmationService {
         } catch (Exception e) {
             log.error("[notify-admissions] Error enviando email a admisiones para entrevista {}: {}", 
                     interview.getId(), e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Notifica a los entrevistadores asignados que la familia confirmó la entrevista.
+     * Se invoca solo al confirmar (no al rechazar).
+     */
+    private void notifyInterviewersOfConfirmation(InterviewEntity interview) {
+        var application = interview.getApplication();
+        String studentName = application.getStudent() != null
+                ? application.getStudent().getFirstName() + " " + application.getStudent().getPaternalLastName()
+                : "Estudiante";
+
+        String subject = "Entrevista confirmada - " + studentName + " - " + interview.getScheduledDate();
+
+        // Notificar al entrevistador principal
+        if (interview.getInterviewer() != null && interview.getInterviewer().getEmail() != null) {
+            sendInterviewerNotification(interview, interview.getInterviewer(), studentName, subject);
+        }
+
+        // Notificar al segundo entrevistador (si existe)
+        if (interview.getSecondInterviewer() != null && interview.getSecondInterviewer().getEmail() != null) {
+            sendInterviewerNotification(interview, interview.getSecondInterviewer(), studentName, subject);
+        }
+    }
+
+    private void sendInterviewerNotification(InterviewEntity interview,
+                                              UserEntity interviewer,
+                                              String studentName, String subject) {
+        try {
+            Map<String, Object> data = new LinkedHashMap<>();
+            data.put("interviewerName", interviewer.getFirstName() + " " + interviewer.getLastName());
+            data.put("studentName", studentName);
+            data.put("interviewType", interview.getInterviewType());
+            data.put("scheduledDate", interview.getScheduledDate().toString());
+            data.put("scheduledTime", interview.getScheduledTime().toString());
+            data.put("mode", interview.getMode());
+            data.put("location", interview.getLocation());
+
+            String bodyHtml = TemplateUtils.generateTemplate("interview_confirmed_for_interviewer", data);
+
+            emailComposerService.send(EmailRequestDTO.builder()
+                    .template(bodyHtml)
+                    .to(interviewer.getEmail())
+                    .subject(subject)
+                    .recipientType("INTERVIEWER")
+                    .data(data)
+                    .build());
+
+            log.info("[notify-interviewers] Email enviado a {} para entrevista {}",
+                    interviewer.getEmail(), interview.getId());
+        } catch (Exception e) {
+            log.error("[notify-interviewers] Error enviando email a {}: {}",
+                    interviewer.getEmail(), e.getMessage(), e);
         }
     }
 

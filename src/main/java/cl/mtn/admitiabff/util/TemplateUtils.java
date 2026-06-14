@@ -54,6 +54,7 @@ public final class TemplateUtils {
             case "interview_cancelled"               -> INTERVIEW_CANCELLED_BODY;
             case "interview_confirmed"               -> INTERVIEW_CONFIRMED_BODY;
             case "interview_rejected_by_family"      -> INTERVIEW_REJECTED_BY_FAMILY_BODY;
+            case "interview_confirmed_for_interviewer" -> INTERVIEW_CONFIRMED_FOR_INTERVIEWER_BODY;
 
             // Evaluation
             case "evaluation_assignment", "evaluation" -> EVALUATION_ASSIGNMENT_BODY;
@@ -690,6 +691,37 @@ public final class TemplateUtils {
                 <p style="margin:24px 0 0 0;font-style:italic;color:#666;">
                   La familia ha indicado que no puede asistir en el horario propuesto. 
                   El slot ha sido liberado automáticamente para otra entrevista.
+                </p>
+              </td>
+            </tr>
+            """;
+
+    private static final String INTERVIEW_CONFIRMED_FOR_INTERVIEWER_BODY = """
+            <tr>
+              <td class="content" style="padding:40px 30px;color:#333;line-height:1.7;font-family:'Segoe UI',Arial,sans-serif;font-size:15px;">
+                <h2 style="color:#273b7a;margin:0 0 16px 0;font-size:22px;">Entrevista confirmada por la familia</h2>
+                <p style="margin:0 0 14px 0;">Estimado/a <strong>{{interviewerName}}</strong>,</p>
+                <p style="margin:0 0 14px 0;">
+                  Le informamos que la familia ha <strong style="color:#28a745;">confirmado</strong>
+                  su asistencia a la siguiente entrevista:
+                </p>
+                <div class="info-box" style="background:#ecfdf5;padding:15px 20px;border-radius:6px;margin:0 0 18px 0;border-left:4px solid #10b981;">
+                  <strong>Estudiante:</strong> {{studentName}}<br/>
+                  <strong>Tipo de entrevista:</strong> {{interviewType}}<br/>
+                  <strong>Fecha:</strong> {{scheduledDate}}<br/>
+                  <strong>Hora:</strong> {{scheduledTime}}<br/>
+                  <strong>Modalidad:</strong> {{mode}}<br/>
+                  <strong>Lugar:</strong> {{location}}
+                </div>
+                <p style="margin:0 0 14px 0;">
+                  La familia asistirá según lo programado. Si necesita
+                  coordinar algo adicional, puede escribir a
+                  <a href="mailto:admision@mtn.cl" style="color:#273b7a;">admision@mtn.cl</a>.
+                </p>
+                <p style="margin:24px 0 0 0;">
+                  Un cordial saludo,<br/>
+                  <strong>Equipo de Admisión</strong><br/>
+                  Colegio Monte Tabor y Nazaret
                 </p>
               </td>
             </tr>
