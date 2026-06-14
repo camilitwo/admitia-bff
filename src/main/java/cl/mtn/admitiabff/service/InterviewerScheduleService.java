@@ -44,7 +44,7 @@ public class InterviewerScheduleService {
         LocalTime targetTime = LocalTime.parse(time);
         List<Map<String, Object>> interviewers = scheduleRepository.findInterviewersWithSchedules(targetDate.getYear()).stream()
             .filter(item -> scheduleRepository.findAvailableTemplates(item.getInterviewerId(), targetDate, dayName(targetDate), targetDate.getYear()).stream().anyMatch(schedule -> !targetTime.isBefore(schedule.getStartTime()) && targetTime.isBefore(schedule.getEndTime())))
-            .filter(item -> interviewRepository.findBlockingForInterviewer(item.getInterviewerId(), targetDate, List.of(cl.mtn.admitiabff.domain.common.InterviewStatus.CANCELLED, cl.mtn.admitiabff.domain.common.InterviewStatus.RESCHEDULED)).stream().noneMatch(interview -> overlaps(targetTime, targetTime.plusMinutes(60), interview.getScheduledTime(), interview.getScheduledTime().plusMinutes(interview.getDuration() == null ? 60 : interview.getDuration()))))
+            .filter(item -> interviewRepository.findBlockingForInterviewer(item.getInterviewerId(), targetDate, List.of(cl.mtn.admitiabff.domain.common.InterviewStatus.CANCELLED, cl.mtn.admitiabff.domain.common.InterviewStatus.RESCHEDULED, cl.mtn.admitiabff.domain.common.InterviewStatus.REJECTED_BY_FAMILY)).stream().noneMatch(interview -> overlaps(targetTime, targetTime.plusMinutes(60), interview.getScheduledTime(), interview.getScheduledTime().plusMinutes(interview.getDuration() == null ? 60 : interview.getDuration()))))
             .<Map<String, Object>>map(item -> {
                 Map<String, Object> interviewer = new LinkedHashMap<>();
                 interviewer.put("id", item.getInterviewerId());
