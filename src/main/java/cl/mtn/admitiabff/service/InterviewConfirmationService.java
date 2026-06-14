@@ -166,7 +166,8 @@ public class InterviewConfirmationService {
 
     /**
      * Construye URL de error para redirección al frontend.
-     * Compatible con HashRouter: los query params van DESPUÉS del hash path.
+     * El frontend (main.tsx) se encarga de redirigir al HashRouter.
+     * Ejemplo: https://domain.com/interview/confirmation-result?status=error&message=...
      */
     public String buildErrorUrl(String errorMessage) {
         String encodedMessage = URLEncoder.encode(errorMessage, StandardCharsets.UTF_8);
@@ -175,8 +176,8 @@ public class InterviewConfirmationService {
 
     /**
      * Construye URL de resultado exitoso.
-     * Compatible con HashRouter: los query params van DESPUÉS del hash path.
-     * Ejemplo: https://domain.com/#/interview/confirmation-result?status=confirmed&interviewId=123&message=...
+     * El frontend (main.tsx) redirige automáticamente al HashRouter.
+     * Ejemplo: https://domain.com/interview/confirmation-result?status=confirmed&interviewId=123&message=...
      */
     private String buildResultUrl(String status, Long interviewId, String message) {
         String encodedMessage = URLEncoder.encode(message, StandardCharsets.UTF_8);

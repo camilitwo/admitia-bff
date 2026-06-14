@@ -94,8 +94,9 @@ app:
   confirmation:
     # Usa APP_FRONTEND_BASE_URL (misma que VITE_API_BASE_URL en frontend)
     # Ruta donde se muestra el resultado de confirmación
-    # NOTA: El frontend usa HashRouter (/#/), por eso el path incluye /#/
-    result-path: /#/interview/confirmation-result
+    # NOTA: NO incluir /#/ aquí — los HTTP 302 no preservan fragmentos.
+    # El frontend se encarga de redirigir al HashRouter.
+    result-path: /interview/confirmation-result
     # Expiración del token en horas (7 días por defecto)
     token-expiry-hours: ${APP_CONFIRMATION_TOKEN_EXPIRY_HOURS:168}
   
