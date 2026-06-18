@@ -169,7 +169,20 @@ public class ApplicationService {
     }
 
     public Map<String, Object> get(Long id) {
-        return toFullResponse(load(id));
+        ApplicationEntity app = load(id);
+        checkApplicationAccess(app);
+        return toFullResponse(app);
+    }
+
+    private void checkApplicationAccess(ApplicationEntity app) {
+        var auth = authService.requireAuth();
+        String role = auth.role();
+        // ADMIN y COORDINATOR tienen acceso total
+        if ("ADMIN".equalsIgnoreCase(role) || "COORDINATOR".equalsIgnoreCase(role)) return;
+        // El dueño de la postulación tiene acceso
+        if (app.getApplicantUser() != null && app.getApplicantUser().getId().equals(auth.id())) return;
+        // throw 403 para CYCLE_DIRECTOR, PSYCHOLOGIST, INTERVIEWER que no tienen asignación
+        throw new ResponseStatusException(HttpStatus.FORBIDDEN, "No tienes acceso a esta postulación");
     }
 
     public Map<String, Object> documents(Long applicationId) {
