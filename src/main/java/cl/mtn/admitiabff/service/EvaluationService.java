@@ -100,11 +100,12 @@ public class EvaluationService {
     }
 
     private Map<String, Object> interviewToEvaluationResponse(cl.mtn.admitiabff.domain.interview.InterviewEntity entity) {
+        String evaluationType = mapInterviewTypeToEvaluationType(entity.getInterviewType());
         Map<String, Object> response = new LinkedHashMap<>();
         response.put("id", entity.getId());
         response.put("applicationId", entity.getApplication() == null ? null : entity.getApplication().getId());
         response.put("evaluatorId", entity.getInterviewer() == null ? null : entity.getInterviewer().getId());
-        response.put("evaluationType", entity.getInterviewType());
+        response.put("evaluationType", evaluationType);
         response.put("type", entity.getInterviewType());
         response.put("status", entity.getStatus().name());
         response.put("scheduledDate", entity.getScheduledDate());
@@ -353,4 +354,14 @@ public class EvaluationService {
     }
 
     private String stringValue(Object value) { return value == null ? null : String.valueOf(value); }
+
+    private String mapInterviewTypeToEvaluationType(String interviewType) {
+        if (interviewType == null) return null;
+        return switch (interviewType) {
+            case "FAMILY" -> "FAMILY_INTERVIEW";
+            case "CYCLE_DIRECTOR" -> "CYCLE_DIRECTOR_INTERVIEW";
+            case "PSYCHOLOGICAL" -> "PSYCHOLOGICAL_INTERVIEW";
+            default -> interviewType;
+        };
+    }
 }
