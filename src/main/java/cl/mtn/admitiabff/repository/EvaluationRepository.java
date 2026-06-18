@@ -29,6 +29,7 @@ public interface EvaluationRepository extends JpaRepository<EvaluationEntity, Lo
     List<EvaluationEntity> findAssignments(@Param("statuses") List<EvaluationStatus> statuses);
     @Query("select e from EvaluationEntity e where e.application.id = :applicationId and e.evaluationType = 'FAMILY_INTERVIEW'")
     List<EvaluationEntity> findFamilyInterviewByApplicationId(@Param("applicationId") Long applicationId);
+    Optional<EvaluationEntity> findByApplicationIdAndEvaluationType(Long applicationId, String evaluationType);
 
     interface KeyCountView {
         String getKey();

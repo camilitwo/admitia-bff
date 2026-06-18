@@ -1,10 +1,13 @@
 package cl.mtn.admitiabff.service;
 
+import cl.mtn.admitiabff.domain.common.EvaluationStatus;
 import cl.mtn.admitiabff.domain.common.InterviewStatus;
 import cl.mtn.admitiabff.domain.email.EmailRequestDTO;
+import cl.mtn.admitiabff.domain.evaluation.EvaluationEntity;
 import cl.mtn.admitiabff.domain.interview.InterviewEntity;
 import cl.mtn.admitiabff.domain.interview.InterviewerScheduleEntity;
 import cl.mtn.admitiabff.repository.ApplicationRepository;
+import cl.mtn.admitiabff.repository.EvaluationRepository;
 import cl.mtn.admitiabff.repository.InterviewRepository;
 import cl.mtn.admitiabff.repository.InterviewerScheduleRepository;
 import cl.mtn.admitiabff.repository.UserRepository;
@@ -30,14 +33,16 @@ public class InterviewService {
     private final InterviewerScheduleRepository scheduleRepository;
     private final ApplicationRepository applicationRepository;
     private final UserRepository userRepository;
+    private final EvaluationRepository evaluationRepository;
     private final cl.mtn.admitiabff.service.notification.EmailComposerService emailComposerService;
     private final InterviewConfirmationService confirmationService;
 
-    public InterviewService(InterviewRepository interviewRepository, InterviewerScheduleRepository scheduleRepository, ApplicationRepository applicationRepository, UserRepository userRepository, cl.mtn.admitiabff.service.notification.EmailComposerService emailComposerService, InterviewConfirmationService confirmationService) {
+    public InterviewService(InterviewRepository interviewRepository, InterviewerScheduleRepository scheduleRepository, ApplicationRepository applicationRepository, UserRepository userRepository, EvaluationRepository evaluationRepository, cl.mtn.admitiabff.service.notification.EmailComposerService emailComposerService, InterviewConfirmationService confirmationService) {
         this.interviewRepository = interviewRepository;
         this.scheduleRepository = scheduleRepository;
         this.applicationRepository = applicationRepository;
         this.userRepository = userRepository;
+        this.evaluationRepository = evaluationRepository;
         this.emailComposerService = emailComposerService;
         this.confirmationService = confirmationService;
     }
@@ -277,7 +282,12 @@ public class InterviewService {
         }
 
         ensureInterviewersAvailable(entity);
-        return Map.of("success", true, "message", "Entrevista creada correctamente", "data", toResponse(interviewRepository.save(entity)));
+        InterviewEntity saved = interviewRepository.save(entity);
+
+        // Crear automáticamente la evaluación para entrevistas familiares y de director
+        createEvaluationForInterview(saved);
+
+        return Map.of("success", true, "message", "Entrevista creada correctamente", "data", toResponse(saved));
     }
 
     @Transactional
@@ -512,6 +522,31 @@ public class InterviewService {
                 "Cancele la entrevista existente antes de agendar una nueva."
             );
         }
+    }
+
+    private void createEvaluationForInterview(InterviewEntity interview) {
+        if (interview.getInterviewType() == null || interview.getApplication() == null) return;
+
+        String evalType = switch (interview.getInterviewType()) {
+            case "FAMILY" -> "FAMILY_INTERVIEW";
+            case "CYCLE_DIRECTOR" -> "CYCLE_DIRECTOR_INTERVIEW";
+            case "PSYCHOLOGICAL" -> "PSYCHOLOGICAL_INTERVIEW";
+            default -> null;
+        };
+
+        if (evalType == null) return;
+
+        // Verificar que no exista ya una evaluación del mismo tipo para esta postulación
+        boolean exists = evaluationRepository.findByApplicationIdAndEvaluationType(
+            interview.getApplication().getId(), evalType).isPresent();
+
+        if (exists) return;
+
+        EvaluationEntity evaluation = new EvaluationEntity();
+        evaluation.setApplication(interview.getApplication());
+        evaluation.setEvaluationType(evalType);
+        evaluation.setStatus(EvaluationStatus.PENDING);
+        evaluationRepository.save(evaluation);
     }
 
     private String resolveParentNames(InterviewEntity entity) {
