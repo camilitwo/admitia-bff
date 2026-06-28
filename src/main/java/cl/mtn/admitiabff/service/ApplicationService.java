@@ -18,6 +18,7 @@ import cl.mtn.admitiabff.repository.ApplicationRepository;
 import cl.mtn.admitiabff.repository.ComplementaryFormRepository;
 import cl.mtn.admitiabff.repository.DocumentRepository;
 import cl.mtn.admitiabff.repository.EvaluationRepository;
+import cl.mtn.admitiabff.repository.GradeAvailabilityRepository;
 import cl.mtn.admitiabff.repository.GuardianRepository;
 import cl.mtn.admitiabff.repository.InterviewRepository;
 import cl.mtn.admitiabff.repository.ParentRepository;
@@ -66,6 +67,8 @@ public class ApplicationService {
     private final cl.mtn.admitiabff.service.notification.EmailComposerService emailComposerService;
     private final JsonSupport jsonSupport;
     private final String uploadsDir;
+    @org.springframework.beans.factory.annotation.Autowired
+    private GradeAvailabilityRepository gradeAvailabilityRepository;
 
     public ApplicationService(ApplicationRepository applicationRepository, StudentRepository studentRepository, ParentRepository parentRepository, GuardianRepository guardianRepository, SupporterRepository supporterRepository, UserRepository userRepository, DocumentRepository documentRepository, ComplementaryFormRepository complementaryFormRepository, EvaluationRepository evaluationRepository, InterviewRepository interviewRepository, AuthService authService, NotificationService notificationService, cl.mtn.admitiabff.service.notification.EmailComposerService emailComposerService, JsonSupport jsonSupport, @Value("${app.uploads-dir}") String uploadsDir) {
         this.applicationRepository = applicationRepository;
@@ -187,6 +190,13 @@ public class ApplicationService {
     public Map<String, Object> create(Map<String, Object> payload) {
         ApplicationEntity entity = new ApplicationEntity();
         entity.setStudent(resolveStudent(payload));
+
+        // Validar vacante disponible para el nivel seleccionado
+        String gradeApplied = entity.getStudent().getGradeApplied();
+        if (gradeApplied != null && !gradeAvailabilityRepository.existsByGradeLevelAndHasVacancyTrue(gradeApplied)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "No hay vacantes disponibles para el nivel seleccionado: " + gradeApplied);
+        }
+
         entity.setFather(resolveParent(payload, "father", "parent1", "FATHER", true));
         entity.setMother(resolveParent(payload, "mother", "parent2", "MOTHER", false));
         entity.setGuardian(resolveGuardian(payload));
