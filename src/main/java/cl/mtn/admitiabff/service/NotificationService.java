@@ -13,6 +13,7 @@ import java.util.Map;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
@@ -73,12 +74,12 @@ public class NotificationService {
      * desde {@code EmailComposerService} después de renderizar el template.
      * No invocar desde controllers/services de negocio: usar {@code EmailComposerService}.
      */
-    @Transactional
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public Map<String, Object> email(Map<String, Object> payload) {
         return dispatch(NotificationChannel.EMAIL, payload);
     }
 
-    @Transactional
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public Map<String, Object> sms(Map<String, Object> payload) {
         return dispatch(NotificationChannel.SMS, payload);
     }

@@ -1,10 +1,14 @@
 package cl.mtn.admitiabff.service;
 
+import cl.mtn.admitiabff.domain.application.ApplicationEntity;
 import cl.mtn.admitiabff.domain.common.EvaluationStatus;
 import cl.mtn.admitiabff.domain.common.InterviewStatus;
 import cl.mtn.admitiabff.domain.email.EmailRequestDTO;
 import cl.mtn.admitiabff.domain.evaluation.EvaluationEntity;
 import cl.mtn.admitiabff.domain.notification.EmailTemplate;
+import cl.mtn.admitiabff.domain.person.GuardianEntity;
+import cl.mtn.admitiabff.domain.person.ParentEntity;
+import cl.mtn.admitiabff.domain.student.StudentEntity;
 import cl.mtn.admitiabff.domain.user.UserEntity;
 import cl.mtn.admitiabff.repository.ApplicationRepository;
 import cl.mtn.admitiabff.repository.EvaluationRepository;
@@ -118,10 +122,16 @@ public class EvaluationService {
         response.put("createdAt", entity.getCreatedAt());
         response.put("updatedAt", entity.getUpdatedAt());
         response.put("completedAt", null);
-        if (entity.getApplication() != null && entity.getApplication().getStudent() != null) {
-            var student = entity.getApplication().getStudent();
-            response.put("studentName", student.getFirstName() + " " + student.getPaternalLastName() + " " + student.getMaternalLastName());
-            response.put("gradeApplied", student.getGradeApplied());
+        if (entity.getApplication() != null) {
+            response.put("application", applicationMap(entity.getApplication()));
+            if (entity.getApplication().getStudent() != null) {
+                var student = entity.getApplication().getStudent();
+                response.put("studentName", student.getFirstName() + " " + student.getPaternalLastName() + " " + student.getMaternalLastName());
+                response.put("gradeApplied", student.getGradeApplied());
+            }
+        }
+        if (entity.getInterviewer() != null) {
+            response.put("evaluator", evaluatorMap(entity.getInterviewer()));
         }
         return response;
     }
@@ -325,8 +335,74 @@ public class EvaluationService {
         response.put("createdAt", entity.getCreatedAt());
         response.put("updatedAt", entity.getUpdatedAt());
         response.put("completedAt", entity.getCompletedAt());
+        if (entity.getApplication() != null) {
+            response.put("application", applicationMap(entity.getApplication()));
+        }
+        if (entity.getEvaluator() != null) {
+            response.put("evaluator", evaluatorMap(entity.getEvaluator()));
+        }
         return response;
     }
+
+    private Map<String, Object> applicationMap(ApplicationEntity entity) {
+        Map<String, Object> map = new LinkedHashMap<>();
+        map.put("id", entity.getId());
+        if (entity.getStudent() != null) {
+            StudentEntity student = entity.getStudent();
+            Map<String, Object> studentMap = new LinkedHashMap<>();
+            studentMap.put("id", student.getId());
+            studentMap.put("firstName", student.getFirstName());
+            studentMap.put("paternalLastName", student.getPaternalLastName());
+            studentMap.put("maternalLastName", student.getMaternalLastName());
+            studentMap.put("lastName", (value(student.getPaternalLastName()) + " " + value(student.getMaternalLastName())).trim());
+            studentMap.put("rut", student.getRut());
+            studentMap.put("birthDate", student.getBirthDate());
+            studentMap.put("gradeApplied", student.getGradeApplied());
+            studentMap.put("grade", student.getGradeApplied());
+            studentMap.put("currentSchool", student.getCurrentSchool());
+            studentMap.put("email", student.getEmail());
+            studentMap.put("address", student.getAddress());
+            studentMap.put("additionalNotes", student.getAdditionalNotes());
+            studentMap.put("gender", student.getGender());
+            map.put("student", studentMap);
+        }
+        if (entity.getFather() != null) {
+            map.put("father", parentMap(entity.getFather()));
+        }
+        if (entity.getMother() != null) {
+            map.put("mother", parentMap(entity.getMother()));
+        }
+        if (entity.getGuardian() != null) {
+            GuardianEntity guardian = entity.getGuardian();
+            map.put("guardian", Map.of("id", guardian.getId(), "fullName", guardian.getFullName(), "rut", guardian.getRut(), "email", guardian.getEmail(), "phone", guardian.getPhone(), "relationship", guardian.getRelationship()));
+        }
+        return map;
+    }
+
+    private Map<String, Object> parentMap(ParentEntity entity) {
+        if (entity == null) return null;
+        Map<String, Object> map = new LinkedHashMap<>();
+        map.put("id", entity.getId());
+        map.put("fullName", entity.getFullName());
+        map.put("rut", entity.getRut());
+        map.put("email", entity.getEmail());
+        map.put("phone", entity.getPhone());
+        map.put("address", entity.getAddress());
+        map.put("profession", entity.getProfession());
+        return map;
+    }
+
+    private Map<String, Object> evaluatorMap(UserEntity entity) {
+        Map<String, Object> map = new LinkedHashMap<>();
+        map.put("id", entity.getId());
+        map.put("firstName", entity.getFirstName());
+        map.put("lastName", entity.getLastName());
+        map.put("email", entity.getEmail());
+        map.put("subject", entity.getSubject());
+        return map;
+    }
+
+    private String value(String value) { return value == null ? "" : value; }
 
     private BigDecimal calculateInterviewScore(Map<String, Object> interviewData) {
         List<BigDecimal> values = interviewData.values().stream().filter(Number.class::isInstance).map(Number.class::cast).map(value -> BigDecimal.valueOf(value.doubleValue())).toList();
