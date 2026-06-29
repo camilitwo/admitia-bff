@@ -35,8 +35,6 @@ public class SecurityConfig {
             .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(auth -> auth
                 .requestMatchers("/health", "/ready", "/gateway/status").permitAll()
-                // Allow CORS preflight requests
-                .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
                 // Endpoints de auth abiertos (login/logout/refresh deben ser accesibles sin Bearer válido)
                 .requestMatchers("/api/auth/**", "/api/email/**", "/api/institutional-emails/**", "/api/public/**", "/api/payments/webhooks/toku").permitAll()
                 .requestMatchers(HttpMethod.GET, "/api/users/roles", "/api/users/public/**", "/api/applications/stats", "/api/applications/statistics",
