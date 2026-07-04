@@ -527,24 +527,26 @@ public class InterviewService {
     private void createEvaluationForInterview(InterviewEntity interview) {
         if (interview.getInterviewType() == null || interview.getApplication() == null) return;
 
-        String evalType = switch (interview.getInterviewType()) {
-            case "FAMILY" -> "FAMILY_INTERVIEW";
-            case "CYCLE_DIRECTOR" -> "CYCLE_DIRECTOR_INTERVIEW";
-            case "PSYCHOLOGICAL" -> "PSYCHOLOGICAL_INTERVIEW";
-            default -> null;
-        };
+        switch (interview.getInterviewType()) {
+            case "FAMILY" -> createEvaluationIfNotExists(interview, "FAMILY_INTERVIEW");
+            case "CYCLE_DIRECTOR" -> {
+                // CYCLE_DIRECTOR necesita DOS evaluaciones: la entrevista y el informe
+                createEvaluationIfNotExists(interview, "CYCLE_DIRECTOR_INTERVIEW");
+                createEvaluationIfNotExists(interview, "CYCLE_DIRECTOR_REPORT");
+            }
+            case "PSYCHOLOGICAL" -> createEvaluationIfNotExists(interview, "PSYCHOLOGICAL_INTERVIEW");
+            default -> { /* no-op */ }
+        }
+    }
 
-        if (evalType == null) return;
-
-        // Verificar que no exista ya una evaluación del mismo tipo para esta postulación
+    private void createEvaluationIfNotExists(InterviewEntity interview, String evaluationType) {
         boolean exists = evaluationRepository.findByApplicationIdAndEvaluationType(
-            interview.getApplication().getId(), evalType).isPresent();
-
+            interview.getApplication().getId(), evaluationType).isPresent();
         if (exists) return;
 
         EvaluationEntity evaluation = new EvaluationEntity();
         evaluation.setApplication(interview.getApplication());
-        evaluation.setEvaluationType(evalType);
+        evaluation.setEvaluationType(evaluationType);
         evaluation.setStatus(EvaluationStatus.PENDING);
         evaluationRepository.save(evaluation);
     }
