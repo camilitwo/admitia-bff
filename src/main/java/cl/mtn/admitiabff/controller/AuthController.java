@@ -32,7 +32,7 @@ public class AuthController {
     @Value("${app.cookies.secure:true}")
     private boolean cookieSecure;
 
-    @Value("${app.cookies.same-site:Strict}")
+    @Value("${app.cookies.same-site:None}")
     private String cookieSameSite;
 
     public AuthController(AuthService authService) {
