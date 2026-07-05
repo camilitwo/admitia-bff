@@ -14,7 +14,9 @@ import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
+import java.util.Base64;
 import java.util.List;
 import java.util.Set;
 import org.slf4j.Logger;
@@ -76,16 +78,26 @@ public class FirebaseAuthenticationFilter extends OncePerRequestFilter {
             String header = request.getHeader(HttpHeaders.AUTHORIZATION);
             if (header != null && header.startsWith("Bearer ")) {
                 String token = header.substring(7);
-                boolean authenticated = tryFirebaseAuth(token, request);
-                if (!authenticated) {
+                boolean authenticated;
+                if (isLikelyLocalJwt(token)) {
                     authenticated = tryLocalJwtAuth(token, request);
+                } else {
+                    authenticated = tryFirebaseAuth(token, request);
+                    if (!authenticated) {
+                        authenticated = tryLocalJwtAuth(token, request);
+                    }
                 }
                 if (!authenticated) {
                     log.debug("[Auth] Token presente pero no verificable para {}", request.getRequestURI());
+                    writeAuthError(response, request);
+                    return;
                 }
             }
         } catch (Exception ex) {
             log.debug("[Auth] Error procesando token: {}", ex.getMessage());
+            setAuthError(request, "UNAUTHORIZED", "Token inválido");
+            writeAuthError(response, request);
+            return;
         }
         try {
             filterChain.doFilter(request, response);
@@ -173,6 +185,7 @@ public class FirebaseAuthenticationFilter extends OncePerRequestFilter {
     private boolean tryLocalJwtAuth(String token, HttpServletRequest request) {
         try {
             if (!jwtService.isValid(token)) {
+                setAuthError(request, "TOKEN_EXPIRED", "Token inválido o expirado");
                 return false;
             }
             Claims claims = jwtService.extractAllClaims(token);
@@ -186,9 +199,11 @@ public class FirebaseAuthenticationFilter extends OncePerRequestFilter {
             // Blacklist de jti (logout o revocación administrativa)
             if (jti != null && tokenService.isJtiRevoked(jti)) {
                 log.info("[Auth/Local] jti revocado: {}", jti);
+                setAuthError(request, "SESSION_REVOKED", "Sesión revocada");
                 return false;
             }
             if (role == null || userId == null) {
+                setAuthError(request, "UNAUTHORIZED", "Token sin claims requeridos");
                 return false;
             }
 
@@ -197,6 +212,7 @@ public class FirebaseAuthenticationFilter extends OncePerRequestFilter {
             ActiveSessionEntity session = activeSessionRepository.findByTokenHash(tokenHash).orElse(null);
             if (session == null) {
                 log.info("[Auth/Local] sesión no encontrada para jti={}. Rechazado.", jti);
+                setAuthError(request, "UNAUTHORIZED", "Sesión activa no encontrada");
                 return false;
             }
             LocalDateTime now = LocalDateTime.now();
@@ -215,6 +231,7 @@ public class FirebaseAuthenticationFilter extends OncePerRequestFilter {
             return true;
         } catch (Exception ex) {
             log.debug("[Auth/Local] JWT no válido: {}", ex.getMessage());
+            setAuthError(request, "UNAUTHORIZED", "Token inválido");
             return false;
         }
     }
@@ -227,5 +244,44 @@ public class FirebaseAuthenticationFilter extends OncePerRequestFilter {
         );
         SecurityContextHolder.getContext().setAuthentication(auth);
         AuthContext.set(new AuthUser(user.getId(), user.getEmail(), role));
+    }
+
+    private boolean isLikelyLocalJwt(String token) {
+        try {
+            String[] parts = token.split("\\.");
+            if (parts.length < 2) return false;
+            String header = new String(Base64.getUrlDecoder().decode(parts[0]), StandardCharsets.UTF_8);
+            String payload = new String(Base64.getUrlDecoder().decode(parts[1]), StandardCharsets.UTF_8);
+            return header.contains("\"alg\":\"HS256\"")
+                || payload.contains("\"iss\":\"" + jwtService.getIssuer() + "\"");
+        } catch (Exception ignored) {
+            return false;
+        }
+    }
+
+    private void setAuthError(HttpServletRequest request, String code, String message) {
+        request.setAttribute("auth.error.code", code);
+        request.setAttribute("auth.error.message", message);
+    }
+
+    private void writeAuthError(HttpServletResponse response, HttpServletRequest request) throws IOException {
+        String code = String.valueOf(request.getAttribute("auth.error.code"));
+        if (code == null || code.isBlank() || "null".equals(code)) {
+            code = "UNAUTHORIZED";
+        }
+        String message = String.valueOf(request.getAttribute("auth.error.message"));
+        if (message == null || message.isBlank() || "null".equals(message)) {
+            message = "No autenticado";
+        }
+
+        String body = String.format(
+            "{\"success\":false,\"error\":{\"code\":\"%s\",\"message\":\"%s\"}}",
+            code,
+            message.replace("\"", "\\\"")
+        );
+        response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+        response.setCharacterEncoding(StandardCharsets.UTF_8.name());
+        response.setContentType("application/json");
+        response.getWriter().write(body);
     }
 }

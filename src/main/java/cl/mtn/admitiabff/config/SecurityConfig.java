@@ -1,5 +1,8 @@
 package cl.mtn.admitiabff.config;
 
+import jakarta.servlet.http.HttpServletResponse;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.List;
 import org.springframework.beans.factory.annotation.Value;
@@ -33,6 +36,12 @@ public class SecurityConfig {
             .cors(cors -> cors.configurationSource(corsConfigurationSource()))
             .csrf(csrf -> csrf.disable())
             .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+            .exceptionHandling(exceptions -> exceptions
+                .authenticationEntryPoint((request, response, authException) ->
+                    writeJsonError(response, HttpServletResponse.SC_UNAUTHORIZED, "UNAUTHORIZED", "No autenticado"))
+                .accessDeniedHandler((request, response, accessDeniedException) ->
+                    writeJsonError(response, HttpServletResponse.SC_FORBIDDEN, "FORBIDDEN", "Acceso denegado"))
+            )
             .authorizeHttpRequests(auth -> auth
                 .requestMatchers("/health", "/ready", "/gateway/status").permitAll()
                 // Endpoints de auth abiertos (login/logout/refresh deben ser accesibles sin Bearer válido)
@@ -62,5 +71,17 @@ public class SecurityConfig {
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
         source.registerCorsConfiguration("/**", configuration);
         return source;
+    }
+
+    private static void writeJsonError(HttpServletResponse response, int status, String code, String message) throws IOException {
+        String body = String.format(
+            "{\"success\":false,\"error\":{\"code\":\"%s\",\"message\":\"%s\"}}",
+            code,
+            message.replace("\"", "\\\"")
+        );
+        response.setStatus(status);
+        response.setCharacterEncoding(StandardCharsets.UTF_8.name());
+        response.setContentType("application/json");
+        response.getWriter().write(body);
     }
 }
