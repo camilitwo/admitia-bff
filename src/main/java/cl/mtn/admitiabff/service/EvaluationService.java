@@ -92,48 +92,71 @@ public class EvaluationService {
     public Map<String, Object> myEvaluations() {
         AuthService.AuthContextHolder auth = authService.requireAuth();
         Long userId = auth.id();
+        List<EvaluationEntity> assignedEvaluations = evaluationRepository.findByEvaluatorIdOrderByCreatedAtDesc(userId);
         List<Map<String, Object>> evaluations = new java.util.ArrayList<>(
-            evaluationRepository.findByEvaluatorIdOrderByCreatedAtDesc(userId).stream()
-                .map(this::toResponse).toList()
+            assignedEvaluations.stream().map(this::toResponse).toList()
         );
+        java.util.Set<String> addedKeys = new java.util.LinkedHashSet<>();
+        assignedEvaluations.forEach(evaluation -> {
+            String key = evaluationKey(
+                evaluation.getApplication() == null ? null : evaluation.getApplication().getId(),
+                evaluation.getEvaluationType()
+            );
+            if (key != null) addedKeys.add(key);
+        });
         List<InterviewStatus> excluded = List.of(InterviewStatus.CANCELLED, InterviewStatus.RESCHEDULED);
         interviewRepository.findVisibleForInterviewer(userId, excluded).stream()
-            .map(this::interviewToEvaluationResponse)
-            .forEach(evaluations::add);
+            .forEach(interview -> addLinkedInterviewEvaluations(evaluations, addedKeys, interview));
         return Map.of("success", true, "data", evaluations, "count", evaluations.size());
     }
 
-    private Map<String, Object> interviewToEvaluationResponse(cl.mtn.admitiabff.domain.interview.InterviewEntity entity) {
-        String evaluationType = mapInterviewTypeToEvaluationType(entity.getInterviewType());
-        Map<String, Object> response = new LinkedHashMap<>();
-        response.put("id", entity.getId());
-        response.put("applicationId", entity.getApplication() == null ? null : entity.getApplication().getId());
-        response.put("evaluatorId", entity.getInterviewer() == null ? null : entity.getInterviewer().getId());
+    private void addLinkedInterviewEvaluations(
+        List<Map<String, Object>> evaluations,
+        java.util.Set<String> addedKeys,
+        cl.mtn.admitiabff.domain.interview.InterviewEntity interview
+    ) {
+        Long applicationId = interview.getApplication() == null ? null : interview.getApplication().getId();
+        if (applicationId == null) return;
+
+        for (String evaluationType : mapInterviewTypesToEvaluationTypes(interview.getInterviewType())) {
+            String key = evaluationKey(applicationId, evaluationType);
+            if (key == null || addedKeys.contains(key)) continue;
+
+            evaluationRepository.findByApplicationIdAndEvaluationType(applicationId, evaluationType)
+                .ifPresent(evaluation -> {
+                    Map<String, Object> response = new LinkedHashMap<>(toResponse(evaluation));
+                    applyInterviewMetadata(response, interview, evaluationType);
+                    evaluations.add(response);
+                    addedKeys.add(key);
+                });
+        }
+    }
+
+    private void applyInterviewMetadata(
+        Map<String, Object> response,
+        cl.mtn.admitiabff.domain.interview.InterviewEntity interview,
+        String evaluationType
+    ) {
+        response.put("interviewId", interview.getId());
+        response.put("interviewType", interview.getInterviewType());
         response.put("evaluationType", evaluationType);
-        response.put("type", entity.getInterviewType());
-        response.put("status", entity.getStatus().name());
-        response.put("scheduledDate", entity.getScheduledDate());
-        response.put("evaluationDate", entity.getScheduledDate() != null && entity.getScheduledTime() != null
-            ? entity.getScheduledDate().atTime(entity.getScheduledTime()) : null);
-        response.put("score", null);
-        response.put("maxScore", null);
-        response.put("observations", entity.getNotes());
-        response.put("recommendations", null);
-        response.put("createdAt", entity.getCreatedAt());
-        response.put("updatedAt", entity.getUpdatedAt());
-        response.put("completedAt", null);
-        if (entity.getApplication() != null) {
-            response.put("application", applicationMap(entity.getApplication()));
-            if (entity.getApplication().getStudent() != null) {
-                var student = entity.getApplication().getStudent();
-                response.put("studentName", student.getFirstName() + " " + student.getPaternalLastName() + " " + student.getMaternalLastName());
-                response.put("gradeApplied", student.getGradeApplied());
-            }
+        response.put("type", evaluationType);
+        response.put("scheduledDate", interview.getScheduledDate());
+        if (response.get("evaluationDate") == null && interview.getScheduledDate() != null && interview.getScheduledTime() != null) {
+            response.put("evaluationDate", interview.getScheduledDate().atTime(interview.getScheduledTime()));
         }
-        if (entity.getInterviewer() != null) {
-            response.put("evaluator", evaluatorMap(entity.getInterviewer()));
+        if (response.get("observations") == null) {
+            response.put("observations", interview.getNotes());
         }
-        return response;
+        if (interview.getInterviewer() != null) {
+            response.put("evaluatorId", interview.getInterviewer().getId());
+            response.put("evaluator", evaluatorMap(interview.getInterviewer()));
+        }
+        if (interview.getApplication() != null && interview.getApplication().getStudent() != null) {
+            var student = interview.getApplication().getStudent();
+            response.put("studentName", student.getFirstName() + " " + student.getPaternalLastName() + " " + student.getMaternalLastName());
+            response.put("gradeApplied", student.getGradeApplied());
+        }
     }
     public Map<String, Object> familyInterviewTemplate(String grade) { return Map.of("success", true, "data", Map.of("grade", grade, "sections", List.of("Historia familiar", "Motivación", "Rutinas", "Observaciones"))); }
     public Map<String, Object> get(Long id) { return toResponse(load(id)); }
@@ -431,13 +454,19 @@ public class EvaluationService {
 
     private String stringValue(Object value) { return value == null ? null : String.valueOf(value); }
 
-    private String mapInterviewTypeToEvaluationType(String interviewType) {
-        if (interviewType == null) return null;
+    private String evaluationKey(Long applicationId, String evaluationType) {
+        if (applicationId == null || evaluationType == null || evaluationType.isBlank()) return null;
+        return applicationId + ":" + evaluationType;
+    }
+
+    private List<String> mapInterviewTypesToEvaluationTypes(String interviewType) {
+        if (interviewType == null) return List.of();
         return switch (interviewType) {
-            case "FAMILY" -> "FAMILY_INTERVIEW";
-            case "CYCLE_DIRECTOR" -> "CYCLE_DIRECTOR_INTERVIEW";
-            case "PSYCHOLOGICAL" -> "PSYCHOLOGICAL_INTERVIEW";
-            default -> interviewType;
+            case "FAMILY" -> List.of("FAMILY_INTERVIEW");
+            case "CYCLE_DIRECTOR" -> List.of("CYCLE_DIRECTOR_INTERVIEW", "CYCLE_DIRECTOR_REPORT");
+            case "PSYCHOLOGICAL" -> List.of("PSYCHOLOGICAL_INTERVIEW");
+            default -> List.of(interviewType);
         };
     }
+
 }

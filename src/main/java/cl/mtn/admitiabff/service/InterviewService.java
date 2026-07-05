@@ -540,15 +540,34 @@ public class InterviewService {
     }
 
     private void createEvaluationIfNotExists(InterviewEntity interview, String evaluationType) {
-        boolean exists = evaluationRepository.findByApplicationIdAndEvaluationType(
-            interview.getApplication().getId(), evaluationType).isPresent();
-        if (exists) return;
+        var existing = evaluationRepository.findByApplicationIdAndEvaluationType(
+            interview.getApplication().getId(), evaluationType);
+        if (existing.isPresent()) {
+            EvaluationEntity evaluation = existing.get();
+            boolean changed = applyInterviewAssignment(evaluation, interview);
+            if (changed) evaluationRepository.save(evaluation);
+            return;
+        }
 
         EvaluationEntity evaluation = new EvaluationEntity();
         evaluation.setApplication(interview.getApplication());
         evaluation.setEvaluationType(evaluationType);
         evaluation.setStatus(EvaluationStatus.PENDING);
+        applyInterviewAssignment(evaluation, interview);
         evaluationRepository.save(evaluation);
+    }
+
+    private boolean applyInterviewAssignment(EvaluationEntity evaluation, InterviewEntity interview) {
+        boolean changed = false;
+        if (evaluation.getEvaluator() == null && interview.getInterviewer() != null) {
+            evaluation.setEvaluator(interview.getInterviewer());
+            changed = true;
+        }
+        if (evaluation.getEvaluationDate() == null && interview.getScheduledDate() != null && interview.getScheduledTime() != null) {
+            evaluation.setEvaluationDate(interview.getScheduledDate().atTime(interview.getScheduledTime()));
+            changed = true;
+        }
+        return changed;
     }
 
     private String resolveParentNames(InterviewEntity entity) {
