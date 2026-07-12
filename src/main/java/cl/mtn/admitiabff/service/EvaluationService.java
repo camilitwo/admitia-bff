@@ -190,6 +190,7 @@ public class EvaluationService {
         entity.setMaxScore(decimalValue(payload.get("maxScore")));
         entity.setRecommendations(stringValue(payload.get("recommendations")));
         entity.setObservations(stringValue(payload.getOrDefault("observations", payload.get("comments"))));
+        entity.setAreasForImprovement(stringValue(payload.get("areasForImprovement")));
         entity.setCompletedAt(LocalDateTime.now());
         return Map.of("success", true, "message", "Evaluación completada", "data", toResponse(evaluationRepository.save(entity)));
     }
@@ -326,6 +327,7 @@ public class EvaluationService {
         entity.setMaxScore(decimalValue(payload.getOrDefault("maxScore", entity.getMaxScore())));
         entity.setRecommendations(stringValue(payload.getOrDefault("recommendations", entity.getRecommendations())));
         entity.setObservations(stringValue(payload.getOrDefault("observations", entity.getObservations())));
+        entity.setAreasForImprovement(stringValue(payload.getOrDefault("areasForImprovement", entity.getAreasForImprovement())));
 
         if (entity.getEvaluator() != null) {
             validateEvaluatorSubject(entity, entity.getEvaluator());
@@ -355,6 +357,7 @@ public class EvaluationService {
         response.put("maxScore", entity.getMaxScore());
         response.put("recommendations", entity.getRecommendations());
         response.put("observations", entity.getObservations());
+        response.put("areasForImprovement", entity.getAreasForImprovement());
         response.put("createdAt", entity.getCreatedAt());
         response.put("updatedAt", entity.getUpdatedAt());
         response.put("completedAt", entity.getCompletedAt());
