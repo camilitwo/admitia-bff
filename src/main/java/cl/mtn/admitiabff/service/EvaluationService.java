@@ -182,6 +182,7 @@ public class EvaluationService {
         return Map.of("success", true, "message", "Evaluación eliminada correctamente");
     }
 
+    // Fix: persistir areasForImprovement al completar evaluacion
     @Transactional
     public Map<String, Object> complete(Long id, Map<String, Object> payload) {
         EvaluationEntity entity = load(id);
