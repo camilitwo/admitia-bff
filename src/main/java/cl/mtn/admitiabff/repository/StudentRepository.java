@@ -11,6 +11,9 @@ import org.springframework.data.repository.query.Param;
 
 public interface StudentRepository extends JpaRepository<StudentEntity, Long> {
     Optional<StudentEntity> findByRut(String rut);
+
+    @Query("SELECT COUNT(s) > 0 FROM StudentEntity s WHERE UPPER(REPLACE(REPLACE(s.rut, '.', ''), '-', '')) = UPPER(REPLACE(REPLACE(:rut, '.', ''), '-', ''))")
+    boolean existsByNormalizedRut(@Param("rut") String rut);
     List<StudentEntity> findByGradeAppliedOrderByFirstNameAscPaternalLastNameAsc(String grade);
     @Query("select s from StudentEntity s where lower(s.firstName) like lower(concat('%', :term, '%')) or lower(coalesce(s.paternalLastName,'')) like lower(concat('%', :term, '%')) or lower(coalesce(s.maternalLastName,'')) like lower(concat('%', :term, '%')) or lower(coalesce(s.rut,'')) like lower(concat('%', :term, '%'))")
     List<StudentEntity> search(@Param("term") String term, Pageable pageable);

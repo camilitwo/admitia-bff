@@ -40,5 +40,6 @@ public class ApplicationsController {
     /** Alias esperado por el front: equivalente a Node PATCH /api/applications/:id/status con status APPROVED|REJECTED. */
     @PostMapping("/{id}/final-decision") public Map<String, Object> finalDecision(@PathVariable Long id, @RequestBody Map<String, Object> payload) { return applicationService.recordFinalDecision(id, payload); }
     @PostMapping("/cache/clear") public Map<String, Object> clearCache() { return applicationService.clearCache(); }
+    @GetMapping("/debug/list-info") public Map<String, Object> listDebug() { return applicationService.listDebug(); }
     @GetMapping("/debug/system-info") public Map<String, Object> systemInfo() { return applicationService.systemInfo(); }
 }

@@ -39,3 +39,4 @@ Thumbs.db
 
 # Firebase service account (NEVER commit)
 /src/main/resources/firebase-service-account.json
+.gstack/

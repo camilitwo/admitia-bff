@@ -94,7 +94,7 @@ public class GuardianService {
 
     private void enforceAccess(Long userId) {
         AuthService.AuthContextHolder auth = authService.requireAuth();
-        if ("ADMIN".equals(auth.role()) || "COORDINATOR".equals(auth.role())) {
+        if (authService.hasAnyRoleContext(auth, Role.ADMIN, Role.COORDINATOR)) {
             return;
         }
         if (!Role.APODERADO.name().equals(auth.role()) || userId == null || !userId.equals(auth.id())) {

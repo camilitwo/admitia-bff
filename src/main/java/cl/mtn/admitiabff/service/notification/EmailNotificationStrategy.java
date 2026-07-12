@@ -6,19 +6,29 @@ import cl.mtn.admitiabff.domain.notification.NotificationEntity;
 import cl.mtn.admitiabff.util.JsonSupport;
 import java.time.LocalDateTime;
 import java.util.Map;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.mail.SimpleMailMessage;
-import org.springframework.mail.javamail.JavaMailSender;
 import org.springframework.stereotype.Component;
 
+/**
+ * Single email channel: Resend.
+ * <p>Internal use only by {@code NotificationService} / {@code EmailComposerService}.
+ * Other services must NOT inject this class directly: the only public entry
+ * point for sending emails with templates is {@code EmailComposerService}.
+ */
 @Component
 public class EmailNotificationStrategy implements NotificationChannelStrategy {
-    private final JavaMailSender mailSender;
+    private static final Logger log = LoggerFactory.getLogger(EmailNotificationStrategy.class);
+
+    private final ResendEmailSender resendEmailSender;
     private final JsonSupport jsonSupport;
     private final boolean mockMode;
 
-    public EmailNotificationStrategy(JavaMailSender mailSender, JsonSupport jsonSupport, @Value("${app.email.mock-mode}") boolean mockMode) {
-        this.mailSender = mailSender;
+    public EmailNotificationStrategy(ResendEmailSender resendEmailSender,
+                                     JsonSupport jsonSupport,
+                                     @Value("${app.email.mock-mode:false}") boolean mockMode) {
+        this.resendEmailSender = resendEmailSender;
         this.jsonSupport = jsonSupport;
         this.mockMode = mockMode;
     }
@@ -38,6 +48,7 @@ public class EmailNotificationStrategy implements NotificationChannelStrategy {
         entity.setType(String.valueOf(payload.getOrDefault("type", "EMAIL")));
         entity.setSubject((String) payload.get("subject"));
         entity.setMessage((String) payload.get("message"));
+        //TODO replace template html
         entity.setTemplateName((String) payload.get("templateName"));
         entity.setTemplateData(jsonSupport.write(payload.getOrDefault("templateData", Map.of())));
         entity.setStatus(NotificationStatus.SENT);
@@ -48,12 +59,16 @@ public class EmailNotificationStrategy implements NotificationChannelStrategy {
     @Override
     public void dispatch(NotificationEntity notification) {
         if (mockMode) {
+            log.info("[MOCK] Email a {} - {}", notification.getRecipient(), notification.getSubject());
             return;
         }
-        SimpleMailMessage message = new SimpleMailMessage();
-        message.setTo(notification.getRecipient());
-        message.setSubject(notification.getSubject());
-        message.setText(notification.getMessage());
-        mailSender.send(message);
+        try {
+            resendEmailSender.send(notification.getRecipient(), notification.getSubject(), notification.getMessage());
+        } catch (Exception ex) {
+            log.error("Error enviando email a {}: {}", notification.getRecipient(), ex.getMessage(), ex);
+            notification.setStatus(NotificationStatus.FAILED);
+            throw new RuntimeException("Error enviando email: " + ex.getMessage(), ex);
+        }
     }
 }
+

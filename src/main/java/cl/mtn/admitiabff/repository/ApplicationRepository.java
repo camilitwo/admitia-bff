@@ -107,4 +107,6 @@ public interface ApplicationRepository extends JpaRepository<ApplicationEntity, 
 
     @Query("select a from ApplicationEntity a where a.deletedAt is null and a.createdAt between :start and :end")
     List<ApplicationEntity> findBetween(@Param("start") LocalDateTime start, @Param("end") LocalDateTime end);
+
+    boolean existsByStudentIdAndDeletedAtIsNull(Long studentId);
 }

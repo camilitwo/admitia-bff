@@ -4,8 +4,11 @@ import cl.mtn.admitiabff.domain.application.ApplicationEntity;
 import cl.mtn.admitiabff.domain.application.ComplementaryFormEntity;
 import cl.mtn.admitiabff.domain.common.ApplicationStatus;
 import cl.mtn.admitiabff.domain.common.DocumentApprovalStatus;
+import cl.mtn.admitiabff.domain.common.PaymentStatus;
 import cl.mtn.admitiabff.domain.common.Role;
 import cl.mtn.admitiabff.domain.document.DocumentEntity;
+import cl.mtn.admitiabff.domain.email.EmailRequestDTO;
+import cl.mtn.admitiabff.domain.notification.EmailTemplate;
 import cl.mtn.admitiabff.domain.person.GuardianEntity;
 import cl.mtn.admitiabff.domain.person.ParentEntity;
 import cl.mtn.admitiabff.domain.person.SupporterEntity;
@@ -15,6 +18,7 @@ import cl.mtn.admitiabff.repository.ApplicationRepository;
 import cl.mtn.admitiabff.repository.ComplementaryFormRepository;
 import cl.mtn.admitiabff.repository.DocumentRepository;
 import cl.mtn.admitiabff.repository.EvaluationRepository;
+import cl.mtn.admitiabff.repository.GradeAvailabilityRepository;
 import cl.mtn.admitiabff.repository.GuardianRepository;
 import cl.mtn.admitiabff.repository.InterviewRepository;
 import cl.mtn.admitiabff.repository.ParentRepository;
@@ -23,6 +27,7 @@ import cl.mtn.admitiabff.repository.SupporterRepository;
 import cl.mtn.admitiabff.repository.UserRepository;
 import cl.mtn.admitiabff.util.CsvUtils;
 import cl.mtn.admitiabff.util.JsonSupport;
+import cl.mtn.admitiabff.util.TemplateUtils;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.LinkedHashMap;
@@ -59,10 +64,13 @@ public class ApplicationService {
     private final InterviewRepository interviewRepository;
     private final AuthService authService;
     private final NotificationService notificationService;
+    private final cl.mtn.admitiabff.service.notification.EmailComposerService emailComposerService;
     private final JsonSupport jsonSupport;
     private final String uploadsDir;
+    @org.springframework.beans.factory.annotation.Autowired
+    private GradeAvailabilityRepository gradeAvailabilityRepository;
 
-    public ApplicationService(ApplicationRepository applicationRepository, StudentRepository studentRepository, ParentRepository parentRepository, GuardianRepository guardianRepository, SupporterRepository supporterRepository, UserRepository userRepository, DocumentRepository documentRepository, ComplementaryFormRepository complementaryFormRepository, EvaluationRepository evaluationRepository, InterviewRepository interviewRepository, AuthService authService, NotificationService notificationService, JsonSupport jsonSupport, @Value("${app.uploads-dir}") String uploadsDir) {
+    public ApplicationService(ApplicationRepository applicationRepository, StudentRepository studentRepository, ParentRepository parentRepository, GuardianRepository guardianRepository, SupporterRepository supporterRepository, UserRepository userRepository, DocumentRepository documentRepository, ComplementaryFormRepository complementaryFormRepository, EvaluationRepository evaluationRepository, InterviewRepository interviewRepository, AuthService authService, NotificationService notificationService, cl.mtn.admitiabff.service.notification.EmailComposerService emailComposerService, JsonSupport jsonSupport, @Value("${app.uploads-dir}") String uploadsDir) {
         this.applicationRepository = applicationRepository;
         this.studentRepository = studentRepository;
         this.parentRepository = parentRepository;
@@ -75,6 +83,7 @@ public class ApplicationService {
         this.interviewRepository = interviewRepository;
         this.authService = authService;
         this.notificationService = notificationService;
+        this.emailComposerService = emailComposerService;
         this.jsonSupport = jsonSupport;
         this.uploadsDir = uploadsDir;
     }
@@ -111,7 +120,8 @@ public class ApplicationService {
 
     public Map<String, Object> list(Integer page, Integer size, String status, String gradeApplying, String search) {
         Page<ApplicationEntity> result = applicationRepository.search(parseStatus(status), emptyToNull(gradeApplying), emptyToNull(search), PageRequest.of(page == null ? 0 : page, size == null ? 15 : size));
-        return pageResponse(result.map(this::toSummaryResponse));
+        List<Map<String, Object>> data = result.getContent().stream().map(this::toDataTableResponse).toList();
+        return Map.of("success", true, "count", result.getTotalElements(), "data", data);
     }
 
     public Map<String, Object> recent(int limit) {
@@ -180,6 +190,13 @@ public class ApplicationService {
     public Map<String, Object> create(Map<String, Object> payload) {
         ApplicationEntity entity = new ApplicationEntity();
         entity.setStudent(resolveStudent(payload));
+
+        // Validar vacante disponible para el nivel seleccionado
+        String gradeApplied = entity.getStudent().getGradeApplied();
+        if (gradeApplied != null && !gradeAvailabilityRepository.existsByGradeLevelAndHasVacancyTrue(gradeApplied)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "No hay vacantes disponibles para el nivel seleccionado: " + gradeApplied);
+        }
+
         entity.setFather(resolveParent(payload, "father", "parent1", "FATHER", true));
         entity.setMother(resolveParent(payload, "mother", "parent2", "MOTHER", false));
         entity.setGuardian(resolveGuardian(payload));
@@ -197,6 +214,10 @@ public class ApplicationService {
         ApplicationEntity entity = load(id);
         if (payload.containsKey("status")) entity.setStatus(parseStatus(value(payload.get("status"))));
         if (payload.containsKey("notes")) entity.setNotes(value(payload.get("notes")));
+        if (payload.containsKey("studentGender")) {
+            StudentEntity student = entity.getStudent();
+            student.setGender(value(payload.get("studentGender")));
+        }
         return Map.of("success", true, "message", "Postulación actualizada correctamente", "data", toFullResponse(applicationRepository.save(entity)));
     }
 
@@ -218,7 +239,7 @@ public class ApplicationService {
         var auth = authService.requireAuth();
         log.info("[final-decision] applicationId={} requested by userId={} email={} role={}",
             id, auth.id(), auth.email(), auth.role());
-        if (!Role.ADMIN.name().equals(auth.role()) && !Role.COORDINATOR.name().equals(auth.role())) {
+        if (!authService.hasAnyRoleContext(auth, Role.ADMIN, Role.COORDINATOR)) {
             log.warn("[final-decision] DENIED applicationId={} role={} (need ADMIN or COORDINATOR)", id, auth.role());
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Solo administradores o coordinadores pueden registrar la decisión final");
         }
@@ -246,11 +267,35 @@ public class ApplicationService {
         ApplicationEntity saved = applicationRepository.save(entity);
 
         try {
-            notificationService.institutional(
-                "STATUS_UPDATE",
-                id,
-                Map.of("newStatus", newStatus.name(), "notes", noteOrEmpty == null ? "" : noteOrEmpty)
-            );
+            String to = saved.getApplicantUser() != null && saved.getApplicantUser().getEmail() != null
+                    ? saved.getApplicantUser().getEmail()
+                    : null;
+            if (to != null && !to.isBlank()) {
+                String studentName = saved.getStudent() != null
+                        ? (safe(saved.getStudent().getFirstName()) + " "
+                                + safe(saved.getStudent().getPaternalLastName())).trim()
+                        : "";
+                String parentNames = resolveParentNamesForEmail(saved);
+                String prevStatus = entity.getStatus() != null ? entity.getStatus().name() : "";
+                Map<String, Object> data = new LinkedHashMap<>();
+                data.put("applicationId", id);
+                data.put("studentName", studentName);
+                data.put("parentNames", parentNames.isBlank() ? "apoderado/a" : parentNames);
+                data.put("previousStatus", prevStatus);
+                data.put("currentStatus", newStatus.name());
+                data.put("message", noteOrEmpty == null ? "" : noteOrEmpty);
+
+                emailComposerService.send(EmailRequestDTO.builder()
+                        .template(TemplateUtils.generateTemplate(EmailTemplate.STATUS_UPDATE.name(), data))
+                        .to(to)
+                        .subject(EmailTemplate.STATUS_UPDATE.getDefaultSubject())
+                        .recipientType("APPLICATION")
+                        .recipientId(id)
+                        .data(data)
+                        .build());
+            } else {
+                log.warn("[final-decision] sin email destinatario para applicationId={}", id);
+            }
         } catch (Exception e) {
             log.warn("[final-decision] Notificación STATUS_UPDATE no enviada para applicationId={}: {}", id, e.getMessage());
         }
@@ -307,6 +352,9 @@ public class ApplicationService {
     @Transactional
     public Map<String, Object> upsertComplementaryForm(Long applicationId, Map<String, Object> payload) {
         ApplicationEntity application = load(applicationId);
+        if (application.isPaymentRequired() && application.getPaymentStatus() != PaymentStatus.PAID) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Debe pagar la postulación antes de completar el formulario complementario");
+        }
         ComplementaryFormEntity form = complementaryFormRepository.findByApplicationId(applicationId).orElseGet(() -> {
             ComplementaryFormEntity entity = new ComplementaryFormEntity();
             entity.setApplication(application);
@@ -328,6 +376,19 @@ public class ApplicationService {
         return Map.of("success", true, "message", "El monolito no usa caché distribuido para postulaciones");
     }
 
+    public Map<String, Object> listDebug() {
+        long total = applicationRepository.countByDeletedAtIsNull();
+        long active = applicationRepository.findAllActive(PageRequest.of(0, 1)).getTotalElements();
+        long archived = applicationRepository.countByDeletedAtIsNull() - active;
+
+        return Map.of("success", true, "data", Map.of(
+            "totalWithoutDeletedAt", total,
+            "totalActive(notArchived)", active,
+            "totalArchived", archived,
+            "query", "Esto muestra si hay datos que están siendo excluidos por is_archived=true"
+        ));
+    }
+
     public Map<String, Object> systemInfo() {
         java.nio.file.Path path = java.nio.file.Path.of(uploadsDir).toAbsolutePath();
         return Map.of("success", true, "data", Map.of("uploadsDir", path.toString(), "exists", java.nio.file.Files.exists(path), "writable", java.nio.file.Files.isWritable(path)));
@@ -347,12 +408,21 @@ public class ApplicationService {
         student.setFirstName(firstNonNull(source.get("firstName"), payload.get("firstName"), payload.get("studentFirstName")));
         student.setPaternalLastName(firstNonNull(source.get("paternalLastName"), payload.get("paternalLastName"), payload.get("studentPaternalLastName")));
         student.setMaternalLastName(firstNonNull(source.get("maternalLastName"), payload.get("maternalLastName"), payload.get("studentMaternalLastName")));
-        student.setRut(firstNonNull(source.get("rut"), payload.get("rut"), payload.get("studentRUT"), payload.get("studentRut")));
+        String rut = firstNonNull(source.get("rut"), payload.get("rut"), payload.get("studentRUT"), payload.get("studentRut"));
+        student.setRut(rut);
+
+        if (rut != null) {
+            var existingStudent = studentRepository.findByRut(rut);
+            if (existingStudent.isPresent() && applicationRepository.existsByStudentIdAndDeletedAtIsNull(existingStudent.get().getId())) {
+                throw new IllegalStateException("Ya existe una postulación activa para el RUT " + rut);
+            }
+        }
+
         student.setBirthDate(parseDate(firstNonNullRaw(source.get("birthDate"), payload.get("birthDate"), payload.get("studentDateOfBirth"), payload.get("studentBirthDate"))));
         student.setEmail(firstNonNull(source.get("email"), payload.get("studentEmail")));
         student.setAddress(firstNonNull(source.get("address"), payload.get("studentAddress")));
         student.setGradeApplied(firstNonNull(source.get("gradeApplied"), payload.get("grade"), payload.get("gradeApplied"), payload.get("gradeAppliedFor")));
-        student.setTargetSchool(firstNonNull(source.get("targetSchool"), payload.get("schoolApplied"), payload.get("targetSchool"), payload.get("studentAdmissionPreference")));
+        student.setGender(mapTargetSchoolToGender(firstNonNull(source.get("targetSchool"), payload.get("schoolApplied"), payload.get("targetSchool"), payload.get("studentAdmissionPreference"))));
         student.setCurrentSchool(firstNonNull(source.get("currentSchool"), payload.get("currentSchool"), payload.get("studentCurrentSchool")));
         student.setSpecialNeeds(booleanValue(source.getOrDefault("specialNeeds", false)));
         student.setSpecialNeedsDescription(value(source.get("specialNeedsDescription")));
@@ -446,6 +516,90 @@ public class ApplicationService {
         );
     }
 
+    private Map<String, Object> toDataTableResponse(ApplicationEntity entity) {
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("id", entity.getId());
+        response.put("status", entity.getStatus().name());
+        response.put("submissionDate", entity.getSubmissionDate());
+
+        // Student data - completo
+        Map<String, Object> studentMap = new LinkedHashMap<>();
+        StudentEntity student = entity.getStudent();
+        studentMap.put("id", student.getId());
+        studentMap.put("firstName", student.getFirstName());
+        studentMap.put("lastName", (value(student.getPaternalLastName()) + " " + value(student.getMaternalLastName())).trim());
+        studentMap.put("paternalLastName", value(student.getPaternalLastName()));
+        studentMap.put("maternalLastName", value(student.getMaternalLastName()));
+        studentMap.put("rut", student.getRut());
+        studentMap.put("birthDate", student.getBirthDate());
+        studentMap.put("email", student.getEmail());
+        studentMap.put("address", student.getAddress());
+        studentMap.put("gradeApplied", student.getGradeApplied());
+        studentMap.put("currentSchool", student.getCurrentSchool());
+        studentMap.put("gender", student.getGender());
+        studentMap.put("additionalNotes", student.getAdditionalNotes());
+        studentMap.put("isEmployeeChild", student.isEmployeeChild());
+        studentMap.put("employeeParentName", student.getEmployeeParentName());
+        studentMap.put("isAlumniChild", student.isAlumniChild());
+        studentMap.put("alumniParentYear", student.getAlumniParentYear());
+        studentMap.put("isInclusionStudent", student.isInclusionStudent());
+        studentMap.put("inclusionType", student.getInclusionType());
+        studentMap.put("inclusionNotes", student.getInclusionNotes());
+        response.put("student", studentMap);
+
+        // Father
+        if (entity.getFather() != null) {
+            Map<String, Object> fatherMap = new LinkedHashMap<>();
+            fatherMap.put("fullName", entity.getFather().getFullName());
+            fatherMap.put("rut", entity.getFather().getRut());
+            fatherMap.put("email", value(entity.getFather().getEmail()));
+            fatherMap.put("phone", value(entity.getFather().getPhone()));
+            fatherMap.put("address", value(entity.getFather().getAddress()));
+            fatherMap.put("profession", value(entity.getFather().getProfession()));
+            response.put("father", fatherMap);
+        }
+
+        // Mother
+        if (entity.getMother() != null) {
+            Map<String, Object> motherMap = new LinkedHashMap<>();
+            motherMap.put("fullName", entity.getMother().getFullName());
+            motherMap.put("rut", entity.getMother().getRut());
+            motherMap.put("email", value(entity.getMother().getEmail()));
+            motherMap.put("phone", value(entity.getMother().getPhone()));
+            motherMap.put("address", value(entity.getMother().getAddress()));
+            motherMap.put("profession", value(entity.getMother().getProfession()));
+            response.put("mother", motherMap);
+        }
+
+        // Guardian
+        if (entity.getGuardian() != null) {
+            Map<String, Object> guardianMap = new LinkedHashMap<>();
+            guardianMap.put("fullName", entity.getGuardian().getFullName());
+            guardianMap.put("email", value(entity.getGuardian().getEmail()));
+            guardianMap.put("phone", value(entity.getGuardian().getPhone()));
+            guardianMap.put("relationship", value(entity.getGuardian().getRelationship()));
+            response.put("guardian", guardianMap);
+        }
+
+        // Documents - lista simplificada
+        List<DocumentEntity> docs = documentRepository.findByApplicationIdOrderByUploadDateDesc(entity.getId());
+        List<Map<String, Object>> documentsArray = docs.stream().map(d -> {
+            Map<String, Object> doc = new LinkedHashMap<>();
+            doc.put("id", d.getId());
+            doc.put("type", d.getDocumentType());
+            doc.put("status", d.getApprovalStatus().name());
+            return doc;
+        }).toList();
+        response.put("documents", documentsArray);
+
+        // Applicant user
+        if (entity.getApplicantUser() != null) {
+            response.put("applicantUser", Map.of("email", entity.getApplicantUser().getEmail()));
+        }
+
+        return response;
+    }
+
     private Map<String, Object> toSummaryResponse(ApplicationEntity entity) {
         Map<String, Object> response = new LinkedHashMap<>();
         response.put("id", entity.getId());
@@ -456,6 +610,11 @@ public class ApplicationService {
         response.put("guardianId", entity.getGuardian() == null ? null : entity.getGuardian().getId());
         response.put("applicantUserId", entity.getApplicantUser() == null ? null : entity.getApplicantUser().getId());
         response.put("status", entity.getStatus().name());
+        response.put("paymentStatus", entity.getPaymentStatus().name());
+        response.put("paymentRequired", entity.isPaymentRequired());
+        response.put("paidAt", entity.getPaidAt());
+        response.put("canFillComplementaryForm", !entity.isPaymentRequired() || entity.getPaymentStatus() == PaymentStatus.PAID);
+        response.put("hasComplementaryForm", complementaryFormRepository.existsByApplicationIdAndSubmittedTrue(entity.getId()));
         response.put("submissionDate", entity.getSubmissionDate());
         response.put("createdAt", entity.getCreatedAt());
         response.put("updatedAt", entity.getUpdatedAt());
@@ -471,9 +630,16 @@ public class ApplicationService {
         studentMap.put("gradeApplied", entity.getStudent().getGradeApplied());
         studentMap.put("grade", entity.getStudent().getGradeApplied());
         studentMap.put("currentSchool", entity.getStudent().getCurrentSchool());
+        studentMap.put("address", entity.getStudent().getAddress());
+        studentMap.put("email", entity.getStudent().getEmail());
+        studentMap.put("additionalNotes", entity.getStudent().getAdditionalNotes());
+        studentMap.put("pais", entity.getStudent().getPais());
+        studentMap.put("region", entity.getStudent().getRegion());
+        studentMap.put("comuna", entity.getStudent().getComuna());
+        studentMap.put("admissionPreference", entity.getStudent().getAdmissionPreference());
         studentMap.put("specialNeeds", entity.getStudent().isSpecialNeeds());
         studentMap.put("specialNeedsDescription", entity.getStudent().getSpecialNeedsDescription());
-        studentMap.put("targetSchool", entity.getStudent().getTargetSchool());
+        studentMap.put("gender", entity.getStudent().getGender());
         response.put("student", studentMap);
         if (entity.getGuardian() != null) {
             Map<String, Object> guardianMap = new LinkedHashMap<>();
@@ -601,4 +767,24 @@ public class ApplicationService {
     private boolean booleanValue(Object value) { return value instanceof Boolean b ? b : Boolean.parseBoolean(String.valueOf(value)); }
     private Integer integerValue(Object value) { return value == null || String.valueOf(value).isBlank() ? null : value instanceof Number n ? n.intValue() : Integer.parseInt(String.valueOf(value)); }
     private LocalDate parseDate(Object value) { return value == null || String.valueOf(value).isBlank() ? null : value instanceof LocalDate date ? date : LocalDate.parse(String.valueOf(value)); }
+
+    private String mapTargetSchoolToGender(String targetSchool) {
+        if (targetSchool == null) return null;
+        return switch (targetSchool) {
+            case "MONTE_TABOR" -> "MALE";
+            case "NAZARET" -> "FEMALE";
+            default -> null;
+        };
+    }
+
+    private static String safe(String value) { return value == null ? "" : value; }
+
+    /** "JUAN PEREZ / PRUEBA MAMA" desde Father/Mother/Guardian. Retorna "" si no hay datos. */
+    private static String resolveParentNamesForEmail(ApplicationEntity app) {
+        java.util.List<String> names = new java.util.ArrayList<>();
+        if (app.getFather() != null && app.getFather().getFullName() != null) names.add(app.getFather().getFullName());
+        if (app.getMother() != null && app.getMother().getFullName() != null) names.add(app.getMother().getFullName());
+        if (names.isEmpty() && app.getGuardian() != null && app.getGuardian().getFullName() != null) names.add(app.getGuardian().getFullName());
+        return names.isEmpty() ? "" : String.join(" / ", names);
+    }
 }

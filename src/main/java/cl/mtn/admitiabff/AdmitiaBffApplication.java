@@ -2,10 +2,12 @@ package cl.mtn.admitiabff;
 
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.boot.context.properties.ConfigurationPropertiesScan;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.transaction.annotation.EnableTransactionManagement;
 
 @SpringBootApplication
+@ConfigurationPropertiesScan
 @EnableTransactionManagement
 public class AdmitiaBffApplication {
     public static void main(String[] args) {

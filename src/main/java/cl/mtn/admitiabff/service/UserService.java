@@ -218,10 +218,46 @@ public class UserService {
         user.setEducationalLevel(stringValue(payload.getOrDefault("educationalLevel", user.getEducationalLevel())));
         user.setActive(Boolean.parseBoolean(String.valueOf(payload.getOrDefault("active", user.isActive() || creating))));
         user.setEmailVerified(Boolean.parseBoolean(String.valueOf(payload.getOrDefault("emailVerified", user.isEmailVerified()))));
-        Object password = payload.get("password");
-        if (creating || (password != null && !String.valueOf(password).isBlank())) {
-            user.setPasswordHash(authService.hashPassword(password == null || String.valueOf(password).isBlank() ? UUID.randomUUID().toString() : String.valueOf(password)));
+
+        // Enlace Firebase opcional (cirugía mínima):
+        // Si el cliente envía `firebaseIdToken` en la creación, validamos contra Firebase
+        // y enlazamos el UID. Replica el flujo de `AuthService.firebaseRegister` para que
+        // la creación desde el panel admin quede consistente con el auto-registro de
+        // apoderados:
+        //   - password_hash = "FIREBASE_MANAGED" (no se persiste contraseña local)
+        //   - firebase_uid extraído del token verificado (no del cliente, por seguridad)
+        //   - email_verified según lo reportado por Firebase
+        // Si NO viene el token, el comportamiento es idéntico al previo (bcrypt local),
+        // garantizando compatibilidad con cualquier integración existente.
+        Object firebaseIdTokenRaw = payload.get("firebaseIdToken");
+        boolean firebaseLinked = false;
+        if (creating && firebaseIdTokenRaw != null && !String.valueOf(firebaseIdTokenRaw).isBlank()) {
+            try {
+                com.google.firebase.auth.FirebaseToken decoded =
+                    com.google.firebase.auth.FirebaseAuth.getInstance().verifyIdToken(String.valueOf(firebaseIdTokenRaw));
+                String firebaseUid = decoded.getUid();
+                if (firebaseUid == null || firebaseUid.isBlank()) {
+                    throw new IllegalArgumentException("Token de Firebase sin uid");
+                }
+                user.setFirebaseUid(firebaseUid);
+                user.setPasswordHash("FIREBASE_MANAGED");
+                user.setEmailVerified(decoded.isEmailVerified());
+                firebaseLinked = true;
+            } catch (com.google.firebase.auth.FirebaseAuthException ex) {
+                throw new IllegalArgumentException("Token de Firebase inválido: " + ex.getMessage());
+            }
         }
+
+        // Solo aplicamos password local si NO se enlazó Firebase (evita pisar
+        // "FIREBASE_MANAGED" con un hash bcrypt). Comportamiento previo intacto
+        // para llamadas que no envían firebaseIdToken.
+        if (!firebaseLinked) {
+            Object password = payload.get("password");
+            if (creating || (password != null && !String.valueOf(password).isBlank())) {
+                user.setPasswordHash(authService.hashPassword(password == null || String.valueOf(password).isBlank() ? UUID.randomUUID().toString() : String.valueOf(password)));
+            }
+        }
+
         if (creating && user.getPreferencesJson() == null) {
             user.setPreferencesJson(jsonSupport.write(Map.of()));
         }

@@ -1,5 +1,6 @@
 package cl.mtn.admitiabff.controller;
 
+import cl.mtn.admitiabff.service.TokenService;
 import cl.mtn.admitiabff.util.ApiResponse;
 import java.util.Map;
 import org.slf4j.Logger;
@@ -37,6 +38,31 @@ public class ApiExceptionHandler {
         return ResponseEntity.status(HttpStatus.NOT_FOUND).body(ApiResponse.error("NOT_FOUND", ex.getMessage()));
     }
 
+    /**
+     * Errores específicos de refresh token: el front reconoce los códigos
+     * (ver SECURITY_TOKENS.md §4.8.1).
+     */
+    @ExceptionHandler(TokenService.InvalidRefreshException.class)
+    ResponseEntity<Map<String, Object>> handleInvalidRefresh(TokenService.InvalidRefreshException ex) {
+        return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(ApiResponse.error(ex.getCode(), ex.getMessage()));
+    }
+
+    /**
+     * Login bloqueado por email no verificado en Firebase. El front usa
+     * {@code error.code = "EMAIL_NOT_VERIFIED"} para mostrar el aviso y ofrecer
+     * el botón de "reenviar correo".
+     */
+    @ExceptionHandler(EmailNotVerifiedException.class)
+    ResponseEntity<Map<String, Object>> handleEmailNotVerified(EmailNotVerifiedException ex) {
+        Map<String, Object> body = ApiResponse.error("EMAIL_NOT_VERIFIED", ex.getMessage());
+        @SuppressWarnings("unchecked")
+        Map<String, Object> err = (Map<String, Object>) body.get("error");
+        if (ex.getEmail() != null) {
+            err.put("email", ex.getEmail());
+        }
+        return ResponseEntity.status(HttpStatus.FORBIDDEN).body(body);
+    }
+
     @ExceptionHandler(ResponseStatusException.class)
     ResponseEntity<Map<String, Object>> handleResponseStatus(ResponseStatusException ex) {
         HttpStatus status = HttpStatus.resolve(ex.getStatusCode().value());
@@ -48,6 +74,9 @@ public class ApiExceptionHandler {
             case FORBIDDEN -> "FORBIDDEN";
             case NOT_FOUND -> "NOT_FOUND";
             case UNAUTHORIZED -> "UNAUTHORIZED";
+            case CONFLICT -> "CONFLICT";
+            case TOO_MANY_REQUESTS -> "RATE_LIMITED";
+            case LOCKED -> "ACCOUNT_LOCKED";
             default -> "HTTP_ERROR";
         };
         return ResponseEntity.status(status).body(ApiResponse.error(code, reason));

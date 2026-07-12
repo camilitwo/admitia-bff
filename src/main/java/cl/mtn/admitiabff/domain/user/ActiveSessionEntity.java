@@ -40,4 +40,7 @@ public class ActiveSessionEntity {
 
     @Column(name = "ip_address")
     private String ipAddress;
+
+    @Column(name = "jti", length = 64)
+    private String jti;
 }

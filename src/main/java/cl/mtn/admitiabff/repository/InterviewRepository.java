@@ -13,9 +13,11 @@ public interface InterviewRepository extends JpaRepository<InterviewEntity, Long
     List<InterviewEntity> findAllByOrderByCreatedAtDesc();
     List<InterviewEntity> findByApplicationIdOrderByScheduledDateDesc(Long applicationId);
     long countByApplicationIdAndSummarySentTrue(Long applicationId);
-    @Query("select i from InterviewEntity i where (i.interviewer.id = :interviewerId or i.secondInterviewer.id = :interviewerId) and i.status not in :excluded order by i.scheduledDate, i.scheduledTime")
+    @Query("select i from InterviewEntity i left join i.secondInterviewer si where (i.interviewer.id = :interviewerId or si.id = :interviewerId) and i.status not in :excluded order by i.scheduledDate, i.scheduledTime")
     List<InterviewEntity> findVisibleForInterviewer(@Param("interviewerId") Long interviewerId, @Param("excluded") List<InterviewStatus> excluded);
     List<InterviewEntity> findByInterviewerIdAndScheduledDateAndStatusIn(Long interviewerId, LocalDate date, List<InterviewStatus> statuses);
+    @Query("select i from InterviewEntity i left join i.secondInterviewer si where (i.interviewer.id = :interviewerId or si.id = :interviewerId) and i.scheduledDate = :date and i.status not in :excluded")
+    List<InterviewEntity> findBlockingForInterviewer(@Param("interviewerId") Long interviewerId, @Param("date") LocalDate date, @Param("excluded") List<InterviewStatus> excluded);
     long countByStatus(InterviewStatus status);
     long countByScheduledDateGreaterThanEqualAndStatus(LocalDate date, InterviewStatus status);
     @Query("select i.status as key, count(i) as total from InterviewEntity i group by i.status")
@@ -28,13 +30,28 @@ public interface InterviewRepository extends JpaRepository<InterviewEntity, Long
     List<InterviewEntity> findAllByOrderByScheduledDateAscScheduledTimeAsc();
 
     default List<InterviewEntity> findForCalendar(LocalDate startDate, LocalDate endDate) {
+        return findForCalendar(startDate, endDate, false);
+    }
+
+    default List<InterviewEntity> findForCalendar(LocalDate startDate, LocalDate endDate, boolean includeRejected) {
+        List<InterviewEntity> interviews;
         if (startDate != null && endDate != null)
-            return findByScheduledDateGreaterThanEqualAndScheduledDateLessThanEqualOrderByScheduledDateAscScheduledTimeAsc(startDate, endDate);
-        if (startDate != null)
-            return findByScheduledDateGreaterThanEqualOrderByScheduledDateAscScheduledTimeAsc(startDate);
-        if (endDate != null)
-            return findByScheduledDateLessThanEqualOrderByScheduledDateAscScheduledTimeAsc(endDate);
-        return findAllByOrderByScheduledDateAscScheduledTimeAsc();
+            interviews = findByScheduledDateGreaterThanEqualAndScheduledDateLessThanEqualOrderByScheduledDateAscScheduledTimeAsc(startDate, endDate);
+        else if (startDate != null)
+            interviews = findByScheduledDateGreaterThanEqualOrderByScheduledDateAscScheduledTimeAsc(startDate);
+        else if (endDate != null)
+            interviews = findByScheduledDateLessThanEqualOrderByScheduledDateAscScheduledTimeAsc(endDate);
+        else
+            interviews = findAllByOrderByScheduledDateAscScheduledTimeAsc();
+
+        // Excluir entrevistas rechazadas por la familia a menos que se solicite incluirlas
+        if (!includeRejected) {
+            interviews = interviews.stream()
+                .filter(i -> i.getStatus() != InterviewStatus.REJECTED_BY_FAMILY)
+                .toList();
+        }
+
+        return interviews;
     }
 
     interface KeyCountView {

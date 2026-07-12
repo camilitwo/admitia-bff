@@ -29,6 +29,14 @@ public class StudentService {
         return Map.of("success", true, "data", Map.of("rut", rut, "isValid", RutUtils.isValid(rut)));
     }
 
+    public Map<String, Object> rutExists(String rut) {
+        if (rut == null || rut.isBlank()) {
+            return Map.of("exists", false);
+        }
+        boolean exists = studentRepository.existsByNormalizedRut(rut);
+        return Map.of("exists", exists);
+    }
+
     public Map<String, Object> statisticsByGrade() {
         List<Map<String, Object>> data = studentRepository.countByGrade().stream()
             .<Map<String, Object>>map(item -> Map.of("grade", item.getGrade(), "count", item.getTotal()))
@@ -97,7 +105,7 @@ public class StudentService {
         entity.setEmail(stringValue(payload.getOrDefault("email", entity.getEmail())));
         entity.setAddress(stringValue(payload.getOrDefault("address", entity.getAddress())));
         entity.setGradeApplied(stringValue(payload.getOrDefault("gradeApplied", entity.getGradeApplied())));
-        entity.setTargetSchool(stringValue(payload.getOrDefault("targetSchool", entity.getTargetSchool())));
+        entity.setGender(stringValue(payload.getOrDefault("gender", entity.getGender())));
         entity.setCurrentSchool(stringValue(payload.getOrDefault("currentSchool", entity.getCurrentSchool())));
         entity.setSpecialNeeds(booleanValue(payload.getOrDefault("specialNeeds", entity.isSpecialNeeds())));
         entity.setSpecialNeedsDescription(stringValue(payload.getOrDefault("specialNeedsDescription", entity.getSpecialNeedsDescription())));
@@ -123,7 +131,7 @@ public class StudentService {
         response.put("specialNeeds", entity.isSpecialNeeds());
         response.put("specialNeedsDescription", entity.getSpecialNeedsDescription());
         response.put("age", entity.getAge());
-        response.put("targetSchool", entity.getTargetSchool());
+        response.put("gender", entity.getGender());
         response.put("isEmployeeChild", entity.isEmployeeChild());
         response.put("employeeParentName", entity.getEmployeeParentName());
         response.put("isAlumniChild", entity.isAlumniChild());

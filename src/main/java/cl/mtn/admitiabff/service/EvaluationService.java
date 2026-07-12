@@ -1,13 +1,22 @@
 package cl.mtn.admitiabff.service;
 
+import cl.mtn.admitiabff.domain.application.ApplicationEntity;
 import cl.mtn.admitiabff.domain.common.EvaluationStatus;
+import cl.mtn.admitiabff.domain.common.InterviewStatus;
+import cl.mtn.admitiabff.domain.email.EmailRequestDTO;
 import cl.mtn.admitiabff.domain.evaluation.EvaluationEntity;
+import cl.mtn.admitiabff.domain.notification.EmailTemplate;
+import cl.mtn.admitiabff.domain.person.GuardianEntity;
+import cl.mtn.admitiabff.domain.person.ParentEntity;
+import cl.mtn.admitiabff.domain.student.StudentEntity;
+import cl.mtn.admitiabff.domain.user.UserEntity;
 import cl.mtn.admitiabff.repository.ApplicationRepository;
 import cl.mtn.admitiabff.repository.EvaluationRepository;
 import cl.mtn.admitiabff.repository.InterviewRepository;
 import cl.mtn.admitiabff.repository.UserRepository;
 import cl.mtn.admitiabff.util.CsvUtils;
 import cl.mtn.admitiabff.util.JsonSupport;
+import cl.mtn.admitiabff.util.TemplateUtils;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.LinkedHashMap;
@@ -26,16 +35,16 @@ public class EvaluationService {
     private final ApplicationRepository applicationRepository;
     private final InterviewRepository interviewRepository;
     private final UserRepository userRepository;
-    private final NotificationService notificationService;
+    private final cl.mtn.admitiabff.service.notification.EmailComposerService emailComposerService;
     private final AuthService authService;
     private final JsonSupport jsonSupport;
 
-    public EvaluationService(EvaluationRepository evaluationRepository, ApplicationRepository applicationRepository, InterviewRepository interviewRepository, UserRepository userRepository, NotificationService notificationService, AuthService authService, JsonSupport jsonSupport) {
+    public EvaluationService(EvaluationRepository evaluationRepository, ApplicationRepository applicationRepository, InterviewRepository interviewRepository, UserRepository userRepository, cl.mtn.admitiabff.service.notification.EmailComposerService emailComposerService, AuthService authService, JsonSupport jsonSupport) {
         this.evaluationRepository = evaluationRepository;
         this.applicationRepository = applicationRepository;
         this.interviewRepository = interviewRepository;
         this.userRepository = userRepository;
-        this.notificationService = notificationService;
+        this.emailComposerService = emailComposerService;
         this.authService = authService;
         this.jsonSupport = jsonSupport;
     }
@@ -80,7 +89,75 @@ public class EvaluationService {
     public Map<String, Object> evaluatorCompleted(Long evaluatorId) { return wrap(evaluationRepository.findByEvaluatorIdAndStatusOrderByCreatedAtDesc(evaluatorId, EvaluationStatus.COMPLETED)); }
     public Map<String, Object> byType(String type) { return wrap(evaluationRepository.findByEvaluationTypeOrderByCreatedAtDesc(type)); }
     public Map<String, Object> bySubject(String subject) { return wrap(evaluationRepository.findBySubjectOrderByCreatedAtDesc(subject)); }
-    public Map<String, Object> myEvaluations() { return byEvaluator(authService.requireAuth().id()); }
+    public Map<String, Object> myEvaluations() {
+        AuthService.AuthContextHolder auth = authService.requireAuth();
+        Long userId = auth.id();
+        List<EvaluationEntity> assignedEvaluations = evaluationRepository.findByEvaluatorIdOrderByCreatedAtDesc(userId);
+        List<Map<String, Object>> evaluations = new java.util.ArrayList<>(
+            assignedEvaluations.stream().map(this::toResponse).toList()
+        );
+        java.util.Set<String> addedKeys = new java.util.LinkedHashSet<>();
+        assignedEvaluations.forEach(evaluation -> {
+            String key = evaluationKey(
+                evaluation.getApplication() == null ? null : evaluation.getApplication().getId(),
+                evaluation.getEvaluationType()
+            );
+            if (key != null) addedKeys.add(key);
+        });
+        List<InterviewStatus> excluded = List.of(InterviewStatus.CANCELLED, InterviewStatus.RESCHEDULED);
+        interviewRepository.findVisibleForInterviewer(userId, excluded).stream()
+            .forEach(interview -> addLinkedInterviewEvaluations(evaluations, addedKeys, interview));
+        return Map.of("success", true, "data", evaluations, "count", evaluations.size());
+    }
+
+    private void addLinkedInterviewEvaluations(
+        List<Map<String, Object>> evaluations,
+        java.util.Set<String> addedKeys,
+        cl.mtn.admitiabff.domain.interview.InterviewEntity interview
+    ) {
+        Long applicationId = interview.getApplication() == null ? null : interview.getApplication().getId();
+        if (applicationId == null) return;
+
+        for (String evaluationType : mapInterviewTypesToEvaluationTypes(interview.getInterviewType())) {
+            String key = evaluationKey(applicationId, evaluationType);
+            if (key == null || addedKeys.contains(key)) continue;
+
+            evaluationRepository.findByApplicationIdAndEvaluationType(applicationId, evaluationType)
+                .ifPresent(evaluation -> {
+                    Map<String, Object> response = new LinkedHashMap<>(toResponse(evaluation));
+                    applyInterviewMetadata(response, interview, evaluationType);
+                    evaluations.add(response);
+                    addedKeys.add(key);
+                });
+        }
+    }
+
+    private void applyInterviewMetadata(
+        Map<String, Object> response,
+        cl.mtn.admitiabff.domain.interview.InterviewEntity interview,
+        String evaluationType
+    ) {
+        response.put("interviewId", interview.getId());
+        response.put("interviewType", interview.getInterviewType());
+        response.put("evaluationType", evaluationType);
+        response.put("type", evaluationType);
+        response.put("scheduledDate", interview.getScheduledDate());
+        if (response.get("evaluationDate") == null && interview.getScheduledDate() != null && interview.getScheduledTime() != null) {
+            response.put("evaluationDate", interview.getScheduledDate().atTime(interview.getScheduledTime()));
+        }
+        if (response.get("observations") == null) {
+            response.put("observations", interview.getNotes());
+        }
+        if (interview.getInterviewer() != null) {
+            response.put("evaluatorId", interview.getInterviewer().getId());
+            response.put("evaluator", evaluatorMap(interview.getInterviewer()));
+        }
+        if (interview.getApplication() != null && interview.getApplication().getStudent() != null) {
+            var student = interview.getApplication().getStudent();
+            response.put("studentName", student.getFirstName() + " " + student.getPaternalLastName() + " " + student.getMaternalLastName());
+            response.put("gradeApplied", student.getGradeApplied());
+        }
+    }
     public Map<String, Object> familyInterviewTemplate(String grade) { return Map.of("success", true, "data", Map.of("grade", grade, "sections", List.of("Historia familiar", "Motivación", "Rutinas", "Observaciones"))); }
     public Map<String, Object> get(Long id) { return toResponse(load(id)); }
     public Map<String, Object> familyInterviewData(Long evaluationId) { EvaluationEntity entity = load(evaluationId); return Map.of("success", true, "data", jsonSupport.readMap(entity.getInterviewData()), "score", entity.getFamilyInterviewScore()); }
@@ -113,6 +190,7 @@ public class EvaluationService {
         entity.setMaxScore(decimalValue(payload.get("maxScore")));
         entity.setRecommendations(stringValue(payload.get("recommendations")));
         entity.setObservations(stringValue(payload.getOrDefault("observations", payload.get("comments"))));
+        entity.setAreasForImprovement(stringValue(payload.get("areasForImprovement")));
         entity.setCompletedAt(LocalDateTime.now());
         return Map.of("success", true, "message", "Evaluación completada", "data", toResponse(evaluationRepository.save(entity)));
     }
@@ -120,13 +198,49 @@ public class EvaluationService {
     @Transactional
     public Map<String, Object> assign(Long id, Map<String, Object> payload) {
         EvaluationEntity entity = load(id);
-        entity.setEvaluator(userRepository.findById(((Number) payload.get("evaluatorId")).longValue()).orElseThrow(() -> new IllegalArgumentException("Evaluador no encontrado")));
+        var evaluator = userRepository.findById(((Number) payload.get("evaluatorId")).longValue())
+            .orElseThrow(() -> new IllegalArgumentException("Evaluador no encontrado"));
+
+        validateEvaluatorSubject(entity, evaluator);
+
+        entity.setEvaluator(evaluator);
         entity.setEvaluationDate(parseDateTime(payload.get("evaluationDate")));
         if (entity.getStatus() != EvaluationStatus.COMPLETED) {
             entity.setStatus(EvaluationStatus.IN_PROGRESS);
         }
         EvaluationEntity saved = evaluationRepository.save(entity);
-        notificationService.recordEmail(Map.of("to", saved.getEvaluator().getEmail(), "subject", "Nueva evaluación asignada", "message", "Se le ha asignado una nueva evaluación", "type", "EVALUATION_ASSIGNMENT"));
+
+        try {
+            UserEntity ev = saved.getEvaluator();
+            String to = ev != null ? ev.getEmail() : null;
+            if (to != null && !to.isBlank()) {
+                String studentName = saved.getApplication() != null && saved.getApplication().getStudent() != null
+                        ? (saved.getApplication().getStudent().getFirstName() + " "
+                                + saved.getApplication().getStudent().getPaternalLastName()).trim()
+                        : "";
+                String gradeApplied = saved.getApplication() != null && saved.getApplication().getStudent() != null
+                        ? String.valueOf(saved.getApplication().getStudent().getGradeApplied())
+                        : "";
+                Map<String, Object> data = new LinkedHashMap<>();
+                data.put("evaluatorName", ev.getFirstName() == null ? "" : ev.getFirstName());
+                data.put("studentName", studentName);
+                data.put("gradeApplied", gradeApplied);
+                data.put("evaluationType", saved.getSubject() == null ? "" : saved.getSubject());
+                data.put("deadline", saved.getEvaluationDate() == null ? "" : String.valueOf(saved.getEvaluationDate()));
+                data.put("evaluationId", saved.getId());
+
+                emailComposerService.send(EmailRequestDTO.builder()
+                        .template(TemplateUtils.generateTemplate(EmailTemplate.EVALUATION_ASSIGNMENT.name(), data))
+                        .to(to)
+                        .subject(EmailTemplate.EVALUATION_ASSIGNMENT.getDefaultSubject())
+                        .recipientType("USER")
+                        .recipientId(ev.getId())
+                        .data(data)
+                        .build());
+            }
+        } catch (Exception ignored) {
+            // Best-effort: el envío no debe romper la asignación.
+        }
         return Map.of("success", true, "message", "Evaluador asignado", "data", toResponse(saved));
     }
 
@@ -184,6 +298,19 @@ public class EvaluationService {
         return Map.of("success", true, "message", "Migración completada", "data", Map.of("created", created));
     }
 
+    private void validateEvaluatorSubject(EvaluationEntity evaluation, UserEntity evaluator) {
+        String evaluationSubject = evaluation.getSubject();
+        String evaluatorSubject = evaluator.getSubject();
+
+        if (evaluationSubject != null && !evaluationSubject.isBlank() &&
+            !evaluationSubject.equals(evaluatorSubject)) {
+            throw new IllegalArgumentException(
+                String.format("El evaluador no tiene la asignatura requerida. Asignatura de la evaluación: %s, Asignatura del evaluador: %s",
+                    evaluationSubject, evaluatorSubject)
+            );
+        }
+    }
+
     private void merge(EvaluationEntity entity, Map<String, Object> payload) {
         if (payload.get("applicationId") instanceof Number number) {
             entity.setApplication(applicationRepository.findActiveById(number.longValue()).orElseThrow(() -> new IllegalArgumentException("Postulación no encontrada")));
@@ -200,6 +327,11 @@ public class EvaluationService {
         entity.setMaxScore(decimalValue(payload.getOrDefault("maxScore", entity.getMaxScore())));
         entity.setRecommendations(stringValue(payload.getOrDefault("recommendations", entity.getRecommendations())));
         entity.setObservations(stringValue(payload.getOrDefault("observations", entity.getObservations())));
+        entity.setAreasForImprovement(stringValue(payload.getOrDefault("areasForImprovement", entity.getAreasForImprovement())));
+
+        if (entity.getEvaluator() != null) {
+            validateEvaluatorSubject(entity, entity.getEvaluator());
+        }
     }
 
     private Map<String, Object> wrap(List<EvaluationEntity> entities) {
@@ -225,11 +357,78 @@ public class EvaluationService {
         response.put("maxScore", entity.getMaxScore());
         response.put("recommendations", entity.getRecommendations());
         response.put("observations", entity.getObservations());
+        response.put("areasForImprovement", entity.getAreasForImprovement());
         response.put("createdAt", entity.getCreatedAt());
         response.put("updatedAt", entity.getUpdatedAt());
         response.put("completedAt", entity.getCompletedAt());
+        if (entity.getApplication() != null) {
+            response.put("application", applicationMap(entity.getApplication()));
+        }
+        if (entity.getEvaluator() != null) {
+            response.put("evaluator", evaluatorMap(entity.getEvaluator()));
+        }
         return response;
     }
+
+    private Map<String, Object> applicationMap(ApplicationEntity entity) {
+        Map<String, Object> map = new LinkedHashMap<>();
+        map.put("id", entity.getId());
+        if (entity.getStudent() != null) {
+            StudentEntity student = entity.getStudent();
+            Map<String, Object> studentMap = new LinkedHashMap<>();
+            studentMap.put("id", student.getId());
+            studentMap.put("firstName", student.getFirstName());
+            studentMap.put("paternalLastName", student.getPaternalLastName());
+            studentMap.put("maternalLastName", student.getMaternalLastName());
+            studentMap.put("lastName", (value(student.getPaternalLastName()) + " " + value(student.getMaternalLastName())).trim());
+            studentMap.put("rut", student.getRut());
+            studentMap.put("birthDate", student.getBirthDate());
+            studentMap.put("gradeApplied", student.getGradeApplied());
+            studentMap.put("grade", student.getGradeApplied());
+            studentMap.put("currentSchool", student.getCurrentSchool());
+            studentMap.put("email", student.getEmail());
+            studentMap.put("address", student.getAddress());
+            studentMap.put("additionalNotes", student.getAdditionalNotes());
+            studentMap.put("gender", student.getGender());
+            map.put("student", studentMap);
+        }
+        if (entity.getFather() != null) {
+            map.put("father", parentMap(entity.getFather()));
+        }
+        if (entity.getMother() != null) {
+            map.put("mother", parentMap(entity.getMother()));
+        }
+        if (entity.getGuardian() != null) {
+            GuardianEntity guardian = entity.getGuardian();
+            map.put("guardian", Map.of("id", guardian.getId(), "fullName", guardian.getFullName(), "rut", guardian.getRut(), "email", guardian.getEmail(), "phone", guardian.getPhone(), "relationship", guardian.getRelationship()));
+        }
+        return map;
+    }
+
+    private Map<String, Object> parentMap(ParentEntity entity) {
+        if (entity == null) return null;
+        Map<String, Object> map = new LinkedHashMap<>();
+        map.put("id", entity.getId());
+        map.put("fullName", entity.getFullName());
+        map.put("rut", entity.getRut());
+        map.put("email", entity.getEmail());
+        map.put("phone", entity.getPhone());
+        map.put("address", entity.getAddress());
+        map.put("profession", entity.getProfession());
+        return map;
+    }
+
+    private Map<String, Object> evaluatorMap(UserEntity entity) {
+        Map<String, Object> map = new LinkedHashMap<>();
+        map.put("id", entity.getId());
+        map.put("firstName", entity.getFirstName());
+        map.put("lastName", entity.getLastName());
+        map.put("email", entity.getEmail());
+        map.put("subject", entity.getSubject());
+        return map;
+    }
+
+    private String value(String value) { return value == null ? "" : value; }
 
     private BigDecimal calculateInterviewScore(Map<String, Object> interviewData) {
         List<BigDecimal> values = interviewData.values().stream().filter(Number.class::isInstance).map(Number.class::cast).map(value -> BigDecimal.valueOf(value.doubleValue())).toList();
@@ -257,4 +456,20 @@ public class EvaluationService {
     }
 
     private String stringValue(Object value) { return value == null ? null : String.valueOf(value); }
+
+    private String evaluationKey(Long applicationId, String evaluationType) {
+        if (applicationId == null || evaluationType == null || evaluationType.isBlank()) return null;
+        return applicationId + ":" + evaluationType;
+    }
+
+    private List<String> mapInterviewTypesToEvaluationTypes(String interviewType) {
+        if (interviewType == null) return List.of();
+        return switch (interviewType) {
+            case "FAMILY" -> List.of("FAMILY_INTERVIEW");
+            case "CYCLE_DIRECTOR" -> List.of("CYCLE_DIRECTOR_INTERVIEW", "CYCLE_DIRECTOR_REPORT");
+            case "PSYCHOLOGICAL" -> List.of("PSYCHOLOGICAL_INTERVIEW");
+            default -> List.of(interviewType);
+        };
+    }
+
 }

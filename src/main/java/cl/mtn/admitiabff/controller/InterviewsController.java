@@ -9,21 +9,34 @@ import org.springframework.web.bind.annotation.*;
 public class InterviewsController {
     private final InterviewService interviewService;
 
+
     public InterviewsController(InterviewService interviewService) { this.interviewService = interviewService; }
 
     @GetMapping("/public/interviewers") public Object publicInterviewers() { return interviewService.publicInterviewers(); }
     @GetMapping public Map<String, Object> all() { return interviewService.all(); }
     @GetMapping("/statistics") public Map<String, Object> statistics() { return interviewService.statistics(); }
-    @GetMapping("/calendar") public Map<String, Object> calendar(@RequestParam(required = false) String startDate, @RequestParam(required = false) String endDate) { return interviewService.calendar(startDate, endDate); }
+    @GetMapping("/calendar") public Map<String, Object> calendar(@RequestParam(required = false) String startDate, @RequestParam(required = false) String endDate, @RequestParam(required = false, defaultValue = "false") boolean includeRejected) { return interviewService.calendar(startDate, endDate, includeRejected); }
+    @GetMapping("/weekly-overview") public Map<String, Object> weeklyOverview(@RequestParam String startDate, @RequestParam String endDate, @RequestParam(required = false) Integer duration) { return interviewService.weeklyOverview(startDate, endDate, duration); }
     @GetMapping("/application/{applicationId}") public Map<String, Object> byApplication(@PathVariable Long applicationId) { return interviewService.byApplication(applicationId); }
     @GetMapping("/application/{applicationId}/summary-status") public Map<String, Object> summaryStatus(@PathVariable Long applicationId) { return interviewService.summaryStatus(applicationId); }
-    @GetMapping("/interviewer/{interviewerId}") public Object byInterviewer(@PathVariable Long interviewerId) { return interviewService.byInterviewer(interviewerId); }
+    @GetMapping("/interviewer/{interviewerId}") public Map<String, Object> byInterviewer(@PathVariable Long interviewerId) { return interviewService.byInterviewer(interviewerId); }
     @GetMapping("/available-slots") public Map<String, Object> availableSlots(@RequestParam Long interviewerId, @RequestParam String date, @RequestParam(required = false) Integer duration) { return interviewService.availableSlots(interviewerId, date, duration); }
+    @GetMapping("/slot-availability") public Map<String, Object> slotAvailability(@RequestParam String date, @RequestParam String time, @RequestParam(required = false) Integer duration) { return interviewService.slotAvailability(date, time, duration); }
+    @GetMapping("/next-available-slots") public Map<String, Object> nextAvailableSlots(@RequestParam(required = false) String date, @RequestParam(required = false) Integer days, @RequestParam(required = false) Integer duration) { return interviewService.nextAvailableSlots(date, days, duration); }
     @GetMapping("/{id}") public Map<String, Object> get(@PathVariable Long id) { return interviewService.get(id); }
     @PostMapping public Map<String, Object> create(@RequestBody Map<String, Object> payload) { return interviewService.create(payload); }
     @PutMapping("/{id}") public Map<String, Object> update(@PathVariable Long id, @RequestBody Map<String, Object> payload) { return interviewService.update(id, payload); }
     @DeleteMapping("/{id}") public Map<String, Object> delete(@PathVariable Long id) { return interviewService.delete(id); }
     @PatchMapping("/{id}/cancel") public Map<String, Object> cancel(@PathVariable Long id, @RequestBody(required = false) Map<String, Object> payload) { return interviewService.cancel(id, payload == null ? Map.of() : payload); }
     @PatchMapping("/{id}/reschedule") public Map<String, Object> reschedule(@PathVariable Long id, @RequestBody Map<String, Object> payload) { return interviewService.reschedule(id, payload); }
+    @PatchMapping("/{id}/release") public Map<String, Object> release(@PathVariable Long id, @RequestBody(required = false) Map<String, Object> payload) { return interviewService.release(id, payload == null ? Map.of() : payload); }
     @PostMapping("/application/{applicationId}/send-summary") public Map<String, Object> sendSummary(@PathVariable Long applicationId) { return interviewService.sendSummary(applicationId); }
+
+    @PostMapping("/{id}/send-invitation")
+    public Map<String, Object> sendInvitation(@PathVariable Long id, @RequestHeader(value = "X-Base-Url", required = false) String baseUrl) {
+        // Usar nginx como URL pública (para que el email tenga el link correcto)
+        // El nginx enruta /api/public/interview/confirm al BFF
+        String publicBaseUrl = baseUrl != null ? baseUrl : "https://admitia-nginx-staging.up.railway.app";
+        return interviewService.sendInterviewInvitation(id, publicBaseUrl);
+    }
 }

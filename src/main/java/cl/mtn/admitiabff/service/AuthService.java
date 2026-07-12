@@ -10,37 +10,89 @@ import cl.mtn.admitiabff.domain.user.UserEntity;
 import cl.mtn.admitiabff.repository.ActiveSessionRepository;
 import cl.mtn.admitiabff.repository.EmailVerificationCodeRepository;
 import cl.mtn.admitiabff.repository.UserRepository;
+import cl.mtn.admitiabff.service.notification.EmailComposerService;
+import cl.mtn.admitiabff.domain.email.EmailRequestDTO;
+import cl.mtn.admitiabff.domain.notification.EmailTemplate;
 import cl.mtn.admitiabff.util.JsonSupport;
+import cl.mtn.admitiabff.util.TemplateUtils;
+import java.net.URI;
+import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.time.LocalDateTime;
 import java.util.HexFormat;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpStatus;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.server.ResponseStatusException;
 
 @Service
 @Transactional(readOnly = true)
 public class AuthService {
+
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(AuthService.class);
+
+    private static final Set<Role> ADMIN_PORTAL_ROLES = Set.of(Role.ADMIN);
+
+    private static final Set<Role> STAFF_PORTAL_ROLES = Set.of(
+        Role.TEACHER, Role.COORDINATOR, Role.CYCLE_DIRECTOR,
+        Role.PSYCHOLOGIST, Role.INTERVIEWER
+    );
+
+    private static final Set<Role> GUARDIAN_PORTAL_ROLES = Set.of(Role.APODERADO);
     private final UserRepository userRepository;
     private final ActiveSessionRepository activeSessionRepository;
     private final EmailVerificationCodeRepository verificationCodeRepository;
     private final JwtService jwtService;
+    private final TokenService tokenService;
     private final RsaKeyService rsaKeyService;
     private final PasswordEncoder passwordEncoder;
     private final JsonSupport jsonSupport;
+    private final EmailComposerService emailComposerService;
 
-    public AuthService(UserRepository userRepository, ActiveSessionRepository activeSessionRepository, EmailVerificationCodeRepository verificationCodeRepository, JwtService jwtService, RsaKeyService rsaKeyService, PasswordEncoder passwordEncoder, JsonSupport jsonSupport) {
+    /**
+     * URL pública base del BFF (sin slash final), p.ej. {@code https://api.admitia.dedyn.io}.
+     * Se usa para reescribir el link de verificación de Firebase y camuflar el host
+     * {@code firebaseapp.com} detrás de nuestro dominio.
+     */
+    @Value("${app.firebase.verification.public-base-url:}")
+    private String firebaseVerificationPublicBaseUrl;
+
+    /**
+     * URL del front a la que se redirige al usuario DESPUÉS de que Firebase confirme la
+     * verificación (si Firebase lo respeta vía continueUrl). Por defecto la home del portal
+     * de apoderados.
+     */
+    @Value("${app.firebase.verification.continue-url:}")
+    private String firebaseVerificationContinueUrl;
+
+    /**
+     * Path público (a partir de {@link #firebaseVerificationPublicBaseUrl}) bajo el que el
+     * gateway/nginx expone el endpoint de redirección. Por defecto {@code /v1/auth/firebase/verify-redirect},
+     * que es la ruta que NGINX enruta al BFF (el BFF la expone internamente como
+     * {@code /api/auth/firebase/verify-redirect}; nginx hace el rewrite {@code /v1 → /api}).
+     * Se puede sobreescribir vía env si el gateway cambia el prefijo.
+     */
+    @Value("${app.firebase.verification.public-path:/v1/auth/firebase/verify-redirect}")
+    private String firebaseVerificationPublicPath;
+
+    public AuthService(UserRepository userRepository, ActiveSessionRepository activeSessionRepository, EmailVerificationCodeRepository verificationCodeRepository, JwtService jwtService, TokenService tokenService, RsaKeyService rsaKeyService, PasswordEncoder passwordEncoder, JsonSupport jsonSupport, EmailComposerService emailComposerService) {
         this.userRepository = userRepository;
         this.activeSessionRepository = activeSessionRepository;
         this.verificationCodeRepository = verificationCodeRepository;
         this.jwtService = jwtService;
+        this.tokenService = tokenService;
         this.rsaKeyService = rsaKeyService;
         this.passwordEncoder = passwordEncoder;
         this.jsonSupport = jsonSupport;
+        this.emailComposerService = emailComposerService;
     }
 
     public Map<String, Object> csrfToken() {
@@ -57,32 +109,31 @@ public class AuthService {
         payload = normalizePayload(payload);
         String email = decrypt(payload, "email").trim().toLowerCase();
         String password = decrypt(payload, "password");
+        String portalType = stringValue(payload.get("portalType")).trim().toUpperCase();
         UserEntity user = userRepository.findByEmailIgnoreCase(email).orElseThrow(() -> new IllegalArgumentException("Credenciales inválidas"));
         if (!user.isActive() || !passwordEncoder.matches(password, user.getPasswordHash())) {
             throw new IllegalArgumentException("Credenciales inválidas");
         }
+        if (!portalType.isEmpty()) {
+            Set<Role> allowedRoles = switch (portalType) {
+                case "ADMIN" -> ADMIN_PORTAL_ROLES;
+                case "STAFF" -> STAFF_PORTAL_ROLES;
+                case "GUARDIAN" -> GUARDIAN_PORTAL_ROLES;
+                default -> throw new IllegalArgumentException("Portal desconocido: " + portalType);
+            };
+            if (!allowedRoles.contains(user.getRole())) {
+                throw new ResponseStatusException(HttpStatus.FORBIDDEN,
+                    "Su cuenta no tiene acceso a este portal. Por favor use el portal correspondiente a su rol.");
+            }
+        }
+        // Linking opcional con Firebase si el cliente envía un idToken válido (ver FIX_FIREBASE_UID_LINKING.md).
+        String optionalIdToken = stringValue(payload.get("firebaseIdToken"));
+        if (!optionalIdToken.isBlank()) {
+            linkFirebaseInline(user, optionalIdToken);
+        }
         user.setLastLoginAt(LocalDateTime.now());
         userRepository.save(user);
-        activeSessionRepository.deleteByUser(user);
-        String token = jwtService.generateToken(user.getId(), user.getEmail(), user.getRole().name());
-        ActiveSessionEntity session = new ActiveSessionEntity();
-        session.setUser(user);
-        session.setTokenHash(sha256(token));
-        session.setCreatedAt(LocalDateTime.now());
-        session.setLastActivity(LocalDateTime.now());
-        session.setUserAgent(userAgent);
-        session.setIpAddress(ipAddress);
-        activeSessionRepository.save(session);
-        return Map.of(
-            "success", true,
-            "token", token,
-            "refreshToken", token,
-            "expiresAt", LocalDateTime.now().plusHours(12).toString(),
-            "refreshExpiresAt", LocalDateTime.now().plusHours(12).toString(),
-            "sessionId", session.getId().toString(),
-            "permissions", List.of(user.getRole().name()),
-            "user", toAuthUser(user)
-        );
+        return issueAuthResponse(user, userAgent, ipAddress, true);
     }
 
     @Transactional
@@ -105,8 +156,18 @@ public class AuthService {
         user.setEmailVerified(false);
         user.setPreferencesJson(jsonSupport.write(Map.of()));
         UserEntity savedUser = userRepository.save(user);
+
+        // Si el front nos pasó también el idToken de Firebase del mismo email, lo enlazamos en el
+        // mismo registro. Esto cierra el bug histórico en que el apoderado quedaba con firebase_uid=null.
+        String optionalIdToken = stringValue(payload.get("firebaseIdToken"));
+        if (!optionalIdToken.isBlank()) {
+            linkFirebaseInline(savedUser, optionalIdToken);
+            savedUser = userRepository.save(savedUser);
+        }
+
         String token = jwtService.generateToken(savedUser.getId(), savedUser.getEmail(), savedUser.getRole().name());
-        return Map.of("success", true, "token", token, "user", toAuthUser(savedUser));
+        return Map.of("success", true, "token", token, "user", toAuthUser(savedUser),
+            "firebaseLinked", savedUser.getFirebaseUid() != null);
     }
 
     public Map<String, Object> checkEmail(Map<String, Object> payload) {
@@ -144,37 +205,71 @@ public class AuthService {
         }
         String email = decoded.getEmail();
         String firebaseUid = decoded.getUid();
-
-        UserEntity user = userRepository.findByFirebaseUid(firebaseUid)
-            .or(() -> userRepository.findByEmailIgnoreCase(email))
-            .orElseThrow(() -> new IllegalArgumentException("Usuario no registrado"));
-
-        if (user.getFirebaseUid() == null) {
-            user.setFirebaseUid(firebaseUid);
+        if (email == null || email.isBlank() || firebaseUid == null || firebaseUid.isBlank()) {
+            throw new IllegalArgumentException("Token de Firebase sin email o uid");
         }
-        user.setLastLoginAt(LocalDateTime.now());
-        if (decoded.isEmailVerified()) {
+
+        // Buscar primero por UID (fuente de verdad federada). Si no, buscar por email para
+        // permitir el primer linking — pero CON validaciones, no automático.
+        UserEntity byUid = userRepository.findByFirebaseUid(firebaseUid).orElse(null);
+        UserEntity byEmail = userRepository.findByEmailIgnoreCase(email).orElse(null);
+
+        UserEntity user;
+        if (byUid != null) {
+            // Caso normal: el UID ya está enlazado. Validar que el email no haya cambiado.
+            if (byUid.getEmail() != null && !email.equalsIgnoreCase(byUid.getEmail())) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "El email del token no coincide con el email registrado para esta cuenta. Contacte al administrador.");
+            }
+            user = byUid;
+        } else if (byEmail != null) {
+            // Primer ingreso con Firebase de una cuenta local pre-existente → exigir verificación
+            // y que el slot de firebase_uid esté libre. Esto bloquea account takeover.
+            if (byEmail.getFirebaseUid() != null) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "Esta cuenta ya está enlazada a otra identidad de Firebase. Contacte al administrador.");
+            }
+            if (!decoded.isEmailVerified()) {
+                throw new ResponseStatusException(HttpStatus.FORBIDDEN,
+                    "Verifique su email en el proveedor antes de enlazar la cuenta.");
+            }
+            byEmail.setFirebaseUid(firebaseUid);
+            log.info("[Auth/Firebase] Linking user id={} email={} → firebase_uid={}", byEmail.getId(), email, firebaseUid);
+            user = byEmail;
+        } else {
+            throw new IllegalArgumentException("Usuario no registrado");
+        }
+
+        if (!user.isActive()) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Cuenta inactiva");
+        }
+
+        // Sincronizar el flag local con el estado real de Firebase (puede haber cambiado).
+        boolean firebaseSaysVerified = decoded.isEmailVerified();
+        if (firebaseSaysVerified && !user.isEmailVerified()) {
             user.setEmailVerified(true);
+        } else if (!firebaseSaysVerified && user.isEmailVerified()) {
+            // El usuario perdió la verificación en Firebase (raro, pero posible si se cambió el email).
+            user.setEmailVerified(false);
         }
+
+        // 🔒 Bloqueo de login para apoderados con email no verificado.
+        // Sin esto, un registro recién creado en Firebase (donde emailVerified arranca en false)
+        // podría loguearse al portal antes de hacer clic en el correo de verificación.
+        // Sólo aplica al rol APODERADO; el staff/admin no usa este flujo de auto-registro.
+        if (user.getRole() == Role.APODERADO && !firebaseSaysVerified) {
+            log.warn("[Auth/Firebase] Login bloqueado por email no verificado: user id={} email={}",
+                user.getId(), email);
+            // Persistimos la sincronización del flag antes de salir.
+            userRepository.save(user);
+            throw new cl.mtn.admitiabff.controller.EmailNotVerifiedException(email,
+                "Debe verificar su correo electrónico antes de ingresar. "
+                + "Revise su bandeja de entrada (y la carpeta de spam) o solicite un nuevo enlace.");
+        }
+
+        user.setLastLoginAt(LocalDateTime.now());
         userRepository.save(user);
-
-        String token = jwtService.generateToken(user.getId(), user.getEmail(), user.getRole().name());
-        ActiveSessionEntity session = new ActiveSessionEntity();
-        session.setUser(user);
-        session.setTokenHash(sha256(token));
-        session.setCreatedAt(LocalDateTime.now());
-        session.setLastActivity(LocalDateTime.now());
-        activeSessionRepository.save(session);
-
-        return Map.of(
-            "success", true,
-            "token", token,
-            "refreshToken", token,
-            "expiresAt", LocalDateTime.now().plusHours(12).toString(),
-            "refreshExpiresAt", LocalDateTime.now().plusHours(12).toString(),
-            "permissions", List.of(user.getRole().name()),
-            "user", toAuthUser(user)
-        );
+        return issueAuthResponse(user, null, null, true);
     }
 
     @Transactional
@@ -187,12 +282,23 @@ public class AuthService {
             throw new IllegalArgumentException("Token de Firebase inválido");
         }
         String email = decoded.getEmail();
+        String firebaseUid = decoded.getUid();
+        if (email == null || email.isBlank() || firebaseUid == null || firebaseUid.isBlank()) {
+            throw new IllegalArgumentException("Token de Firebase sin email o uid");
+        }
         if (userRepository.existsByEmailIgnoreCase(email)) {
             throw new IllegalArgumentException("El email ya existe");
         }
+        if (userRepository.findByFirebaseUid(firebaseUid).isPresent()) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Esta identidad de Firebase ya está enlazada a otro usuario");
+        }
+        // NOTA: NO exigimos `decoded.isEmailVerified()` aquí. El usuario acaba de crear su
+        // cuenta en Firebase y aún no ha verificado el email; bloquear el registro aquí causa
+        // un 403 que rompe el flujo. La verificación del correo se envía AHORA mismo (después
+        // de crear la cuenta) desde nuestra casilla vía `sendFirebaseVerificationLink`.
 
         UserEntity user = new UserEntity();
-        user.setFirebaseUid(decoded.getUid());
+        user.setFirebaseUid(firebaseUid);
         user.setEmail(email);
         user.setFirstName(stringValue(payload.get("firstName")));
         user.setLastName(stringValue(payload.get("lastName")));
@@ -200,28 +306,281 @@ public class AuthService {
         user.setPhone(stringValue(payload.get("phone")));
         user.setRole(Role.APODERADO);
         user.setActive(true);
+        // emailVerified refleja el estado real reportado por Firebase. Inicialmente es false
+        // hasta que el apoderado haga clic en el enlace que enviamos a continuación.
         user.setEmailVerified(decoded.isEmailVerified());
         user.setPasswordHash("FIREBASE_MANAGED");
         user.setPreferencesJson(jsonSupport.write(Map.of()));
         UserEntity saved = userRepository.save(user);
+        log.info("[Auth/Firebase] Registered new user id={} email={} firebase_uid={}", saved.getId(), email, firebaseUid);
+        return issueAuthResponse(saved, null, null, true);
+    }
 
-        String token = jwtService.generateToken(saved.getId(), saved.getEmail(), saved.getRole().name());
-        ActiveSessionEntity session = new ActiveSessionEntity();
-        session.setUser(saved);
-        session.setTokenHash(sha256(token));
-        session.setCreatedAt(LocalDateTime.now());
-        session.setLastActivity(LocalDateTime.now());
-        activeSessionRepository.save(session);
+    /**
+     * Envía el correo de verificación de email **desde nuestra casilla** (Resend),
+     * NO desde el dominio por defecto de Firebase. Genera el link de verificación
+     * con la API admin de Firebase ({@code generateEmailVerificationLink}) y lo
+     * incrusta en una plantilla con la imagen institucional de MTN.
+     *
+     * <p>Se invoca DESPUÉS de {@code firebaseRegister} para no bloquear la creación
+     * de la cuenta cuando el usuario aún no tiene su email verificado.
+     *
+     * <p>Acepta:
+     * <ul>
+     *   <li>{@code idToken} (preferido): se valida y se usa el email del token.</li>
+     *   <li>{@code email} + {@code firstName}/{@code lastName} (fallback): cuando el
+     *       front aún no tiene el idToken refrescado.</li>
+     * </ul>
+     */
+    public Map<String, Object> sendFirebaseVerificationLink(Map<String, Object> payload) {
+        String idToken = stringValue(payload.get("idToken"));
+        String email = stringValue(payload.get("email")).trim().toLowerCase();
+        String firstName = stringValue(payload.get("firstName"));
+        String lastName = stringValue(payload.get("lastName"));
 
-        return Map.of(
-            "success", true,
-            "token", token,
-            "refreshToken", token,
-            "expiresAt", LocalDateTime.now().plusHours(12).toString(),
-            "refreshExpiresAt", LocalDateTime.now().plusHours(12).toString(),
-            "permissions", List.of(saved.getRole().name()),
-            "user", toAuthUser(saved)
-        );
+        if (!idToken.isBlank()) {
+            try {
+                com.google.firebase.auth.FirebaseToken decoded =
+                    com.google.firebase.auth.FirebaseAuth.getInstance().verifyIdToken(idToken);
+                if (decoded.getEmail() != null && !decoded.getEmail().isBlank()) {
+                    email = decoded.getEmail().trim().toLowerCase();
+                }
+                if (firstName.isBlank() && decoded.getName() != null) {
+                    firstName = decoded.getName();
+                }
+            } catch (Exception ex) {
+                log.warn("[Auth/Firebase] verify idToken falló al enviar verificación: {}", ex.getMessage());
+            }
+        }
+
+        if (email.isBlank()) {
+            throw new IllegalArgumentException("Email requerido para enviar verificación");
+        }
+
+        // Si ya existe en local y está verificado, no enviamos nada (idempotente).
+        UserEntity local = userRepository.findByEmailIgnoreCase(email).orElse(null);
+        if (local != null && local.isEmailVerified()) {
+            return Map.of("success", true, "alreadyVerified", true, "email", email);
+        }
+
+        String verificationLink;
+        try {
+            // Generamos el link con ActionCodeSettings cuando hay continueUrl configurada,
+            // así Firebase respeta el "continue" hacia nuestro front después de verificar.
+            if (firebaseVerificationContinueUrl != null && !firebaseVerificationContinueUrl.isBlank()) {
+                com.google.firebase.auth.ActionCodeSettings settings =
+                    com.google.firebase.auth.ActionCodeSettings.builder()
+                        .setUrl(firebaseVerificationContinueUrl)
+                        .setHandleCodeInApp(false)
+                        .build();
+                verificationLink = com.google.firebase.auth.FirebaseAuth.getInstance()
+                    .generateEmailVerificationLink(email, settings);
+            } else {
+                verificationLink = com.google.firebase.auth.FirebaseAuth.getInstance()
+                    .generateEmailVerificationLink(email);
+            }
+        } catch (Exception ex) {
+            log.error("[Auth/Firebase] No se pudo generar link de verificación para {}: {}", email, ex.getMessage());
+            throw new ResponseStatusException(HttpStatus.BAD_GATEWAY,
+                "No se pudo generar el link de verificación de email");
+        }
+
+        // Camuflamos el link: en lugar de exponer firebaseapp.com directamente en el correo,
+        // generamos una URL hacia nuestro propio BFF que redirige al endpoint real de Firebase.
+        String maskedLink = maskFirebaseVerificationLink(verificationLink);
+
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("verificationLink", maskedLink);
+        data.put("recipientName", (firstName + " " + lastName).trim());
+
+        try {
+            emailComposerService.send(EmailRequestDTO.builder()
+                .template(TemplateUtils.generateTemplate(EmailTemplate.EMAIL_VERIFICATION_LINK.name(), data))
+                .to(email)
+                .subject(EmailTemplate.EMAIL_VERIFICATION_LINK.getDefaultSubject())
+                .recipientType("USER")
+                .data(data)
+                .build());
+            log.info("[Auth/Firebase] Verification email (institutional) sent to {}", email);
+        } catch (Exception ex) {
+            log.error("[Auth/Firebase] Error enviando verificación a {}: {}", email, ex.getMessage(), ex);
+            throw new ResponseStatusException(HttpStatus.BAD_GATEWAY,
+                "No se pudo enviar el correo de verificación");
+        }
+
+        return Map.of("success", true, "email", email, "sent", true);
+    }
+
+    /**
+     * Reescribe el link de verificación de Firebase para que el correo muestre nuestro
+     * dominio en lugar de {@code <project>.firebaseapp.com}. El link real se preserva
+     * íntegro como query string y se desempaqueta en {@link #resolveFirebaseVerificationTarget(Map)}
+     * cuando el usuario hace clic.
+     */
+    private String maskFirebaseVerificationLink(String firebaseLink) {
+        if (firebaseLink == null || firebaseLink.isBlank()) return firebaseLink;
+        if (firebaseVerificationPublicBaseUrl == null || firebaseVerificationPublicBaseUrl.isBlank()) {
+            // Sin base configurada, no podemos camuflar. Devolvemos el link original
+            // para no romper la verificación. (En prod SIEMPRE debería estar configurada.)
+            log.warn("[Auth/Firebase] app.firebase.verification.public-base-url no está configurada; "
+                + "el correo expondrá el dominio firebaseapp.com.");
+            return firebaseLink;
+        }
+        try {
+            URI uri = URI.create(firebaseLink);
+            String query = uri.getRawQuery() == null ? "" : uri.getRawQuery();
+            String base = firebaseVerificationPublicBaseUrl.replaceAll("/+$", "");
+            String path = firebaseVerificationPublicPath == null || firebaseVerificationPublicPath.isBlank()
+                ? "/v1/auth/firebase/verify-redirect"
+                : (firebaseVerificationPublicPath.startsWith("/")
+                    ? firebaseVerificationPublicPath
+                    : "/" + firebaseVerificationPublicPath);
+            return base + path + "?" + query;
+        } catch (Exception ex) {
+            log.warn("[Auth/Firebase] No se pudo enmascarar el link de verificación: {}", ex.getMessage());
+            return firebaseLink;
+        }
+    }
+
+    /**
+     * Reconstruye la URL real de Firebase a partir de los parámetros recibidos en
+     * {@code GET /api/auth/firebase/verify-redirect}. Devuelve la URL final a la que
+     * el controller emitirá una redirección 302.
+     *
+     * <p>Acepta los parámetros estándar de Firebase Auth ActionCode:
+     * {@code mode}, {@code oobCode}, {@code apiKey}, {@code lang}, {@code continueUrl}.
+     */
+    public String resolveFirebaseVerificationTarget(Map<String, String> params) {
+        if (params == null || params.isEmpty()) {
+            throw new IllegalArgumentException("Parámetros de verificación faltantes");
+        }
+        String mode = params.getOrDefault("mode", "verifyEmail");
+        String oobCode = params.get("oobCode");
+        String apiKey = params.get("apiKey");
+        String lang = params.getOrDefault("lang", "es");
+        if (oobCode == null || oobCode.isBlank() || apiKey == null || apiKey.isBlank()) {
+            throw new IllegalArgumentException("oobCode y apiKey son requeridos");
+        }
+
+        String authDomain = resolveFirebaseAuthDomain(apiKey);
+        StringBuilder sb = new StringBuilder("https://").append(authDomain)
+            .append("/__/auth/action")
+            .append("?mode=").append(URLEncoder.encode(mode, StandardCharsets.UTF_8))
+            .append("&oobCode=").append(URLEncoder.encode(oobCode, StandardCharsets.UTF_8))
+            .append("&apiKey=").append(URLEncoder.encode(apiKey, StandardCharsets.UTF_8))
+            .append("&lang=").append(URLEncoder.encode(lang, StandardCharsets.UTF_8));
+        String continueUrl = params.get("continueUrl");
+        if (continueUrl != null && !continueUrl.isBlank()) {
+            sb.append("&continueUrl=").append(URLEncoder.encode(continueUrl, StandardCharsets.UTF_8));
+        }
+        return sb.toString();
+    }
+
+    /**
+     * Devuelve el {@code authDomain} del proyecto Firebase. Por defecto usa el del
+     * service-account configurado ({@code <project-id>.firebaseapp.com}); se puede
+     * sobreescribir en propiedades.
+     */
+    private String resolveFirebaseAuthDomain(String apiKey) {
+        try {
+            String projectId = com.google.firebase.FirebaseApp.getInstance()
+                .getOptions().getProjectId();
+            if (projectId != null && !projectId.isBlank()) {
+                return projectId + ".firebaseapp.com";
+            }
+        } catch (Exception ignored) { /* fallback */ }
+        // Último recurso: dominio fijo conocido del proyecto.
+        return "admitia-55514.firebaseapp.com";
+    }
+
+    /**
+     * Endpoint explícito para enlazar la cuenta del usuario AUTENTICADO con su identidad de Firebase.
+     * Pensado para apoderados ya creados que nunca quedaron asociados a su firebase_uid (bug histórico).
+     * Reglas:
+     *  - El usuario debe estar autenticado (cookie/JWT del BFF).
+     *  - El email del idToken debe coincidir con el del usuario.
+     *  - El email del idToken debe estar verificado en Firebase.
+     *  - El usuario no debe tener ya otro firebase_uid.
+     *  - Ese firebase_uid no debe estar usado por otro usuario.
+     */
+    @Transactional
+    public Map<String, Object> linkFirebase(Map<String, Object> payload) {
+        UserEntity user = requireAuthenticatedUser();
+        String idToken = stringValue(payload.get("idToken"));
+        if (idToken.isBlank()) {
+            throw new IllegalArgumentException("idToken requerido");
+        }
+        com.google.firebase.auth.FirebaseToken decoded;
+        try {
+            decoded = com.google.firebase.auth.FirebaseAuth.getInstance().verifyIdToken(idToken);
+        } catch (Exception ex) {
+            throw new IllegalArgumentException("Token de Firebase inválido");
+        }
+        String firebaseUid = decoded.getUid();
+        String email = decoded.getEmail();
+
+        if (email == null || !email.equalsIgnoreCase(user.getEmail())) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN,
+                "El email del token de Firebase no coincide con el email de la cuenta");
+        }
+        if (!decoded.isEmailVerified()) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN,
+                "El email no está verificado en Firebase");
+        }
+        if (user.getFirebaseUid() != null) {
+            if (user.getFirebaseUid().equals(firebaseUid)) {
+                return Map.of("success", true, "firebaseLinked", true, "message", "Ya estaba enlazado");
+            }
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                "La cuenta ya está enlazada a otra identidad de Firebase");
+        }
+        userRepository.findByFirebaseUid(firebaseUid).ifPresent(other -> {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                "Ese firebase_uid ya está usado por otro usuario (id=" + other.getId() + ")");
+        });
+
+        user.setFirebaseUid(firebaseUid);
+        user.setEmailVerified(true);
+        userRepository.save(user);
+        log.info("[Auth/Firebase] Linked (explicit) user id={} email={} → firebase_uid={}", user.getId(), email, firebaseUid);
+        return Map.of("success", true, "firebaseLinked", true);
+    }
+
+    /**
+     * Linking en línea durante /api/auth/login. Best-effort: si algo falla, NO rompemos el login
+     * (sólo log de advertencia). Las verificaciones de seguridad son las mismas que en linkFirebase.
+     */
+    private void linkFirebaseInline(UserEntity user, String idToken) {
+        try {
+            com.google.firebase.auth.FirebaseToken decoded =
+                com.google.firebase.auth.FirebaseAuth.getInstance().verifyIdToken(idToken);
+            String firebaseUid = decoded.getUid();
+            String email = decoded.getEmail();
+            if (email == null || !email.equalsIgnoreCase(user.getEmail())) {
+                log.warn("[Auth/Firebase] Linking inline rechazado: email del token ({}) != email del usuario ({})",
+                    email, user.getEmail());
+                return;
+            }
+            if (!decoded.isEmailVerified()) {
+                log.warn("[Auth/Firebase] Linking inline rechazado: email no verificado para user id={}", user.getId());
+                return;
+            }
+            if (user.getFirebaseUid() != null) {
+                if (!user.getFirebaseUid().equals(firebaseUid)) {
+                    log.warn("[Auth/Firebase] Linking inline rechazado: user id={} ya tiene otro firebase_uid", user.getId());
+                }
+                return;
+            }
+            if (userRepository.findByFirebaseUid(firebaseUid).isPresent()) {
+                log.warn("[Auth/Firebase] Linking inline rechazado: firebase_uid={} ya usado por otro usuario", firebaseUid);
+                return;
+            }
+            user.setFirebaseUid(firebaseUid);
+            user.setEmailVerified(true);
+            log.info("[Auth/Firebase] Inline linked user id={} email={} → firebase_uid={}", user.getId(), email, firebaseUid);
+        } catch (Exception ex) {
+            log.warn("[Auth/Firebase] Linking inline falló: {}", ex.getMessage());
+        }
     }
 
     public AuthContextHolder requireAuth() {
@@ -234,7 +593,13 @@ public class AuthService {
         if (auth == null) {
             throw new IllegalArgumentException("No autenticado");
         }
-        return userRepository.findById(auth.id()).orElseThrow(() -> new IllegalArgumentException("Usuario no encontrado"));
+        if (auth.id() != null) {
+            return userRepository.findById(auth.id()).orElseThrow(() -> new IllegalArgumentException("Usuario no encontrado"));
+        }
+        if (auth.email() != null && !auth.email().isBlank()) {
+            return userRepository.findByEmailIgnoreCase(auth.email()).orElseThrow(() -> new IllegalArgumentException("Usuario no encontrado"));
+        }
+        throw new IllegalArgumentException("No autenticado");
     }
 
     public Map<String, Object> toAuthUser(UserEntity user) {
@@ -245,7 +610,7 @@ public class AuthService {
         response.put("email", user.getEmail());
         response.put("rut", user.getRut());
         response.put("phone", user.getPhone());
-        response.put("role", user.getRole().name());
+        response.put("role", user.getRole().name().toUpperCase());
         response.put("subject", user.getSubject());
         response.put("educationalLevel", user.getEducationalLevel());
         response.put("active", user.isActive());
@@ -292,5 +657,130 @@ public class AuthService {
     }
 
     public record AuthContextHolder(Long id, String email, String role) {
+    }
+
+    public boolean isAdminContext(AuthContextHolder auth) {
+        return auth != null && auth.role() != null && Role.ADMIN.name().equalsIgnoreCase(auth.role());
+    }
+
+    public boolean hasAnyRoleContext(AuthContextHolder auth, Role... roles) {
+        if (auth == null || auth.role() == null) return false;
+        for (Role role : roles) {
+            if (role.name().equalsIgnoreCase(auth.role())) return true;
+        }
+        return false;
+    }
+
+    // ============================================================================================
+    // Emisión de respuestas de autenticación + endpoints de logout/refresh
+    // ============================================================================================
+
+    /**
+     * Construye la respuesta estándar de login/registro: emite access token (JWT) + refresh token
+     * (opaco, persistido) y crea/refresca la sesión activa. Centralizado para evitar duplicación
+     * y garantizar que TODO flujo de login devuelva la misma forma.
+     */
+    @Transactional
+    public Map<String, Object> issueAuthResponse(UserEntity user, String userAgent, String ipAddress, boolean singleSession) {
+        if (singleSession) {
+            // Mantiene el comportamiento histórico de "una sesión activa por usuario".
+            tokenService.revokeAllForUser(user, "LOGIN_NEW_SESSION");
+            activeSessionRepository.deleteByUser(user);
+        }
+
+        JwtService.IssuedToken access = jwtService.issueAccessToken(user.getId(), user.getEmail(), user.getRole().name());
+        TokenService.IssuedRefresh refresh = tokenService.issueNewFamily(user, userAgent, ipAddress);
+
+        ActiveSessionEntity session = new ActiveSessionEntity();
+        session.setUser(user);
+        session.setTokenHash(sha256(access.token()));
+        session.setJti(access.jti());
+        session.setCreatedAt(LocalDateTime.now());
+        session.setLastActivity(LocalDateTime.now());
+        session.setUserAgent(userAgent);
+        session.setIpAddress(ipAddress);
+        activeSessionRepository.save(session);
+
+        Map<String, Object> response = new java.util.LinkedHashMap<>();
+        response.put("success", true);
+        response.put("token", access.token());
+        response.put("expiresIn", access.expiresInSeconds());
+        response.put("expiresAt", access.expiresAt().toString());
+        response.put("refreshToken", refresh.token());
+        response.put("refreshExpiresIn", refresh.expiresInSeconds());
+        response.put("refreshExpiresAt", refresh.expiresAt().toString());
+        response.put("absoluteSessionSeconds", refresh.expiresInSeconds());
+        response.put("sessionId", session.getId().toString());
+        response.put("permissions", List.of(user.getRole().name()));
+        response.put("user", toAuthUser(user));
+        response.put("firebaseLinked", user.getFirebaseUid() != null);
+        return response;
+    }
+
+    /**
+     * Cierra la sesión: revoca el refresh token actual + agrega el jti del access a la blacklist
+     * + borra la fila de active_sessions. Idempotente: nunca falla aunque el token ya esté inválido.
+     */
+    @Transactional
+    public Map<String, Object> logout(String accessToken, String refreshToken) {
+        try {
+            if (accessToken != null && !accessToken.isBlank()) {
+                io.jsonwebtoken.Claims claims = jwtService.extractAllClaims(accessToken);
+                String jti = claims.getId();
+                Long userId = null;
+                try { userId = Long.parseLong(claims.getSubject()); } catch (Exception ignored) {}
+                java.time.Instant exp = claims.getExpiration().toInstant();
+                if (jti != null && userId != null) {
+                    tokenService.blacklistJti(jti, userId, exp, "LOGOUT");
+                    activeSessionRepository.findByTokenHash(sha256(accessToken)).ifPresent(activeSessionRepository::delete);
+                }
+            }
+        } catch (Exception ex) {
+            log.debug("[Auth] logout: access token inválido o ya expirado: {}", ex.getMessage());
+        }
+        if (refreshToken != null && !refreshToken.isBlank()) {
+            tokenService.revokeRefresh(refreshToken, "LOGOUT");
+        }
+        return Map.of("success", true, "message", "Sesión cerrada");
+    }
+
+    /**
+     * Rota el refresh token y emite un nuevo access. La detección de reuso vive en {@link TokenService}.
+     */
+    @Transactional
+    public Map<String, Object> refresh(String rawRefreshToken, String userAgent, String ipAddress) {
+        if (rawRefreshToken == null || rawRefreshToken.isBlank()) {
+            throw new TokenService.InvalidRefreshException("REFRESH_INVALID", "Refresh token requerido");
+        }
+        TokenService.IssuedRefresh next = tokenService.rotate(rawRefreshToken, userAgent, ipAddress);
+        UserEntity user = next.user();
+        if (!user.isActive()) {
+            tokenService.revokeAllForUser(user, "USER_INACTIVE");
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Cuenta inactiva");
+        }
+        JwtService.IssuedToken access = jwtService.issueAccessToken(user.getId(), user.getEmail(), user.getRole().name());
+
+        // Crear/actualizar la sesión activa para el nuevo access token.
+        ActiveSessionEntity session = new ActiveSessionEntity();
+        session.setUser(user);
+        session.setTokenHash(sha256(access.token()));
+        session.setJti(access.jti());
+        session.setCreatedAt(LocalDateTime.now());
+        session.setLastActivity(LocalDateTime.now());
+        session.setUserAgent(userAgent);
+        session.setIpAddress(ipAddress);
+        activeSessionRepository.save(session);
+
+        Map<String, Object> response = new java.util.LinkedHashMap<>();
+        response.put("success", true);
+        response.put("token", access.token());
+        response.put("expiresIn", access.expiresInSeconds());
+        response.put("expiresAt", access.expiresAt().toString());
+        response.put("refreshToken", next.token());
+        response.put("refreshExpiresIn", next.expiresInSeconds());
+        response.put("refreshExpiresAt", next.expiresAt().toString());
+        response.put("user", toAuthUser(user));
+        response.put("firebaseLinked", user.getFirebaseUid() != null);
+        return response;
     }
 }
