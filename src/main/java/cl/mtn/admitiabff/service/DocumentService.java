@@ -1,6 +1,7 @@
 package cl.mtn.admitiabff.service;
 
 import cl.mtn.admitiabff.domain.common.DocumentApprovalStatus;
+import cl.mtn.admitiabff.domain.common.DocumentType;
 import cl.mtn.admitiabff.domain.document.DocumentEntity;
 import cl.mtn.admitiabff.repository.ApplicationRepository;
 import cl.mtn.admitiabff.repository.DocumentRepository;
@@ -52,7 +53,7 @@ public class DocumentService {
         for (MultipartFile file : files) {
             DocumentEntity document = new DocumentEntity();
             document.setApplication(application);
-            document.setDocumentType(String.valueOf(metadata.getOrDefault("documentType", "GENERAL")));
+            document.setDocumentType(parseDocumentType(metadata.getOrDefault("documentType", "OTHER")));
             document.setOriginalName(file.getOriginalFilename());
             String storedName = UUID.randomUUID() + "-" + sanitize(file.getOriginalFilename());
             document.setFileName(storedName);
@@ -86,6 +87,16 @@ public class DocumentService {
     private String sanitize(String name) {
         if (name == null) return "file";
         return name.replaceAll("[^a-zA-Z0-9._-]", "_");
+    }
+
+    private DocumentType parseDocumentType(Object value) {
+        if (value == null) return DocumentType.OTHER;
+        String str = String.valueOf(value).trim().toUpperCase();
+        try {
+            return DocumentType.valueOf(str);
+        } catch (IllegalArgumentException e) {
+            return DocumentType.OTHER;
+        }
     }
 
     public Map<String, Object> byApplication(Long applicationId) {
