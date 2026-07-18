@@ -283,18 +283,21 @@ public class DashboardService {
             })
             .toList();
 
-        Map<String, Object> cycleInterview = evaluationRepository.findByApplicationIdOrderByCreatedAtDesc(applicationId).stream()
+        Map<String, Object> cycleInterview = new LinkedHashMap<>();
+        evaluationRepository.findByApplicationIdOrderByCreatedAtDesc(applicationId).stream()
             .filter(item -> Set.of("CYCLE_DIRECTOR_INTERVIEW", "CYCLE_DIRECTOR_REPORT").contains(item.getEvaluationType()))
             .findFirst()
-            .map(item -> {
-                Map<String, Object> m = new LinkedHashMap<>();
-                m.put("date", item.getEvaluationDate());
-                m.put("done", item.getStatus() == EvaluationStatus.COMPLETED);
-                m.put("decision", cycleDirectorDecisionText(item));
-                m.put("reportLink", null);
-                return m;
-            })
-            .orElse(Map.of("date", null, "done", false, "decision", "Pendiente", "reportLink", null));
+            .ifPresentOrElse(item -> {
+                cycleInterview.put("date", item.getEvaluationDate());
+                cycleInterview.put("done", item.getStatus() == EvaluationStatus.COMPLETED);
+                cycleInterview.put("decision", cycleDirectorDecisionText(item));
+                cycleInterview.put("reportLink", null);
+            }, () -> {
+                cycleInterview.put("date", null);
+                cycleInterview.put("done", false);
+                cycleInterview.put("decision", "Pendiente");
+                cycleInterview.put("reportLink", null);
+            });
 
         Map<String, Object> family = new LinkedHashMap<>();
         if (app.getFather() != null) {
