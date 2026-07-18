@@ -94,4 +94,10 @@ public class StudentEntity extends BaseEntity {
 
     @Column(name = "inclusion_notes", columnDefinition = "text")
     private String inclusionNotes;
+
+    @Column(name = "has_siblings_in_school")
+    private boolean hasSiblingsInSchool;
+
+    @Column(name = "siblings_in_school_details", columnDefinition = "text")
+    private String siblingsInSchoolDetails;
 }

@@ -14,6 +14,8 @@ public class DashboardController {
     @GetMapping("/api/dashboard/admin/stats") public Map<String, Object> adminStats() { return dashboardService.adminStats(); }
     @GetMapping("/api/dashboard/admin/detailed-stats") public Map<String, Object> detailedAdminStats(@RequestParam(required = false) Integer academicYear) { return dashboardService.detailedAdminStats(academicYear); }
     @GetMapping("/api/dashboard/applicants/{id}/summary") public Map<String, Object> applicantSummary(@PathVariable Long id) { return dashboardService.applicantSummary(id); }
+    @GetMapping("/api/dashboard/applicants/{id}/card") public Map<String, Object> applicantCard(@PathVariable Long id) { return dashboardService.applicantCard(id); }
+    @GetMapping("/api/dashboard/course-applicants") public Map<String, Object> courseApplicants(@RequestParam(required = false) Integer academicYear) { return dashboardService.courseApplicants(academicYear); }
     @GetMapping("/api/dashboard/applicant-metrics") public Map<String, Object> applicantMetrics(@RequestParam(required = false) Integer academicYear, @RequestParam(required = false) String grade, @RequestParam(required = false) String status, @RequestParam(required = false) String sortBy, @RequestParam(required = false) String sortOrder) { return dashboardService.applicantMetrics(academicYear, grade, status, sortBy, sortOrder); }
     @PostMapping("/api/dashboard/cache/clear") public Map<String, Object> clearCache(@RequestBody(required = false) Map<String, Object> payload) { return dashboardService.clearCache(payload == null ? null : (String) payload.get("pattern")); }
     @GetMapping("/api/dashboard/cache/stats") public Map<String, Object> cacheStats() { return dashboardService.cacheStats(); }

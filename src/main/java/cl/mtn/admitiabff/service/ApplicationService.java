@@ -434,6 +434,8 @@ public class ApplicationService {
         student.setInclusionStudent(booleanValue(source.getOrDefault("isInclusionStudent", false)));
         student.setInclusionType(value(source.get("inclusionType")));
         student.setInclusionNotes(value(source.get("inclusionNotes")));
+        student.setHasSiblingsInSchool(booleanValue(source.getOrDefault("hasSiblingsInSchool", false)));
+        student.setSiblingsInSchoolDetails(value(source.get("siblingsInSchoolDetails")));
         return studentRepository.save(student);
     }
 
@@ -545,6 +547,8 @@ public class ApplicationService {
         studentMap.put("isInclusionStudent", student.isInclusionStudent());
         studentMap.put("inclusionType", student.getInclusionType());
         studentMap.put("inclusionNotes", student.getInclusionNotes());
+        studentMap.put("hasSiblingsInSchool", student.isHasSiblingsInSchool());
+        studentMap.put("siblingsInSchoolDetails", student.getSiblingsInSchoolDetails());
         response.put("student", studentMap);
 
         // Father
@@ -640,6 +644,8 @@ public class ApplicationService {
         studentMap.put("specialNeeds", entity.getStudent().isSpecialNeeds());
         studentMap.put("specialNeedsDescription", entity.getStudent().getSpecialNeedsDescription());
         studentMap.put("gender", entity.getStudent().getGender());
+        studentMap.put("hasSiblingsInSchool", entity.getStudent().isHasSiblingsInSchool());
+        studentMap.put("siblingsInSchoolDetails", entity.getStudent().getSiblingsInSchoolDetails());
         response.put("student", studentMap);
         if (entity.getGuardian() != null) {
             Map<String, Object> guardianMap = new LinkedHashMap<>();

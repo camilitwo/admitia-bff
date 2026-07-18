@@ -3,8 +3,10 @@ package cl.mtn.admitiabff.service;
 import cl.mtn.admitiabff.domain.common.ApplicationStatus;
 import cl.mtn.admitiabff.domain.common.EvaluationStatus;
 import cl.mtn.admitiabff.domain.common.InterviewStatus;
+import cl.mtn.admitiabff.domain.application.ApplicationEntity;
 import cl.mtn.admitiabff.domain.evaluation.EvaluationEntity;
 import cl.mtn.admitiabff.domain.interview.InterviewEntity;
+import cl.mtn.admitiabff.domain.student.StudentEntity;
 import cl.mtn.admitiabff.repository.ApplicationRepository;
 import cl.mtn.admitiabff.repository.DocumentRepository;
 import cl.mtn.admitiabff.repository.EvaluationRepository;
@@ -15,9 +17,12 @@ import cl.mtn.admitiabff.repository.NotificationRepository;
 import cl.mtn.admitiabff.repository.UserRepository;
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.stream.Collectors;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -216,5 +221,248 @@ public class DashboardService {
 
     public Map<String, Object> performanceMetrics() {
         return Map.of("success", true, "data", Map.of("applications", statusDistribution().get("statusCount"), "evaluations", evaluationRepository.countByStatus().stream().collect(Collectors.toMap(EvaluationRepository.KeyCountView::getKey, EvaluationRepository.KeyCountView::getTotal)), "interviews", interviewRepository.countByStatus().stream().collect(Collectors.toMap(InterviewRepository.KeyCountView::getKey, InterviewRepository.KeyCountView::getTotal)), "averageProcessingDays", 0));
+    }
+
+    public Map<String, Object> courseApplicants(Integer academicYear) {
+        int year = academicYear == null ? LocalDate.now().getYear() + 1 : academicYear;
+        List<ApplicationEntity> apps = applicationRepository.findAll().stream()
+            .filter(app -> app.getDeletedAt() == null && !app.isArchived())
+            .filter(app -> year == academicYearOf(app))
+            .toList();
+
+        List<Map<String, Object>> rows = apps.stream()
+            .map(app -> {
+                StudentEntity student = app.getStudent();
+                Map<String, Object> row = new LinkedHashMap<>();
+                row.put("applicationId", app.getId());
+                row.put("studentId", student.getId());
+                row.put("studentName", fullStudentName(student));
+                row.put("gradeApplied", student.getGradeApplied());
+                row.put("gender", student.getGender());
+                row.put("admissionPreference", admissionPreferenceLabel(student.getAdmissionPreference()));
+                row.put("alumniChild", alumniChildText(student));
+                row.put("siblingsInSchool", siblingsInSchoolText(student));
+                row.put("examAverage", examAverage(app.getId()));
+                row.put("cycleDirectorDecision", cycleDirectorDecision(app.getId()));
+                row.put("status", app.getStatus().name());
+                row.put("statusLabel", statusLabel(app.getStatus().name()));
+                return row;
+            })
+            .sorted(Comparator.comparingInt(row -> gradeOrder((String) row.get("gradeApplied"))))
+            .toList();
+
+        Map<String, Object> meta = new LinkedHashMap<>();
+        meta.put("academicYear", year);
+        meta.put("total", rows.size());
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("success", true);
+        result.put("data", rows);
+        result.put("meta", meta);
+        return result;
+    }
+
+    public Map<String, Object> applicantCard(Long applicationId) {
+        ApplicationEntity app = applicationRepository.findActiveById(applicationId)
+            .orElseThrow(() -> new IllegalArgumentException("Postulación no encontrada"));
+        StudentEntity student = app.getStudent();
+
+        List<Map<String, Object>> exams = evaluationRepository.findByApplicationIdOrderByCreatedAtDesc(applicationId).stream()
+            .filter(item -> Set.of("LANGUAGE_EXAM", "MATHEMATICS_EXAM", "ENGLISH_EXAM").contains(item.getEvaluationType()))
+            .map(item -> {
+                Map<String, Object> m = new LinkedHashMap<>();
+                m.put("evaluationType", item.getEvaluationType());
+                m.put("subject", examSubjectLabel(item.getEvaluationType()));
+                m.put("responsible", item.getEvaluator() == null ? "No asignado" : item.getEvaluator().getFirstName() + " " + item.getEvaluator().getLastName());
+                m.put("score", item.getScore());
+                m.put("maxScore", item.getMaxScore());
+                m.put("percentage", examPercentage(item.getScore(), item.getMaxScore()));
+                m.put("status", item.getStatus().name());
+                m.put("reportLink", null); // se completa con documento si existe
+                return m;
+            })
+            .toList();
+
+        Map<String, Object> cycleInterview = evaluationRepository.findByApplicationIdOrderByCreatedAtDesc(applicationId).stream()
+            .filter(item -> Set.of("CYCLE_DIRECTOR_INTERVIEW", "CYCLE_DIRECTOR_REPORT").contains(item.getEvaluationType()))
+            .findFirst()
+            .map(item -> {
+                Map<String, Object> m = new LinkedHashMap<>();
+                m.put("date", item.getEvaluationDate());
+                m.put("done", item.getStatus() == EvaluationStatus.COMPLETED);
+                m.put("decision", cycleDirectorDecisionText(item));
+                m.put("reportLink", null);
+                return m;
+            })
+            .orElse(Map.of("date", null, "done", false, "decision", "Pendiente", "reportLink", null));
+
+        Map<String, Object> family = new LinkedHashMap<>();
+        if (app.getFather() != null) {
+            family.put("fatherName", app.getFather().getFullName());
+            family.put("fatherEmail", app.getFather().getEmail());
+            family.put("fatherPhone", app.getFather().getPhone());
+        }
+        if (app.getMother() != null) {
+            family.put("motherName", app.getMother().getFullName());
+            family.put("motherEmail", app.getMother().getEmail());
+            family.put("motherPhone", app.getMother().getPhone());
+        }
+        if (app.getGuardian() != null) {
+            family.put("guardianName", app.getGuardian().getFullName());
+            family.put("guardianEmail", app.getGuardian().getEmail());
+            family.put("guardianPhone", app.getGuardian().getPhone());
+        }
+
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("applicationId", app.getId());
+        data.put("status", app.getStatus().name());
+        data.put("statusLabel", statusLabel(app.getStatus().name()));
+        data.put("submissionDate", app.getSubmissionDate());
+        data.put("observations", app.getNotes());
+        Map<String, Object> studentMap = new LinkedHashMap<>();
+        studentMap.put("id", student.getId());
+        studentMap.put("firstName", student.getFirstName());
+        studentMap.put("lastName", fullStudentName(student));
+        studentMap.put("rut", student.getRut());
+        studentMap.put("birthDate", student.getBirthDate());
+        studentMap.put("gender", student.getGender());
+        studentMap.put("gradeApplied", student.getGradeApplied());
+        studentMap.put("currentSchool", student.getCurrentSchool());
+        studentMap.put("admissionPreference", admissionPreferenceLabel(student.getAdmissionPreference()));
+        studentMap.put("isAlumniChild", student.isAlumniChild());
+        studentMap.put("alumniParentYear", student.getAlumniParentYear());
+        studentMap.put("hasSiblingsInSchool", student.isHasSiblingsInSchool());
+        studentMap.put("siblingsInSchoolDetails", student.getSiblingsInSchoolDetails());
+        data.put("student", studentMap);
+        data.put("family", family);
+        data.put("exams", exams);
+        data.put("cycleDirector", cycleInterview);
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("success", true);
+        result.put("data", data);
+        return result;
+    }
+
+    private int academicYearOf(ApplicationEntity app) {
+        LocalDateTime ref = app.getSubmissionDate() != null ? app.getSubmissionDate() : app.getCreatedAt();
+        return ref == null ? LocalDate.now().getYear() + 1 : ref.getYear();
+    }
+
+    private String fullStudentName(StudentEntity student) {
+        return (value(student.getFirstName()) + " " + value(student.getPaternalLastName()) + " " + value(student.getMaternalLastName())).trim();
+    }
+
+    private String value(String value) { return value == null ? "" : value; }
+
+    private String admissionPreferenceLabel(String preference) {
+        if (preference == null) return "Nueva";
+        return switch (preference) {
+            case "HIJO_EX_ALUMNO" -> "Hijo/a exalumno";
+            case "HIJO_FUNCIONARIO" -> "Hijo/a funcionario";
+            case "NINGUNA", "NUEVA" -> "Nueva";
+            default -> preference;
+        };
+    }
+
+    private String alumniChildText(StudentEntity student) {
+        if (!student.isAlumniChild()) return "No";
+        String text = "Sí";
+        if (student.getAlumniParentYear() != null) {
+            text += " (G." + student.getAlumniParentYear() + ")";
+        }
+        return text;
+    }
+
+    private String siblingsInSchoolText(StudentEntity student) {
+        if (!student.isHasSiblingsInSchool()) return "No";
+        String text = "Sí";
+        if (student.getSiblingsInSchoolDetails() != null && !student.getSiblingsInSchoolDetails().isBlank()) {
+            text += " — " + student.getSiblingsInSchoolDetails();
+        }
+        return text;
+    }
+
+    private BigDecimal examAverage(Long applicationId) {
+        List<EvaluationEntity> exams = evaluationRepository.findByApplicationIdOrderByCreatedAtDesc(applicationId).stream()
+            .filter(item -> Set.of("LANGUAGE_EXAM", "MATHEMATICS_EXAM", "ENGLISH_EXAM").contains(item.getEvaluationType()))
+            .filter(item -> item.getScore() != null)
+            .toList();
+        if (exams.isEmpty()) return null;
+        BigDecimal sum = BigDecimal.ZERO;
+        for (EvaluationEntity exam : exams) {
+            BigDecimal max = exam.getMaxScore() == null || exam.getMaxScore().compareTo(BigDecimal.ZERO) == 0 ? BigDecimal.valueOf(100) : exam.getMaxScore();
+            sum = sum.add(exam.getScore().multiply(BigDecimal.valueOf(100)).divide(max, 2, java.math.RoundingMode.HALF_UP));
+        }
+        return sum.divide(BigDecimal.valueOf(exams.size()), 2, java.math.RoundingMode.HALF_UP);
+    }
+
+    private BigDecimal examPercentage(BigDecimal score, BigDecimal maxScore) {
+        if (score == null) return null;
+        BigDecimal max = maxScore == null || maxScore.compareTo(BigDecimal.ZERO) == 0 ? BigDecimal.valueOf(100) : maxScore;
+        return score.multiply(BigDecimal.valueOf(100)).divide(max, 2, java.math.RoundingMode.HALF_UP);
+    }
+
+    private String cycleDirectorDecision(Long applicationId) {
+        return evaluationRepository.findByApplicationIdOrderByCreatedAtDesc(applicationId).stream()
+            .filter(item -> Set.of("CYCLE_DIRECTOR_INTERVIEW", "CYCLE_DIRECTOR_REPORT").contains(item.getEvaluationType()))
+            .findFirst()
+            .map(this::cycleDirectorDecisionText)
+            .orElse("Pendiente");
+    }
+
+    private String cycleDirectorDecisionText(EvaluationEntity evaluation) {
+        if (evaluation.getRecommendations() != null && !evaluation.getRecommendations().isBlank()) return evaluation.getRecommendations();
+        if (evaluation.getObservations() != null && !evaluation.getObservations().isBlank()) return evaluation.getObservations();
+        if (evaluation.getStatus() == EvaluationStatus.COMPLETED) return "Completada";
+        return "Pendiente";
+    }
+
+    private String examSubjectLabel(String evaluationType) {
+        return switch (evaluationType) {
+            case "LANGUAGE_EXAM" -> "Lenguaje";
+            case "MATHEMATICS_EXAM" -> "Matemáticas";
+            case "ENGLISH_EXAM" -> "Inglés";
+            default -> evaluationType;
+        };
+    }
+
+    private String statusLabel(String status) {
+        return switch (status) {
+            case "PENDING" -> "Pendiente";
+            case "UNDER_REVIEW" -> "En Revisión";
+            case "DOCUMENTS_REQUESTED" -> "Docs. Solicitados";
+            case "INCOMPLETE" -> "Incompleta";
+            case "INTERVIEW_SCHEDULED" -> "Entrevista Programada";
+            case "EXAM_SCHEDULED" -> "Examen Programado";
+            case "APPROVED" -> "Aceptado";
+            case "REJECTED" -> "Rechazado";
+            case "WAITLIST" -> "Lista de Espera";
+            case "ARCHIVED" -> "Archivada";
+            default -> status;
+        };
+    }
+
+    private static final List<String> GRADE_ORDER = List.of(
+        "prekinder", "prekínder", "pre-kinder", "pre-kínder", "kinder", "kínder",
+        "1 basico", "1 básico", "1° basico", "1° básico", "1º basico", "1º básico",
+        "2 basico", "2 básico", "2° basico", "2° básico", "2º basico", "2º básico",
+        "3 basico", "3 básico", "3° basico", "3° básico", "3º basico", "3º básico",
+        "4 basico", "4 básico", "4° basico", "4° básico", "4º basico", "4º básico",
+        "5 basico", "5 básico", "5° basico", "5° básico", "5º basico", "5º básico",
+        "6 basico", "6 básico", "6° basico", "6° básico", "6º basico", "6º básico",
+        "7 basico", "7 básico", "7° basico", "7° básico", "7º basico", "7º básico",
+        "8 basico", "8 básico", "8° basico", "8° básico", "8º basico", "8º básico",
+        "i medio", "i° medio", "iº medio", "1 medio", "1° medio", "1º medio",
+        "ii medio", "ii° medio", "iiº medio", "2 medio", "2° medio", "2º medio",
+        "iii medio", "iii° medio", "iiiº medio", "3 medio", "3° medio", "3º medio",
+        "iv medio", "iv° medio", "ivº medio", "4 medio", "4° medio", "4º medio"
+    );
+
+    private int gradeOrder(String grade) {
+        if (grade == null) return Integer.MAX_VALUE;
+        String normalized = grade.toLowerCase().replaceAll("[\\.\\-]", "").trim();
+        int idx = GRADE_ORDER.indexOf(normalized);
+        return idx >= 0 ? idx : Integer.MAX_VALUE;
     }
 }
