@@ -4,6 +4,7 @@ import cl.mtn.admitiabff.domain.common.ApplicationStatus;
 import cl.mtn.admitiabff.domain.common.EvaluationStatus;
 import cl.mtn.admitiabff.domain.common.InterviewStatus;
 import cl.mtn.admitiabff.domain.application.ApplicationEntity;
+import cl.mtn.admitiabff.domain.document.DocumentEntity;
 import cl.mtn.admitiabff.domain.evaluation.EvaluationEntity;
 import cl.mtn.admitiabff.domain.interview.InterviewEntity;
 import cl.mtn.admitiabff.domain.student.StudentEntity;
@@ -266,8 +267,11 @@ public class DashboardService {
         ApplicationEntity app = applicationRepository.findActiveById(applicationId)
             .orElseThrow(() -> new IllegalArgumentException("Postulación no encontrada"));
         StudentEntity student = app.getStudent();
+        List<EvaluationEntity> evaluations = evaluationRepository.findByApplicationIdOrderByCreatedAtDesc(applicationId);
+        List<InterviewEntity> interviews = interviewRepository.findByApplicationIdOrderByScheduledDateDesc(applicationId);
+        List<DocumentEntity> documents = documentRepository.findByApplicationIdOrderByUploadDateDesc(applicationId);
 
-        List<Map<String, Object>> exams = evaluationRepository.findByApplicationIdOrderByCreatedAtDesc(applicationId).stream()
+        List<Map<String, Object>> exams = evaluations.stream()
             .filter(item -> Set.of("LANGUAGE_EXAM", "MATHEMATICS_EXAM", "ENGLISH_EXAM").contains(item.getEvaluationType()))
             .map(item -> {
                 Map<String, Object> m = new LinkedHashMap<>();
@@ -278,26 +282,37 @@ public class DashboardService {
                 m.put("maxScore", item.getMaxScore());
                 m.put("percentage", examPercentage(item.getScore(), item.getMaxScore()));
                 m.put("status", item.getStatus().name());
-                m.put("reportLink", null); // se completa con documento si existe
+                m.put("reportLink", examReportLink(documents, item.getEvaluationType()));
                 return m;
             })
             .toList();
 
         Map<String, Object> cycleInterview = new LinkedHashMap<>();
-        evaluationRepository.findByApplicationIdOrderByCreatedAtDesc(applicationId).stream()
-            .filter(item -> Set.of("CYCLE_DIRECTOR_INTERVIEW", "CYCLE_DIRECTOR_REPORT").contains(item.getEvaluationType()))
-            .findFirst()
-            .ifPresentOrElse(item -> {
-                cycleInterview.put("date", item.getEvaluationDate());
-                cycleInterview.put("done", item.getStatus() == EvaluationStatus.COMPLETED);
-                cycleInterview.put("decision", cycleDirectorDecisionText(item));
-                cycleInterview.put("reportLink", null);
-            }, () -> {
-                cycleInterview.put("date", null);
-                cycleInterview.put("done", false);
-                cycleInterview.put("decision", "Pendiente");
-                cycleInterview.put("reportLink", null);
-            });
+        EvaluationEntity directorInterview = evaluations.stream()
+            .filter(item -> "CYCLE_DIRECTOR_INTERVIEW".equals(item.getEvaluationType()))
+            .findFirst().orElse(null);
+        EvaluationEntity directorReport = evaluations.stream()
+            .filter(item -> "CYCLE_DIRECTOR_REPORT".equals(item.getEvaluationType()))
+            .findFirst().orElse(null);
+        EvaluationEntity interviewSource = directorInterview != null ? directorInterview : directorReport;
+        if (interviewSource != null) {
+            cycleInterview.put("date", interviewSource.getEvaluationDate());
+            cycleInterview.put("done", interviewSource.getStatus() == EvaluationStatus.COMPLETED);
+            cycleInterview.put("decision", cycleDirectorDecisionText(directorReport != null ? directorReport : interviewSource));
+            cycleInterview.put("reportLink", findDocumentLink(documents, "cycle", "ciclo", "director"));
+            Map<String, Object> report = new LinkedHashMap<>();
+            report.put("observations", interviewSource.getObservations());
+            report.put("recommendations", interviewSource.getRecommendations());
+            report.put("areasForImprovement", interviewSource.getAreasForImprovement());
+            report.put("evaluator", evaluatorName(interviewSource));
+            cycleInterview.put("report", report);
+        } else {
+            cycleInterview.put("date", null);
+            cycleInterview.put("done", false);
+            cycleInterview.put("decision", "Pendiente");
+            cycleInterview.put("reportLink", null);
+            cycleInterview.put("report", null);
+        }
 
         Map<String, Object> family = new LinkedHashMap<>();
         if (app.getFather() != null) {
@@ -322,6 +337,8 @@ public class DashboardService {
         data.put("statusLabel", statusLabel(app.getStatus().name()));
         data.put("submissionDate", app.getSubmissionDate());
         data.put("observations", app.getNotes());
+        data.put("processType", isPrekinder(student.getGradeApplied()) ? "PREKÍNDER" : "KÍNDER–IV");
+        data.put("examAverage", examAverage(applicationId));
         Map<String, Object> studentMap = new LinkedHashMap<>();
         studentMap.put("id", student.getId());
         studentMap.put("firstName", student.getFirstName());
@@ -338,8 +355,21 @@ public class DashboardService {
         studentMap.put("siblingsInSchoolDetails", student.getSiblingsInSchoolDetails());
         data.put("student", studentMap);
         data.put("family", family);
+        String questionnaireLink = findDocumentLink(documents, "questionnaire", "cuestionario", "family", "familia");
+        Map<String, Object> familyQuestionnaire = new LinkedHashMap<>();
+        familyQuestionnaire.put("received", questionnaireLink == null ? null : true);
+        familyQuestionnaire.put("reportLink", questionnaireLink);
+        data.put("familyQuestionnaire", familyQuestionnaire);
+        data.put("prekinderProcess", prekinderProcess(evaluations, interviews, documents));
         data.put("exams", exams);
         data.put("cycleDirector", cycleInterview);
+        data.put("documents", documents.stream().map(document -> {
+            Map<String, Object> item = new LinkedHashMap<>();
+            item.put("type", document.getDocumentType());
+            item.put("name", document.getOriginalName() == null ? document.getFileName() : document.getOriginalName());
+            item.put("url", document.getFilePath());
+            return item;
+        }).toList());
 
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("success", true);
@@ -357,6 +387,63 @@ public class DashboardService {
     }
 
     private String value(String value) { return value == null ? "" : value; }
+
+    private boolean isPrekinder(String grade) {
+        if (grade == null) return false;
+        String normalized = grade.toLowerCase(java.util.Locale.ROOT);
+        return normalized.contains("prek") || normalized.contains("pre-k");
+    }
+
+    private Map<String, Object> prekinderProcess(List<EvaluationEntity> evaluations, List<InterviewEntity> interviews, List<DocumentEntity> documents) {
+        EvaluationEntity assessment = evaluations.stream()
+            .filter(item -> item.getEvaluationType() != null && item.getEvaluationType().toUpperCase(java.util.Locale.ROOT).contains("PSYCHOLOG"))
+            .findFirst().orElse(null);
+        InterviewEntity assessmentInterview = interviews.stream()
+            .filter(item -> "PSYCHOLOGICAL".equalsIgnoreCase(item.getInterviewType()))
+            .findFirst().orElse(null);
+        InterviewEntity familyInterview = interviews.stream()
+            .filter(item -> "FAMILY".equalsIgnoreCase(item.getInterviewType()))
+            .findFirst().orElse(null);
+
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("evaluationDate", assessmentInterview != null ? assessmentInterview.getScheduledDate() : assessment == null || assessment.getEvaluationDate() == null ? null : assessment.getEvaluationDate().toLocalDate());
+        data.put("evaluationTime", assessmentInterview == null ? null : assessmentInterview.getScheduledTime());
+        data.put("location", assessmentInterview == null ? null : assessmentInterview.getLocation());
+        data.put("evaluator", assessment != null && assessment.getEvaluator() != null ? assessment.getEvaluator().getFirstName() + " " + assessment.getEvaluator().getLastName() : interviewerNames(assessmentInterview));
+        data.put("attended", assessment == null ? null : assessment.getStatus() == EvaluationStatus.COMPLETED);
+        data.put("evaluationReportLink", findDocumentLink(documents, "psych", "psico", "dap", "evaluacion"));
+        data.put("familyInterviewDate", familyInterview == null ? null : familyInterview.getScheduledDate());
+        data.put("familyInterviewers", interviewerNames(familyInterview));
+        data.put("familyInterviewDone", familyInterview == null ? null : familyInterview.getStatus() == InterviewStatus.COMPLETED);
+        data.put("familyInterviewReportLink", findDocumentLink(documents, "family_interview", "entrevista_famil", "informe_famil"));
+        return data;
+    }
+
+    private String interviewerNames(InterviewEntity interview) {
+        if (interview == null) return null;
+        String first = interview.getInterviewer() == null ? "" : interview.getInterviewer().getFirstName() + " " + interview.getInterviewer().getLastName();
+        String second = interview.getSecondInterviewer() == null ? "" : interview.getSecondInterviewer().getFirstName() + " " + interview.getSecondInterviewer().getLastName();
+        String names = (first + (first.isBlank() || second.isBlank() ? "" : " y ") + second).trim();
+        return names.isBlank() ? null : names;
+    }
+
+    private String examReportLink(List<DocumentEntity> documents, String evaluationType) {
+        return switch (evaluationType) {
+            case "LANGUAGE_EXAM" -> findDocumentLink(documents, "language", "lenguaje");
+            case "MATHEMATICS_EXAM" -> findDocumentLink(documents, "mathematics", "matematica", "matemática");
+            case "ENGLISH_EXAM" -> findDocumentLink(documents, "english", "ingles", "inglés");
+            default -> null;
+        };
+    }
+
+    private String findDocumentLink(List<DocumentEntity> documents, String... tokens) {
+        return documents.stream().filter(document -> {
+            String documentType = document.getDocumentType() == null ? "" : document.getDocumentType().name();
+            String haystack = (documentType + " " + value(document.getFileName()) + " " + value(document.getOriginalName())).toLowerCase(java.util.Locale.ROOT);
+            for (String token : tokens) if (haystack.contains(token.toLowerCase(java.util.Locale.ROOT))) return true;
+            return false;
+        }).map(DocumentEntity::getFilePath).filter(path -> path != null && !path.isBlank()).findFirst().orElse(null);
+    }
 
     private String admissionPreferenceLabel(String preference) {
         if (preference == null) return "Nueva";
@@ -415,10 +502,19 @@ public class DashboardService {
     }
 
     private String cycleDirectorDecisionText(EvaluationEntity evaluation) {
-        if (evaluation.getRecommendations() != null && !evaluation.getRecommendations().isBlank()) return evaluation.getRecommendations();
-        if (evaluation.getObservations() != null && !evaluation.getObservations().isBlank()) return evaluation.getObservations();
-        if (evaluation.getStatus() == EvaluationStatus.COMPLETED) return "Completada";
+        String recommendations = evaluation.getRecommendations();
+        if (recommendations != null && !recommendations.isBlank()) {
+            java.util.regex.Matcher matcher = java.util.regex.Pattern
+                .compile("(?im)^Decisi[oó]n(?:\\s+Final)?:\\s*(.+)$")
+                .matcher(recommendations);
+            if (matcher.find()) return matcher.group(1).trim();
+        }
         return "Pendiente";
+    }
+
+    private String evaluatorName(EvaluationEntity evaluation) {
+        if (evaluation.getEvaluator() == null) return null;
+        return (value(evaluation.getEvaluator().getFirstName()) + " " + value(evaluation.getEvaluator().getLastName())).trim();
     }
 
     private String examSubjectLabel(String evaluationType) {

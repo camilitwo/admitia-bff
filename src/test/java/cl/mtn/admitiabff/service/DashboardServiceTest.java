@@ -7,7 +7,10 @@ import static org.mockito.Mockito.when;
 
 import cl.mtn.admitiabff.domain.application.ApplicationEntity;
 import cl.mtn.admitiabff.domain.common.ApplicationStatus;
+import cl.mtn.admitiabff.domain.common.EvaluationStatus;
+import cl.mtn.admitiabff.domain.evaluation.EvaluationEntity;
 import cl.mtn.admitiabff.domain.student.StudentEntity;
+import cl.mtn.admitiabff.domain.user.UserEntity;
 import cl.mtn.admitiabff.repository.ApplicationRepository;
 import cl.mtn.admitiabff.repository.DocumentRepository;
 import cl.mtn.admitiabff.repository.EvaluationRepository;
@@ -19,6 +22,7 @@ import cl.mtn.admitiabff.repository.UserRepository;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -98,5 +102,61 @@ class DashboardServiceTest {
         @SuppressWarnings("unchecked")
         Map<String, Object> meta = (Map<String, Object>) result.get("meta");
         assertEquals(expectedYear, meta.get("academicYear"));
+    }
+
+    @Test
+    @DisplayName("applicantCard exposes the complete cycle director interview report")
+    void testApplicantCardCycleDirectorReport() {
+        ApplicationEntity app = new ApplicationEntity();
+        app.setId(7L);
+        app.setStatus(ApplicationStatus.PENDING);
+        app.setSubmissionDate(LocalDateTime.of(2026, 6, 1, 9, 0));
+
+        StudentEntity student = new StudentEntity();
+        student.setId(3L);
+        student.setFirstName("Elena");
+        student.setPaternalLastName("Rojas");
+        student.setMaternalLastName("Díaz");
+        student.setGradeApplied("1º Básico");
+        student.setAdmissionPreference("NINGUNA");
+        app.setStudent(student);
+
+        UserEntity evaluator = new UserEntity();
+        evaluator.setFirstName("María");
+        evaluator.setLastName("Soto");
+
+        EvaluationEntity interview = new EvaluationEntity();
+        interview.setEvaluationType("CYCLE_DIRECTOR_INTERVIEW");
+        interview.setStatus(EvaluationStatus.COMPLETED);
+        interview.setEvaluationDate(LocalDateTime.of(2026, 6, 15, 11, 30));
+        interview.setObservations("Antecedentes y desarrollo completo");
+        interview.setRecommendations("Observaciones finales de la entrevista");
+        interview.setAreasForImprovement("Aspectos a acompañar");
+        interview.setEvaluator(evaluator);
+
+        EvaluationEntity directorReport = new EvaluationEntity();
+        directorReport.setEvaluationType("CYCLE_DIRECTOR_REPORT");
+        directorReport.setStatus(EvaluationStatus.COMPLETED);
+        directorReport.setRecommendations("Informe final\n\nDecisión Final: Aceptado");
+
+        when(applicationRepository.findActiveById(7L)).thenReturn(Optional.of(app));
+        when(evaluationRepository.findByApplicationIdOrderByCreatedAtDesc(7L)).thenReturn(List.of(directorReport, interview));
+        when(interviewRepository.findByApplicationIdOrderByScheduledDateDesc(7L)).thenReturn(List.of());
+        when(documentRepository.findByApplicationIdOrderByUploadDateDesc(7L)).thenReturn(List.of());
+
+        Map<String, Object> result = dashboardService.applicantCard(7L);
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> data = (Map<String, Object>) result.get("data");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> cycleDirector = (Map<String, Object>) data.get("cycleDirector");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> report = (Map<String, Object>) cycleDirector.get("report");
+
+        assertEquals("Aceptado", cycleDirector.get("decision"));
+        assertEquals("Antecedentes y desarrollo completo", report.get("observations"));
+        assertEquals("Observaciones finales de la entrevista", report.get("recommendations"));
+        assertEquals("Aspectos a acompañar", report.get("areasForImprovement"));
+        assertEquals("María Soto", report.get("evaluator"));
     }
 }
