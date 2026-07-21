@@ -86,7 +86,10 @@ public final class MtnAdmissionDtos {
         @JsonProperty("monto") BigDecimal amount,
         @JsonProperty("moneda") String currency,
         @JsonProperty("fecha_vencimiento") String dueDate,
-        @JsonProperty("estado_pago") String paymentStatus
+        @JsonProperty("estado_pago") String paymentStatus,
+        @JsonProperty("c_bpartner_id") Long businessPartnerId,
+        @JsonProperty("ad_user_id") Long studentUserId,
+        @JsonProperty("referencia_externa") String externalReference
     ) {}
 
     public record ChargeStatusResponse(

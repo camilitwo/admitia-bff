@@ -2,6 +2,7 @@ package cl.mtn.admitiabff.service.payments;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -132,6 +133,8 @@ class PaymentServiceTest {
         ArgumentCaptor<ChargeRequest> chargeRequest = ArgumentCaptor.forClass(ChargeRequest.class);
         verify(client, times(1)).synchronizeAdmission(admissionRequest.capture());
         verify(client, times(1)).createCharge(chargeRequest.capture());
+        assertEquals("12345678", admissionRequest.getValue().value());
+        assertEquals("11111111", admissionRequest.getValue().alumnos().get(0).value());
         assertEquals("1_BASICO", admissionRequest.getValue().alumnos().get(0).codCurso());
         assertEquals("Juan Perez", admissionRequest.getValue().name());
         assertEquals("juan@example.invalid", admissionRequest.getValue().email());
@@ -141,6 +144,36 @@ class PaymentServiceTest {
         assertEquals("+56911111111", chargeRequest.getValue().guardianPhone());
         assertEquals("Matricula 2027", chargeRequest.getValue().concept());
         verify(client, times(1)).chargeStatus(301L);
+    }
+
+    @Test
+    void rejectsChargeAssociatedWithAnotherInstitutionalStudent() {
+        when(client.synchronizeAdmission(any())).thenReturn(successfulAdmission());
+        when(client.createCharge(any())).thenReturn(new ChargeResponse(true, "OK", "ok", List.of(), List.of(),
+            301L, "inv_301", "https://pay.example/301", new BigDecimal("50000"), "CLP", "2026-08-15",
+            "PENDIENTE", 105L, 999L, "ADMITIA-20"));
+
+        PaymentIntegrationException error = assertThrows(PaymentIntegrationException.class,
+            () -> service.checkout(20L, 7L));
+
+        assertEquals("SCHOOL_VALIDATION_ERROR", error.code());
+        assertEquals(PaymentStatus.FAILED, storedPayment.get().getStatus());
+        assertNull(storedPayment.get().getInstitutionalChargeId());
+    }
+
+    @Test
+    void doesNotCreateChargeWhenAdmissionDidNotConfirmTokuCustomerAndSubscription() {
+        when(client.synchronizeAdmission(any())).thenReturn(partialAdmissionWithoutTokuCustomer());
+
+        PaymentIntegrationException error = assertThrows(PaymentIntegrationException.class,
+            () -> service.checkout(20L, 7L));
+
+        assertEquals("SCHOOL_VALIDATION_ERROR", error.code());
+        assertEquals(PaymentStatus.FAILED, storedPayment.get().getStatus());
+        verify(client, never()).createCharge(any());
+        ArgumentCaptor<ApplicationSchoolSyncEntity> sync = ArgumentCaptor.forClass(ApplicationSchoolSyncEntity.class);
+        verify(syncs, times(3)).save(sync.capture());
+        assertEquals("FAILED", sync.getValue().getSyncStatus());
     }
 
     @Test
@@ -189,7 +222,8 @@ class PaymentServiceTest {
     void keepsCreatedChargePendingWhenImmediateReconciliationFails() {
         when(client.synchronizeAdmission(any())).thenReturn(successfulAdmission());
         when(client.createCharge(any())).thenReturn(new ChargeResponse(true, "YA_EXISTIA", "ok", List.of(), List.of(),
-            301L, "inv_301", "", new BigDecimal("50000"), "CLP", "2026-08-15", "PAGADO"));
+            301L, "inv_301", "", new BigDecimal("50000"), "CLP", "2026-08-15", "PAGADO",
+            105L, 205L, "ADMITIA-20"));
         when(client.chargeStatus(301L)).thenThrow(PaymentIntegrationException.unavailable("offline"));
 
         assertThrows(PaymentIntegrationException.class, () -> service.checkout(20L, 7L));
@@ -220,9 +254,16 @@ class PaymentServiceTest {
             List.of(new StudentResponse("11.111.111-1", "Ana Perez", 205L, "creado", "sub_1", "creado", null)));
     }
 
+    private AdmissionResponse partialAdmissionWithoutTokuCustomer() {
+        return new AdmissionResponse(true, "PARCIAL", "procesado con advertencias", List.of(),
+            List.of("No se pudo crear el cliente en Toku (HTTP 422)."), 105L, 106L,
+            "12.345.678-5", "ya_existia", null, "error: HTTP 422",
+            List.of(new StudentResponse("11.111.111-1", "Ana Perez", 205L, "ya_existia", null, "sin_customer", null)));
+    }
+
     private ChargeResponse successfulCharge(String link) {
         return new ChargeResponse(true, "OK", "ok", List.of(), List.of(), 301L, "inv_301", link,
-            new BigDecimal("50000"), "CLP", "2026-08-15", "PENDIENTE");
+            new BigDecimal("50000"), "CLP", "2026-08-15", "PENDIENTE", 105L, 205L, "ADMITIA-20");
     }
 
     private ChargeStatusResponse pendingStatus() {

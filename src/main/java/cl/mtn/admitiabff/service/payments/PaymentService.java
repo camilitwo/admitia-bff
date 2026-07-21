@@ -45,6 +45,7 @@ import org.springframework.web.server.ResponseStatusException;
 public class PaymentService {
     private static final Logger log = LoggerFactory.getLogger(PaymentService.class);
     private static final String PROVIDER = "MTN_ADMISSION_API";
+    private static final Set<String> SUCCESSFUL_GUARDIAN_STATES = Set.of("creado", "ya_existia");
     private static final Set<String> SUCCESSFUL_CUSTOMER_STATES = Set.of("creado", "ya_existia", "ya_existia_toku");
     private static final Set<String> SUCCESSFUL_STUDENT_STATES = Set.of("creado", "ya_existia");
     private static final DateTimeFormatter SCHOOL_DATE_TIME = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm");
@@ -109,7 +110,7 @@ public class PaymentService {
         audit(payment, "checkout.requested", Map.of("applicationId", applicationId, "reference", payment.getIdempotencyKey()));
 
         try {
-            synchronizeApplication(application, payment);
+            ApplicationSchoolSyncEntity schoolSync = synchronizeApplication(application, payment);
             ChargeRequest chargePayload = chargeRequest(application, payment);
             log.info("[mtn-payment] operation=charge.create applicationId={} paymentId={} reference={} amount={} currency={} dueDate={} course={}",
                 application.getId(), payment.getId(), chargePayload.externalReference(), chargePayload.amount(),
@@ -119,7 +120,7 @@ public class PaymentService {
                 application.getId(), payment.getId(), nullToEmpty(charge.estado()), nullToEmpty(charge.paymentStatus()),
                 charge.chargeId(), !blank(charge.tokuInvoiceId()), !blank(charge.paymentLink()),
                 safeList(charge.advertencias()).size(), safeList(charge.errores()).size());
-            validateCharge(charge, payment);
+            validateCharge(charge, payment, schoolSync);
             payment.setInstitutionalChargeId(charge.chargeId());
             payment.setProviderInvoiceId(charge.tokuInvoiceId());
             payment.setCheckoutUrl(charge.paymentLink());
@@ -165,7 +166,7 @@ public class PaymentService {
         }
     }
 
-    private void synchronizeApplication(ApplicationEntity application, PaymentEntity payment) {
+    private ApplicationSchoolSyncEntity synchronizeApplication(ApplicationEntity application, PaymentEntity payment) {
         ApplicationSchoolSyncEntity sync = schoolSyncRepository.findByApplicationId(application.getId()).orElseGet(() -> {
             ApplicationSchoolSyncEntity created = new ApplicationSchoolSyncEntity();
             created.setApplication(application);
@@ -187,11 +188,12 @@ public class PaymentService {
                 nullToEmpty(response.tokuCustomerState()), nullToEmpty(studentResult.estado()),
                 nullToEmpty(studentResult.tokuSubscriptionState()), response.businessPartnerId(), studentResult.userId(),
                 safeList(response.advertencias()).size(), safeList(response.errores()).size());
-            validateAdmission(response);
+            validateAdmission(response, request);
             sync.setSyncStatus("SYNCED");
             sync.setLastSuccessAt(LocalDateTime.now(providerZone));
             schoolSyncRepository.save(sync);
             audit(payment, "admission.synchronized", sanitizedAdmission(response));
+            return sync;
         } catch (PaymentIntegrationException ex) {
             log.warn("[mtn-payment] operation=admission.sync applicationId={} paymentId={} completed=false code={}",
                 application.getId(), payment.getId(), ex.code());
@@ -228,23 +230,39 @@ public class PaymentService {
         );
     }
 
-    private void validateAdmission(AdmissionResponse response) {
-        if (response == null || !Boolean.TRUE.equals(response.ok())) {
+    private void validateAdmission(AdmissionResponse response, AdmissionRequest request) {
+        if (response == null || !Boolean.TRUE.equals(response.ok()) || !safeList(response.errores()).isEmpty()) {
             throw PaymentIntegrationException.schoolValidation("El colegio no pudo sincronizar al apoderado y alumno");
         }
         StudentResponse student = firstStudent(response);
+        if (response.alumnos().size() != 1 || request.alumnos().size() != 1) {
+            throw PaymentIntegrationException.schoolValidation("El colegio devolvió un número inesperado de alumnos");
+        }
+        if (!sameRut(response.guardianRut(), request.value(), request.valueValidator())) {
+            throw PaymentIntegrationException.schoolValidation("El apoderado devuelto por el colegio no corresponde a la postulación");
+        }
+        StudentRequest requestedStudent = request.alumnos().get(0);
+        if (!sameRut(student.rut(), requestedStudent.value(), requestedStudent.valueValidator())) {
+            throw PaymentIntegrationException.schoolValidation("El alumno devuelto por el colegio no corresponde a la postulación");
+        }
+        if (!SUCCESSFUL_GUARDIAN_STATES.contains(lower(response.guardianState())) || response.businessPartnerId() == null) {
+            throw PaymentIntegrationException.schoolValidation("El colegio rechazó la sincronización del apoderado");
+        }
         if (!SUCCESSFUL_STUDENT_STATES.contains(lower(student.estado()))) {
             throw PaymentIntegrationException.schoolValidation("El colegio rechazó la sincronización del alumno");
         }
-        if (!SUCCESSFUL_CUSTOMER_STATES.contains(lower(response.tokuCustomerState()))) {
+        if (student.userId() == null) {
+            throw PaymentIntegrationException.schoolValidation("El colegio no informó el identificador institucional del alumno");
+        }
+        if (!SUCCESSFUL_CUSTOMER_STATES.contains(lower(response.tokuCustomerState())) || blank(response.tokuCustomerId())) {
             throw PaymentIntegrationException.schoolValidation("El cliente MTN Pay del apoderado no quedó confirmado");
         }
-        if (!SUCCESSFUL_STUDENT_STATES.contains(lower(student.tokuSubscriptionState()))) {
+        if (!SUCCESSFUL_STUDENT_STATES.contains(lower(student.tokuSubscriptionState())) || blank(student.tokuSubscriptionId())) {
             throw PaymentIntegrationException.schoolValidation("La suscripción MTN Pay del alumno no quedó confirmada");
         }
     }
 
-    private void validateCharge(ChargeResponse response, PaymentEntity payment) {
+    private void validateCharge(ChargeResponse response, PaymentEntity payment, ApplicationSchoolSyncEntity schoolSync) {
         if (response == null || !Boolean.TRUE.equals(response.ok())
             || !("OK".equalsIgnoreCase(response.estado()) || "YA_EXISTIA".equalsIgnoreCase(response.estado()))
             || response.chargeId() == null) {
@@ -256,7 +274,23 @@ public class PaymentService {
         if (blank(response.currency()) || !payment.getCurrency().equalsIgnoreCase(response.currency())) {
             throw PaymentIntegrationException.schoolValidation("La moneda creada por el colegio no coincide con la configurada");
         }
+        if (response.businessPartnerId() == null || !response.businessPartnerId().equals(schoolSync.getBusinessPartnerId())) {
+            throw PaymentIntegrationException.schoolValidation("El cobro no corresponde al apoderado sincronizado");
+        }
+        if (response.studentUserId() == null || !response.studentUserId().equals(schoolSync.getStudentUserId())) {
+            throw PaymentIntegrationException.schoolValidation("El cobro no corresponde al alumno sincronizado");
+        }
+        if (!blank(response.externalReference()) && !payment.getIdempotencyKey().equals(response.externalReference())) {
+            throw PaymentIntegrationException.schoolValidation("La referencia del cobro no corresponde a la postulación");
+        }
         if (!"PAGADO".equalsIgnoreCase(response.paymentStatus())) validatePaymentLink(response.paymentLink());
+    }
+
+    private static boolean sameRut(String formattedRut, String body, String verifier) {
+        String actual = nullToEmpty(formattedRut).replaceAll("[^0-9Kk]", "").toUpperCase(Locale.ROOT);
+        String expected = nullToEmpty(body).replaceAll("[^0-9]", "")
+            + nullToEmpty(verifier).replaceAll("[^0-9Kk]", "").toUpperCase(Locale.ROOT);
+        return !actual.isBlank() && actual.equals(expected);
     }
 
     private void validatePaymentLink(String link) {
@@ -353,6 +387,17 @@ public class PaymentService {
         if (application.getStudent() == null) throw PaymentIntegrationException.invalidData("La postulación no tiene un alumno asociado");
         if (blank(application.getGuardian().getFullName())) throw PaymentIntegrationException.invalidData("El apoderado no tiene nombre");
         if (blank(studentName(application.getStudent()))) throw PaymentIntegrationException.invalidData("El alumno no tiene nombre");
+        String email = guardianEmail(application);
+        if (blank(email) || !email.matches("^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$")) {
+            throw PaymentIntegrationException.invalidData("El apoderado no tiene un correo válido para MTN Pay");
+        }
+        String phone = normalizePhone(guardianPhone(application));
+        if (blank(phone) || !phone.matches("^\\+56\\d{9}$")) {
+            throw PaymentIntegrationException.invalidData("El teléfono del apoderado debe tener formato +56XXXXXXXXX");
+        }
+        if (blank(guardianAddress(application))) {
+            throw PaymentIntegrationException.invalidData("El apoderado no tiene una dirección disponible para MTN Pay");
+        }
         ChileanRut.parse(application.getGuardian().getRut(), "apoderado");
         ChileanRut.parse(application.getStudent().getRut(), "alumno");
     }

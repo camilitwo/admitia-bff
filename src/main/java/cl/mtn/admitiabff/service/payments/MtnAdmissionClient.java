@@ -91,7 +91,9 @@ public class MtnAdmissionClient implements MtnAdmissionGateway {
         if (ex instanceof HttpStatusCodeException http) {
             int status = http.getStatusCode().value();
             log.warn("[mtn-api] operation={} upstreamHttpStatus={}", operationName, status);
-            if (status == 400) return PaymentIntegrationException.schoolValidation("El colegio rechazó los datos enviados para el pago");
+            if (status == 400 || status == 422) {
+                return PaymentIntegrationException.schoolValidation("El colegio rechazó los datos enviados para el pago");
+            }
             if (status == 401 || status == 403) return PaymentIntegrationException.auth("La API MTN rechazó el token o el scope ADMISION");
             if (status == 404) return PaymentIntegrationException.unavailable("El cobro no existe en el sistema del colegio");
             return PaymentIntegrationException.unavailable("La API MTN respondió con error HTTP " + status);

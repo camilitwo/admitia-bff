@@ -6,6 +6,8 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import cl.mtn.admitiabff.service.payments.MtnAdmissionDtos.AdmissionRequest;
 import cl.mtn.admitiabff.service.payments.MtnAdmissionDtos.ChargeRequest;
 import cl.mtn.admitiabff.service.payments.MtnAdmissionDtos.StudentRequest;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import java.io.IOException;
@@ -21,6 +23,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.web.client.RestClient;
 
 class MtnAdmissionClientContractTest {
+    private static final ObjectMapper JSON = new ObjectMapper();
     private HttpServer server;
     private MtnAdmissionClient client;
     private final AtomicInteger tokenCalls = new AtomicInteger();
@@ -36,6 +39,18 @@ class MtnAdmissionClientContractTest {
         });
         server.createContext("/admision/apoderados", exchange -> {
             assertEquals("Bearer contract-token", exchange.getRequestHeaders().getFirst("Authorization"));
+            JsonNode body = JSON.readTree(exchange.getRequestBody());
+            assertEquals("18121456", body.path("value").asText());
+            assertEquals("2", body.path("valueValidator").asText());
+            assertEquals("Juan Perez QA", body.path("name").asText());
+            assertEquals("juan.perez@example.invalid", body.path("email").asText());
+            assertEquals("+56911111111", body.path("phone").asText());
+            assertEquals("Calle QA 123", body.path("address1").asText());
+            assertEquals("Santiago", body.path("city").asText());
+            assertEquals("23831685", body.path("alumnos").path(0).path("value").asText());
+            assertEquals("5", body.path("alumnos").path(0).path("valueValidator").asText());
+            assertEquals("Ana Perez QA", body.path("alumnos").path(0).path("name").asText());
+            assertEquals("1A", body.path("alumnos").path(0).path("codCurso").asText());
             respond(exchange, 200, "{\"ok\":true,\"estado\":\"OK\",\"errores\":[],\"advertencias\":[],\"c_bpartner_id\":105,\"c_bpartner_location_id\":106,\"apoderado_estado\":\"creado\",\"toku_customer_id\":\"cus_1\",\"toku_customer_estado\":\"creado\",\"alumnos\":[{\"ad_user_id\":205,\"estado\":\"creado\",\"toku_subscription_id\":\"sub_1\",\"toku_subscription_estado\":\"creado\"}]}");
         });
         server.createContext("/admision/cobros", exchange -> {
@@ -49,7 +64,18 @@ class MtnAdmissionClientContractTest {
             if ("GET".equals(exchange.getRequestMethod())) {
                 respond(exchange, 200, "{\"encontrado\":true,\"c_orderpayschedule_id\":301,\"pagado\":false,\"estado\":\"PENDIENTE\",\"monto\":50000,\"moneda\":\"CLP\",\"link_pago\":\"https://pay.example/301\"}");
             } else {
-                respond(exchange, 200, "{\"ok\":true,\"estado\":\"OK\",\"c_orderpayschedule_id\":301,\"toku_invoice_id\":\"inv_301\",\"link_pago\":\"https://pay.example/301\",\"monto\":50000,\"moneda\":\"CLP\",\"fecha_vencimiento\":\"2026-08-15\",\"estado_pago\":\"PENDIENTE\"}");
+                JsonNode body = JSON.readTree(exchange.getRequestBody());
+                assertEquals("18121456", body.path("apoderado_rut").asText());
+                assertEquals("2", body.path("apoderado_dv").asText());
+                assertEquals("+56911111111", body.path("apoderado_fono").asText());
+                assertEquals("23831685", body.path("alumno_rut").asText());
+                assertEquals("5", body.path("alumno_dv").asText());
+                assertEquals("1A", body.path("alumno_curso").asText());
+                assertEquals(50000, body.path("monto").asInt());
+                assertEquals("CLP", body.path("moneda").asText());
+                assertEquals("Matricula 2027", body.path("concepto").asText());
+                assertEquals("ADMITIA-1", body.path("referencia_externa").asText());
+                respond(exchange, 200, "{\"ok\":true,\"estado\":\"OK\",\"c_orderpayschedule_id\":301,\"toku_invoice_id\":\"inv_301\",\"link_pago\":\"https://pay.example/301\",\"monto\":50000,\"moneda\":\"CLP\",\"fecha_vencimiento\":\"2026-08-15\",\"estado_pago\":\"PENDIENTE\",\"c_bpartner_id\":105,\"ad_user_id\":205,\"referencia_externa\":\"ADMITIA-1\"}");
             }
         });
         server.start();
@@ -63,13 +89,15 @@ class MtnAdmissionClientContractTest {
 
     @Test
     void mapsAdmissionChargeAndStatusContracts() {
-        var admission = client.synchronizeAdmission(new AdmissionRequest("12345678", "5", "Juan", null, null, null, null, "Santiago", null,
-            List.of(new StudentRequest("11111111", "1", "Ana", "1A"))));
+        var admission = client.synchronizeAdmission(new AdmissionRequest("18121456", "2", "Juan Perez QA",
+            "juan.perez@example.invalid", "+56911111111", "Calle QA 123", null, "Santiago", null,
+            List.of(new StudentRequest("23831685", "5", "Ana Perez QA", "1A"))));
         assertEquals(105L, admission.businessPartnerId());
         assertEquals(205L, admission.alumnos().get(0).userId());
 
-        var charge = client.createCharge(new ChargeRequest("12345678", "5", "Juan", null, null, "11111111", "1", "Ana", "1A",
-            new BigDecimal("50000"), "CLP", "2026-08-15", "Postulación", "ADMITIA-1"));
+        var charge = client.createCharge(new ChargeRequest("18121456", "2", "Juan Perez QA",
+            "juan.perez@example.invalid", "+56911111111", "23831685", "5", "Ana Perez QA", "1A",
+            new BigDecimal("50000"), "CLP", "2026-08-15", "Matricula 2027", "ADMITIA-1"));
         assertEquals(301L, charge.chargeId());
         assertNotNull(charge.paymentLink());
 
@@ -81,8 +109,9 @@ class MtnAdmissionClientContractTest {
     @Test
     void refreshesTokenOnceAfterBusinessRequestReturnsUnauthorized() {
         rejectFirstCharge = true;
-        var charge = client.createCharge(new ChargeRequest("12345678", "5", "Juan", null, null, "11111111", "1", "Ana", "1A",
-            new BigDecimal("50000"), "CLP", "2026-08-15", "Postulación", "ADMITIA-1"));
+        var charge = client.createCharge(new ChargeRequest("18121456", "2", "Juan Perez QA",
+            "juan.perez@example.invalid", "+56911111111", "23831685", "5", "Ana Perez QA", "1A",
+            new BigDecimal("50000"), "CLP", "2026-08-15", "Matricula 2027", "ADMITIA-1"));
 
         assertEquals(301L, charge.chargeId());
         assertEquals(2, tokenCalls.get());
