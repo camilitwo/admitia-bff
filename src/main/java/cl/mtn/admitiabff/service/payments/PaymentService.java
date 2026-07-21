@@ -110,7 +110,15 @@ public class PaymentService {
 
         try {
             synchronizeApplication(application, payment);
-            ChargeResponse charge = admissionClient.createCharge(chargeRequest(application, payment));
+            ChargeRequest chargePayload = chargeRequest(application, payment);
+            log.info("[mtn-payment] operation=charge.create applicationId={} paymentId={} reference={} amount={} currency={} dueDate={} course={}",
+                application.getId(), payment.getId(), chargePayload.externalReference(), chargePayload.amount(),
+                chargePayload.currency(), chargePayload.dueDate(), nullToEmpty(chargePayload.studentCourse()));
+            ChargeResponse charge = admissionClient.createCharge(chargePayload);
+            log.info("[mtn-payment] operation=charge.create applicationId={} paymentId={} apiState={} paymentState={} chargeId={} invoicePresent={} paymentLinkPresent={} warningCount={} errorCount={}",
+                application.getId(), payment.getId(), nullToEmpty(charge.estado()), nullToEmpty(charge.paymentStatus()),
+                charge.chargeId(), !blank(charge.tokuInvoiceId()), !blank(charge.paymentLink()),
+                safeList(charge.advertencias()).size(), safeList(charge.errores()).size());
             validateCharge(charge, payment);
             payment.setInstitutionalChargeId(charge.chargeId());
             payment.setProviderInvoiceId(charge.tokuInvoiceId());
@@ -167,14 +175,26 @@ public class PaymentService {
         sync.setLastAttemptAt(LocalDateTime.now(providerZone));
         schoolSyncRepository.save(sync);
         try {
-            AdmissionResponse response = admissionClient.synchronizeAdmission(admissionRequest(application));
+            AdmissionRequest request = admissionRequest(application);
+            log.info("[mtn-payment] operation=admission.sync applicationId={} paymentId={} studentCount={} course={} emailPresent={} phoneE164={} addressPresent={}",
+                application.getId(), payment.getId(), request.alumnos().size(), nullToEmpty(request.alumnos().get(0).codCurso()),
+                !blank(request.email()), request.phone() != null && request.phone().startsWith("+"), !blank(request.address1()));
+            AdmissionResponse response = admissionClient.synchronizeAdmission(request);
             persistAdmissionResponse(sync, response);
+            StudentResponse studentResult = firstStudent(response);
+            log.info("[mtn-payment] operation=admission.sync applicationId={} paymentId={} apiState={} guardianState={} customerState={} studentState={} subscriptionState={} businessPartnerId={} studentUserId={} warningCount={} errorCount={}",
+                application.getId(), payment.getId(), nullToEmpty(response.estado()), nullToEmpty(response.guardianState()),
+                nullToEmpty(response.tokuCustomerState()), nullToEmpty(studentResult.estado()),
+                nullToEmpty(studentResult.tokuSubscriptionState()), response.businessPartnerId(), studentResult.userId(),
+                safeList(response.advertencias()).size(), safeList(response.errores()).size());
             validateAdmission(response);
             sync.setSyncStatus("SYNCED");
             sync.setLastSuccessAt(LocalDateTime.now(providerZone));
             schoolSyncRepository.save(sync);
             audit(payment, "admission.synchronized", sanitizedAdmission(response));
         } catch (PaymentIntegrationException ex) {
+            log.warn("[mtn-payment] operation=admission.sync applicationId={} paymentId={} completed=false code={}",
+                application.getId(), payment.getId(), ex.code());
             sync.setSyncStatus("FAILED");
             sync.setErrors(jsonSupport.write(List.of(ex.code())));
             schoolSyncRepository.save(sync);
@@ -252,7 +272,14 @@ public class PaymentService {
     }
 
     private void reconcile(PaymentEntity payment) {
+        log.info("[mtn-payment] operation=charge.status applicationId={} paymentId={} chargeId={} started=true",
+            payment.getApplication().getId(), payment.getId(), payment.getInstitutionalChargeId());
         ChargeStatusResponse response = admissionClient.chargeStatus(payment.getInstitutionalChargeId());
+        log.info("[mtn-payment] operation=charge.status applicationId={} paymentId={} chargeId={} found={} paid={} apiState={} paidAmountPresent={} paymentLinkPresent={}",
+            payment.getApplication().getId(), payment.getId(), payment.getInstitutionalChargeId(),
+            response != null && !Boolean.FALSE.equals(response.encontrado()), response != null && Boolean.TRUE.equals(response.pagado()),
+            response == null ? "" : nullToEmpty(response.estado()), response != null && response.paidAmount() != null,
+            response != null && !blank(response.paymentLink()));
         payment.setLastStatusCheckedAt(LocalDateTime.now(providerZone));
         if (response == null || Boolean.FALSE.equals(response.encontrado())) {
             paymentRepository.save(payment);

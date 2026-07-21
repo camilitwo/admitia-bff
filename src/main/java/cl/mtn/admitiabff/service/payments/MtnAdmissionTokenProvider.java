@@ -4,6 +4,8 @@ import cl.mtn.admitiabff.service.payments.MtnAdmissionDtos.TokenResponse;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.MediaType;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
@@ -17,6 +19,7 @@ import org.springframework.web.client.RestClient;
 @Component
 public class MtnAdmissionTokenProvider {
     private static final long EXPIRY_SKEW_SECONDS = 60;
+    private static final Logger log = LoggerFactory.getLogger(MtnAdmissionTokenProvider.class);
 
     private final RestClient restClient;
     private final MtnAdmissionProperties properties;
@@ -54,6 +57,8 @@ public class MtnAdmissionTokenProvider {
     }
 
     private CachedToken requestToken() {
+        long startedAt = System.nanoTime();
+        log.info("[mtn-api] operation=token.create authMethod={} started=true", properties.clientAuthMethod());
         MultiValueMap<String, String> form = new LinkedMultiValueMap<>();
         form.add("grant_type", "client_credentials");
         RestClient.RequestBodySpec request = restClient.post()
@@ -72,10 +77,15 @@ public class MtnAdmissionTokenProvider {
                 throw PaymentIntegrationException.auth("La API MTN devolvió un token inválido");
             }
             long usableSeconds = Math.max(1, response.expiresIn() - EXPIRY_SKEW_SECONDS);
+            log.info("[mtn-api] operation=token.create completed=true expiresInSeconds={} durationMs={}",
+                response.expiresIn(), elapsedMillis(startedAt));
             return new CachedToken(response.accessToken(), clock.instant().plusSeconds(usableSeconds));
         } catch (HttpStatusCodeException ex) {
+            log.warn("[mtn-api] operation=token.create completed=false upstreamHttpStatus={} durationMs={}",
+                ex.getStatusCode().value(), elapsedMillis(startedAt));
             throw PaymentIntegrationException.auth("La API MTN rechazó las credenciales de integración");
         } catch (ResourceAccessException ex) {
+            log.warn("[mtn-api] operation=token.create completed=false networkError=true durationMs={}", elapsedMillis(startedAt));
             throw PaymentIntegrationException.unavailable("No fue posible obtener el token de la API MTN");
         }
     }
@@ -95,6 +105,10 @@ public class MtnAdmissionTokenProvider {
     }
 
     private static boolean blank(String value) { return value == null || value.isBlank(); }
+
+    private static long elapsedMillis(long startedAt) {
+        return (System.nanoTime() - startedAt) / 1_000_000;
+    }
 
     private static SimpleClientHttpRequestFactory requestFactory(MtnAdmissionProperties properties) {
         SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();

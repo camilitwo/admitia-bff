@@ -7,6 +7,9 @@ import cl.mtn.admitiabff.service.payments.MtnAdmissionDtos.ChargeResponse;
 import cl.mtn.admitiabff.service.payments.MtnAdmissionDtos.ChargeStatusResponse;
 import java.util.function.Function;
 import java.time.Duration;
+import java.util.function.Supplier;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.MediaType;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
@@ -17,6 +20,8 @@ import org.springframework.web.client.RestClient;
 
 @Component
 public class MtnAdmissionClient implements MtnAdmissionGateway {
+    private static final Logger log = LoggerFactory.getLogger(MtnAdmissionClient.class);
+
     private final RestClient restClient;
     private final MtnAdmissionProperties properties;
     private final MtnAdmissionTokenProvider tokenProvider;
@@ -32,58 +37,60 @@ public class MtnAdmissionClient implements MtnAdmissionGateway {
 
     @Override
     public AdmissionResponse synchronizeAdmission(AdmissionRequest body) {
-        return withBearer(token -> restClient.post()
+        return traced("admission.sync", "POST", properties.guardiansPath(), () -> withBearer("admission.sync", token -> restClient.post()
             .uri(path(properties.guardiansPath(), "/admision/apoderados"))
             .contentType(MediaType.APPLICATION_JSON)
             .accept(MediaType.APPLICATION_JSON)
             .headers(headers -> headers.setBearerAuth(token))
             .body(body)
             .retrieve()
-            .body(AdmissionResponse.class));
+            .body(AdmissionResponse.class)));
     }
 
     @Override
     public ChargeResponse createCharge(ChargeRequest body) {
-        return withBearer(token -> restClient.post()
+        return traced("charge.create", "POST", properties.chargesPath(), () -> withBearer("charge.create", token -> restClient.post()
             .uri(path(properties.chargesPath(), "/admision/cobros"))
             .contentType(MediaType.APPLICATION_JSON)
             .accept(MediaType.APPLICATION_JSON)
             .headers(headers -> headers.setBearerAuth(token))
             .body(body)
             .retrieve()
-            .body(ChargeResponse.class));
+            .body(ChargeResponse.class)));
     }
 
     @Override
     public ChargeStatusResponse chargeStatus(Long chargeId) {
-        return withBearer(token -> restClient.get()
+        return traced("charge.status", "GET", properties.chargesPath(), () -> withBearer("charge.status", token -> restClient.get()
             .uri(path(properties.chargesPath(), "/admision/cobros") + "/{chargeId}", chargeId)
             .accept(MediaType.APPLICATION_JSON)
             .headers(headers -> headers.setBearerAuth(token))
             .retrieve()
-            .body(ChargeStatusResponse.class));
+            .body(ChargeStatusResponse.class)));
     }
 
-    private <T> T withBearer(Function<String, T> operation) {
+    private <T> T withBearer(String operationName, Function<String, T> operation) {
         properties.validateForUse();
         try {
             return operation.apply(tokenProvider.accessToken());
         } catch (HttpClientErrorException.Unauthorized ex) {
+            log.warn("[mtn-api] operation={} receivedHttp401=true retryingWithNewToken=true", operationName);
             tokenProvider.invalidate();
             try {
                 return operation.apply(tokenProvider.accessToken());
             } catch (RuntimeException retryFailure) {
-                throw map(retryFailure);
+                throw map(operationName, retryFailure);
             }
         } catch (RuntimeException ex) {
-            throw map(ex);
+            throw map(operationName, ex);
         }
     }
 
-    private RuntimeException map(RuntimeException ex) {
+    private RuntimeException map(String operationName, RuntimeException ex) {
         if (ex instanceof PaymentIntegrationException) return ex;
         if (ex instanceof HttpStatusCodeException http) {
             int status = http.getStatusCode().value();
+            log.warn("[mtn-api] operation={} upstreamHttpStatus={}", operationName, status);
             if (status == 400) return PaymentIntegrationException.schoolValidation("El colegio rechazó los datos enviados para el pago");
             if (status == 401 || status == 403) return PaymentIntegrationException.auth("La API MTN rechazó el token o el scope ADMISION");
             if (status == 404) return PaymentIntegrationException.unavailable("El cobro no existe en el sistema del colegio");
@@ -93,6 +100,26 @@ public class MtnAdmissionClient implements MtnAdmissionGateway {
             return PaymentIntegrationException.unavailable("La API MTN no respondió dentro del tiempo configurado");
         }
         return PaymentIntegrationException.unavailable("No fue posible comunicarse con la API MTN");
+    }
+
+    private <T> T traced(String operation, String method, String configuredPath, Supplier<T> request) {
+        long startedAt = System.nanoTime();
+        String requestPath = path(configuredPath, "");
+        log.info("[mtn-api] operation={} method={} path={} started=true", operation, method, requestPath);
+        try {
+            T response = request.get();
+            log.info("[mtn-api] operation={} method={} path={} completed=true durationMs={}",
+                operation, method, requestPath, elapsedMillis(startedAt));
+            return response;
+        } catch (PaymentIntegrationException ex) {
+            log.warn("[mtn-api] operation={} method={} path={} completed=false code={} durationMs={}",
+                operation, method, requestPath, ex.code(), elapsedMillis(startedAt));
+            throw ex;
+        }
+    }
+
+    private static long elapsedMillis(long startedAt) {
+        return (System.nanoTime() - startedAt) / 1_000_000;
     }
 
     private static String trimTrailingSlash(String value) {
