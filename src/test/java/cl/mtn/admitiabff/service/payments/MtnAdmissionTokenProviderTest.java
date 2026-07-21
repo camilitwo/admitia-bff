@@ -1,6 +1,7 @@
 package cl.mtn.admitiabff.service.payments;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.sun.net.httpserver.HttpExchange;
@@ -15,6 +16,7 @@ import java.util.concurrent.Callable;
 import java.util.concurrent.Executors;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.context.annotation.AnnotationConfigApplicationContext;
 import org.springframework.web.client.RestClient;
 
 class MtnAdmissionTokenProviderTest {
@@ -23,6 +25,23 @@ class MtnAdmissionTokenProviderTest {
     @AfterEach
     void stopServer() {
         if (server != null) server.stop(0);
+    }
+
+    @Test
+    void springCreatesProviderUsingItsAutowiredConstructor() {
+        MtnAdmissionProperties springProperties = new MtnAdmissionProperties(
+            false, "http://localhost", "/auth/token", "/admision/apoderados", "/admision/cobros",
+            "ADMISION", "secret", MtnAdmissionProperties.ClientAuthMethod.BASIC, true,
+            Duration.ofSeconds(2), Duration.ofSeconds(2), new java.math.BigDecimal("50000"), "CLP", 3,
+            "POSTMAN-QA", "Santiago", "America/Santiago");
+        try (AnnotationConfigApplicationContext context = new AnnotationConfigApplicationContext()) {
+            context.registerBean(RestClient.Builder.class, () -> RestClient.builder());
+            context.registerBean(MtnAdmissionProperties.class, () -> springProperties);
+            context.register(MtnAdmissionTokenProvider.class);
+            context.refresh();
+
+            assertNotNull(context.getBean(MtnAdmissionTokenProvider.class));
+        }
     }
 
     @Test

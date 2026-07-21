@@ -4,6 +4,7 @@ import cl.mtn.admitiabff.service.payments.MtnAdmissionDtos.TokenResponse;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.MediaType;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
@@ -22,6 +23,7 @@ public class MtnAdmissionTokenProvider {
     private final Clock clock;
     private volatile CachedToken cachedToken;
 
+    @Autowired
     public MtnAdmissionTokenProvider(RestClient.Builder builder, MtnAdmissionProperties properties) {
         this(builder, properties, Clock.systemUTC());
     }
