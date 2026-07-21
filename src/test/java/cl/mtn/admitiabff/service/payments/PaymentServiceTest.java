@@ -16,6 +16,7 @@ import cl.mtn.admitiabff.domain.common.PaymentStatus;
 import cl.mtn.admitiabff.domain.payment.ApplicationSchoolSyncEntity;
 import cl.mtn.admitiabff.domain.payment.PaymentEntity;
 import cl.mtn.admitiabff.domain.person.GuardianEntity;
+import cl.mtn.admitiabff.domain.person.ParentEntity;
 import cl.mtn.admitiabff.domain.student.StudentEntity;
 import cl.mtn.admitiabff.domain.user.UserEntity;
 import cl.mtn.admitiabff.repository.ApplicationRepository;
@@ -73,10 +74,15 @@ class PaymentServiceTest {
 
         GuardianEntity guardian = new GuardianEntity();
         guardian.setId(10L);
-        guardian.setFullName("Juan Perez");
+        guardian.setFullName("  Juan   Perez  ");
         guardian.setRut("12.345.678-5");
-        guardian.setEmail("juan@example.invalid");
-        guardian.setPhone("+56911111111");
+        guardian.setEmail(" JUAN@EXAMPLE.INVALID ");
+        guardian.setPhone("56911111111");
+        guardian.setRelationship("madre");
+
+        ParentEntity mother = new ParentEntity();
+        mother.setFullName("Juan Perez");
+        mother.setAddress("Calle QA 123");
 
         StudentEntity student = new StudentEntity();
         student.setId(11L);
@@ -89,6 +95,7 @@ class PaymentServiceTest {
         application.setId(20L);
         application.setApplicantUser(user);
         application.setGuardian(guardian);
+        application.setMother(mother);
         application.setStudent(student);
         application.setPaymentRequired(true);
         application.setPaymentStatus(PaymentStatus.UNPAID);
@@ -126,7 +133,12 @@ class PaymentServiceTest {
         verify(client, times(1)).synchronizeAdmission(admissionRequest.capture());
         verify(client, times(1)).createCharge(chargeRequest.capture());
         assertEquals("1_BASICO", admissionRequest.getValue().alumnos().get(0).codCurso());
+        assertEquals("Juan Perez", admissionRequest.getValue().name());
+        assertEquals("juan@example.invalid", admissionRequest.getValue().email());
+        assertEquals("+56911111111", admissionRequest.getValue().phone());
+        assertEquals("Calle QA 123", admissionRequest.getValue().address1());
         assertEquals("1_BASICO", chargeRequest.getValue().studentCourse());
+        assertEquals("+56911111111", chargeRequest.getValue().guardianPhone());
         assertEquals("Matricula 2027", chargeRequest.getValue().concept());
         verify(client, times(1)).chargeStatus(301L);
     }

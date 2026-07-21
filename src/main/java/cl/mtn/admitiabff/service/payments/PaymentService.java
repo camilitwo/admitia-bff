@@ -6,6 +6,7 @@ import cl.mtn.admitiabff.domain.payment.ApplicationSchoolSyncEntity;
 import cl.mtn.admitiabff.domain.payment.PaymentEntity;
 import cl.mtn.admitiabff.domain.payment.PaymentEventEntity;
 import cl.mtn.admitiabff.domain.person.GuardianEntity;
+import cl.mtn.admitiabff.domain.person.ParentEntity;
 import cl.mtn.admitiabff.domain.student.StudentEntity;
 import cl.mtn.admitiabff.domain.user.UserEntity;
 import cl.mtn.admitiabff.repository.ApplicationRepository;
@@ -187,8 +188,8 @@ public class PaymentService {
         ChileanRut.Parts guardianRut = ChileanRut.parse(guardian.getRut(), "apoderado");
         ChileanRut.Parts studentRut = ChileanRut.parse(student.getRut(), "alumno");
         return new AdmissionRequest(
-            guardianRut.body(), guardianRut.verifier(), guardian.getFullName(), emptyToNull(guardian.getEmail()),
-            emptyToNull(guardian.getPhone()), emptyToNull(guardian.getAddress()), null,
+            guardianRut.body(), guardianRut.verifier(), normalizedName(guardian.getFullName()), guardianEmail(application),
+            normalizePhone(guardianPhone(application)), guardianAddress(application), null,
             blank(properties.defaultCity()) ? "Santiago" : properties.defaultCity(), null,
             List.of(new StudentRequest(studentRut.body(), studentRut.verifier(), studentName(student), courseCode(student.getGradeApplied())))
         );
@@ -200,7 +201,7 @@ public class PaymentService {
         ChileanRut.Parts guardianRut = ChileanRut.parse(guardian.getRut(), "apoderado");
         ChileanRut.Parts studentRut = ChileanRut.parse(student.getRut(), "alumno");
         return new ChargeRequest(
-            guardianRut.body(), guardianRut.verifier(), guardian.getFullName(), emptyToNull(guardian.getEmail()), emptyToNull(guardian.getPhone()),
+            guardianRut.body(), guardianRut.verifier(), normalizedName(guardian.getFullName()), guardianEmail(application), normalizePhone(guardianPhone(application)),
             studentRut.body(), studentRut.verifier(), studentName(student), courseCode(student.getGradeApplied()),
             payment.getAmount(), payment.getCurrency(), LocalDate.now(providerZone).plusDays(properties.dueDays()).toString(),
             paymentConcept(application), payment.getIdempotencyKey()
@@ -444,6 +445,66 @@ public class PaymentService {
 
     private String courseCode(String gradeApplied) {
         return emptyToNull(gradeApplied);
+    }
+
+    private String guardianEmail(ApplicationEntity application) {
+        GuardianEntity guardian = application.getGuardian();
+        String email = firstNonBlank(
+            guardian == null ? null : guardian.getEmail(),
+            guardian == null || guardian.getUser() == null ? null : guardian.getUser().getEmail(),
+            application.getApplicantUser() == null ? null : application.getApplicantUser().getEmail());
+        return email == null ? null : email.trim().toLowerCase(Locale.ROOT);
+    }
+
+    private String guardianPhone(ApplicationEntity application) {
+        GuardianEntity guardian = application.getGuardian();
+        return firstNonBlank(
+            guardian == null ? null : guardian.getPhone(),
+            guardian == null || guardian.getUser() == null ? null : guardian.getUser().getPhone(),
+            application.getApplicantUser() == null ? null : application.getApplicantUser().getPhone());
+    }
+
+    private String guardianAddress(ApplicationEntity application) {
+        GuardianEntity guardian = application.getGuardian();
+        String direct = guardian == null ? null : emptyToNull(guardian.getAddress());
+        if (direct != null) return direct.trim();
+
+        String relationship = lower(guardian == null ? null : guardian.getRelationship());
+        if (relationship.contains("madre") || relationship.equals("mother")) {
+            return parentAddress(application.getMother());
+        }
+        if (relationship.contains("padre") || relationship.equals("father")) {
+            return parentAddress(application.getFather());
+        }
+        return firstNonBlank(parentAddress(application.getMother()), parentAddress(application.getFather()));
+    }
+
+    private static String parentAddress(ParentEntity parent) {
+        return parent == null ? null : emptyToNull(parent.getAddress());
+    }
+
+    private static String normalizePhone(String value) {
+        String raw = emptyToNull(value);
+        if (raw == null) return null;
+        String digits = raw.replaceAll("[^0-9]", "");
+        if (digits.startsWith("00") && digits.length() > 2) return "+" + digits.substring(2);
+        if (digits.startsWith("56") && digits.length() == 11) return "+" + digits;
+        if (digits.length() == 9) return "+56" + digits;
+        if (raw.trim().startsWith("+") && digits.length() >= 8) return "+" + digits;
+        return raw.trim();
+    }
+
+    private static String normalizedName(String value) {
+        String name = emptyToNull(value);
+        return name == null ? null : name.trim().replaceAll("\\s+", " ");
+    }
+
+    private static String firstNonBlank(String... values) {
+        for (String value : values) {
+            String candidate = emptyToNull(value);
+            if (candidate != null) return candidate;
+        }
+        return null;
     }
 
     private String paymentConcept(ApplicationEntity application) {
