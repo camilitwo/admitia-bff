@@ -1,6 +1,7 @@
 package cl.mtn.admitiabff.controller;
 
 import cl.mtn.admitiabff.service.TokenService;
+import cl.mtn.admitiabff.service.payments.PaymentIntegrationException;
 import cl.mtn.admitiabff.util.ApiResponse;
 import java.util.Map;
 import org.slf4j.Logger;
@@ -80,6 +81,13 @@ public class ApiExceptionHandler {
             default -> "HTTP_ERROR";
         };
         return ResponseEntity.status(status).body(ApiResponse.error(code, reason));
+    }
+
+    @ExceptionHandler(PaymentIntegrationException.class)
+    ResponseEntity<Map<String, Object>> handlePaymentIntegration(PaymentIntegrationException ex) {
+        Map<String, Object> body = new java.util.LinkedHashMap<>(ApiResponse.error(ex.code(), ex.getMessage()));
+        body.put("message", ex.getMessage());
+        return ResponseEntity.status(ex.status()).body(body);
     }
 
     @ExceptionHandler(Exception.class)

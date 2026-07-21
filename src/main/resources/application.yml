@@ -103,16 +103,26 @@ app:
   # Email de admisiones para notificaciones de confirmación/rechazo de entrevistas
   admissions:
     email: ${APP_ADMISSIONS_EMAIL:camilo.igv@gmail.com}
-  payments:
-    application-fee-clp: ${APP_PAYMENTS_APPLICATION_FEE_CLP:0}
-    process-id: ${APP_PAYMENTS_PROCESS_ID:ADMISION}
-    invoice-due-days: ${APP_PAYMENTS_INVOICE_DUE_DAYS:3}
-    webhook-tolerance-seconds: ${APP_PAYMENTS_WEBHOOK_TOLERANCE_SECONDS:300}
-    toku:
-      base-url: ${TOKU_BASE_URL:https://api.trytoku.com}
-      api-key: ${TOKU_API_KEY:}
-      account-key: ${TOKU_ACCOUNT_KEY:}
-      webhook-secret: ${TOKU_WEBHOOK_SECRET:}
+  integrations:
+    mtn-admission:
+      enabled: ${MTN_ADMISSION_ENABLED:false}
+      base-url: ${MTN_ADMISSION_BASE_URL:}
+      token-path: ${MTN_ADMISSION_TOKEN_PATH:/auth/token}
+      guardians-path: ${MTN_ADMISSION_GUARDIANS_PATH:/admision/apoderados}
+      charges-path: ${MTN_ADMISSION_CHARGES_PATH:/admision/cobros}
+      client-code: ${MTN_ADMISSION_CLIENT_CODE:ADMISION}
+      # Obligatorio en Railway. Nunca almacenar el secreto ni un Bearer temporal en este archivo.
+      client-secret: ${MTN_ADMISSION_CLIENT_SECRET}
+      client-auth-method: ${MTN_ADMISSION_CLIENT_AUTH_METHOD:BASIC}
+      allow-insecure-http: ${MTN_ADMISSION_ALLOW_INSECURE_HTTP:false}
+      connect-timeout: ${MTN_ADMISSION_CONNECT_TIMEOUT:3s}
+      read-timeout: ${MTN_ADMISSION_READ_TIMEOUT:10s}
+      application-fee: ${MTN_ADMISSION_APPLICATION_FEE:0}
+      currency: ${MTN_ADMISSION_CURRENCY:CLP}
+      due-days: ${MTN_ADMISSION_DUE_DAYS:3}
+      reference-prefix: ${MTN_ADMISSION_REFERENCE_PREFIX:ADMITIA}
+      default-city: ${MTN_ADMISSION_DEFAULT_CITY:Santiago}
+      provider-zone: ${MTN_ADMISSION_PROVIDER_ZONE:America/Santiago}
 
 management:
   endpoints:

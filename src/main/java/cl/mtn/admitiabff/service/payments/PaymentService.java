@@ -2,24 +2,39 @@ package cl.mtn.admitiabff.service.payments;
 
 import cl.mtn.admitiabff.domain.application.ApplicationEntity;
 import cl.mtn.admitiabff.domain.common.PaymentStatus;
+import cl.mtn.admitiabff.domain.payment.ApplicationSchoolSyncEntity;
 import cl.mtn.admitiabff.domain.payment.PaymentEntity;
 import cl.mtn.admitiabff.domain.payment.PaymentEventEntity;
+import cl.mtn.admitiabff.domain.person.GuardianEntity;
+import cl.mtn.admitiabff.domain.student.StudentEntity;
 import cl.mtn.admitiabff.domain.user.UserEntity;
 import cl.mtn.admitiabff.repository.ApplicationRepository;
+import cl.mtn.admitiabff.repository.ApplicationSchoolSyncRepository;
 import cl.mtn.admitiabff.repository.PaymentEventRepository;
 import cl.mtn.admitiabff.repository.PaymentRepository;
 import cl.mtn.admitiabff.repository.UserRepository;
+import cl.mtn.admitiabff.service.payments.MtnAdmissionDtos.AdmissionRequest;
+import cl.mtn.admitiabff.service.payments.MtnAdmissionDtos.AdmissionResponse;
+import cl.mtn.admitiabff.service.payments.MtnAdmissionDtos.ChargeRequest;
+import cl.mtn.admitiabff.service.payments.MtnAdmissionDtos.ChargeResponse;
+import cl.mtn.admitiabff.service.payments.MtnAdmissionDtos.ChargeStatusResponse;
+import cl.mtn.admitiabff.service.payments.MtnAdmissionDtos.StudentRequest;
+import cl.mtn.admitiabff.service.payments.MtnAdmissionDtos.StudentResponse;
 import cl.mtn.admitiabff.util.JsonSupport;
-import com.fasterxml.jackson.core.type.TypeReference;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import java.math.BigDecimal;
+import java.net.URI;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
-import java.time.OffsetDateTime;
-import java.time.ZoneOffset;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeParseException;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -27,207 +42,335 @@ import org.springframework.web.server.ResponseStatusException;
 
 @Service
 public class PaymentService {
-    private static final String PROVIDER = "TOKU";
-    private static final List<PaymentStatus> ACTIVE_STATUSES = List.of(PaymentStatus.PAYMENT_PENDING);
+    private static final Logger log = LoggerFactory.getLogger(PaymentService.class);
+    private static final String PROVIDER = "MTN_ADMISSION_API";
+    private static final Set<String> SUCCESSFUL_CUSTOMER_STATES = Set.of("creado", "ya_existia", "ya_existia_toku");
+    private static final Set<String> SUCCESSFUL_STUDENT_STATES = Set.of("creado", "ya_existia");
+    private static final DateTimeFormatter SCHOOL_DATE_TIME = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm");
 
     private final ApplicationRepository applicationRepository;
     private final UserRepository userRepository;
     private final PaymentRepository paymentRepository;
     private final PaymentEventRepository paymentEventRepository;
-    private final TokuClient tokuClient;
-    private final TokuProperties properties;
-    private final TokuSignatureVerifier signatureVerifier;
+    private final ApplicationSchoolSyncRepository schoolSyncRepository;
+    private final MtnAdmissionGateway admissionClient;
+    private final MtnAdmissionProperties properties;
     private final JsonSupport jsonSupport;
-    private final ObjectMapper objectMapper;
+    private final ZoneId providerZone;
 
-    public PaymentService(ApplicationRepository applicationRepository, UserRepository userRepository, PaymentRepository paymentRepository,
-                          PaymentEventRepository paymentEventRepository, TokuClient tokuClient, TokuProperties properties,
-                          TokuSignatureVerifier signatureVerifier, JsonSupport jsonSupport, ObjectMapper objectMapper) {
+    public PaymentService(ApplicationRepository applicationRepository,
+                          UserRepository userRepository,
+                          PaymentRepository paymentRepository,
+                          PaymentEventRepository paymentEventRepository,
+                          ApplicationSchoolSyncRepository schoolSyncRepository,
+                          MtnAdmissionGateway admissionClient,
+                          MtnAdmissionProperties properties,
+                          JsonSupport jsonSupport) {
         this.applicationRepository = applicationRepository;
         this.userRepository = userRepository;
         this.paymentRepository = paymentRepository;
         this.paymentEventRepository = paymentEventRepository;
-        this.tokuClient = tokuClient;
+        this.schoolSyncRepository = schoolSyncRepository;
+        this.admissionClient = admissionClient;
         this.properties = properties;
-        this.signatureVerifier = signatureVerifier;
         this.jsonSupport = jsonSupport;
-        this.objectMapper = objectMapper;
+        this.providerZone = ZoneId.of(blank(properties.providerZone()) ? "America/Santiago" : properties.providerZone());
     }
 
-    @Transactional
+    @Transactional(noRollbackFor = PaymentIntegrationException.class)
     public Map<String, Object> checkout(Long applicationId, Long userId) {
-        ApplicationEntity application = loadOwnedApplication(applicationId, userId);
+        properties.validateForUse();
+        ApplicationEntity application = loadOwnedApplicationForUpdate(applicationId, userId);
+        PaymentEntity latest = paymentRepository.findFirstByApplicationIdOrderByCreatedAtDesc(applicationId).orElse(null);
         if (!application.isPaymentRequired() || application.getPaymentStatus() == PaymentStatus.PAID) {
-            return Map.of("success", true, "data", statusResponse(application, null));
-        }
-        BigDecimal amount = properties.applicationFeeClp() == null ? BigDecimal.ZERO : properties.applicationFeeClp();
-        if (amount.compareTo(BigDecimal.ZERO) <= 0) {
-            throw new IllegalStateException("APP_PAYMENTS_APPLICATION_FEE_CLP debe ser mayor a 0");
+            return wrap(statusResponse(application, latest));
         }
 
-        PaymentEntity payment = paymentRepository.findFirstByApplicationIdAndStatusInOrderByCreatedAtDesc(applicationId, ACTIVE_STATUSES)
-            .orElseGet(() -> paymentRepository.findByIdempotencyKey(idempotencyKey(applicationId, userId)).orElse(null));
-        if (payment != null && payment.getStatus() == PaymentStatus.PAYMENT_PENDING && payment.getCheckoutUrl() != null && !payment.getCheckoutUrl().isBlank()) {
-            return Map.of("success", true, "data", statusResponse(application, payment));
-        }
-        if (payment == null) {
-            payment = new PaymentEntity();
-            payment.setApplication(application);
-            payment.setGuardianUser(userRepository.findById(userId).orElseThrow(() -> new IllegalArgumentException("Usuario no encontrado")));
-            payment.setProvider(PROVIDER);
-            payment.setIdempotencyKey(idempotencyKey(applicationId, userId));
-            payment.setAmount(amount);
-            payment.setCurrency("CLP");
-            payment.setStatus(PaymentStatus.PAYMENT_PENDING);
-            payment.setExpiresAt(LocalDateTime.now().plusDays(properties.invoiceDueDays()));
-            payment = paymentRepository.save(payment);
-        } else {
-            payment.setAmount(amount);
-            payment.setCurrency("CLP");
-            payment.setStatus(PaymentStatus.PAYMENT_PENDING);
-            payment.setCheckoutUrl(null);
-            payment.setProviderInvoiceId(null);
-            payment.setProviderTransactionId(null);
-            payment.setPaidAt(null);
-            payment.setExpiresAt(LocalDateTime.now().plusDays(properties.invoiceDueDays()));
-            payment = paymentRepository.save(payment);
+        validateApplicationData(application);
+        PaymentEntity payment = latest != null
+            ? latest
+            : paymentRepository.findByIdempotencyKey(idempotencyKey(applicationId)).orElse(null);
+        if (payment != null && payment.getStatus() == PaymentStatus.PAYMENT_PENDING
+            && payment.getInstitutionalChargeId() != null && !blank(payment.getCheckoutUrl())) {
+            try {
+                reconcile(payment);
+            } catch (PaymentIntegrationException ex) {
+                audit(payment, "status.check_failed", Map.of("code", ex.code()));
+            }
+            return wrap(statusResponse(application, payment));
         }
 
+        if (payment == null) payment = newPayment(application, userId);
+        resetForAttempt(payment);
         application.setPaymentStatus(PaymentStatus.PAYMENT_PENDING);
         applicationRepository.save(application);
-        audit(payment, "checkout.requested", Map.of("applicationId", applicationId, "amount", amount, "currency", "CLP"));
+        paymentRepository.save(payment);
+        audit(payment, "checkout.requested", Map.of("applicationId", applicationId, "reference", payment.getIdempotencyKey()));
 
         try {
-            String customerId = ensureTokuCustomer(payment);
-            String externalId = payment.getIdempotencyKey();
-            Map<String, Object> invoice = tokuClient.createInvoice(
-                customerId,
-                productId(application),
-                LocalDate.now().plusDays(properties.invoiceDueDays()),
-                amount,
-                "CLP",
-                externalId,
-                metadata(application, payment),
-                OffsetDateTime.now(ZoneOffset.UTC).plusDays(properties.invoiceDueDays())
-            );
-            payment.setProviderCustomerId(customerId);
-            payment.setProviderInvoiceId(stringValue(invoice.get("id")));
-            payment.setCheckoutUrl(firstNonBlank(invoice.get("link_payment"), invoice.get("linkPayment")));
-            if (payment.getCheckoutUrl() == null || payment.getCheckoutUrl().isBlank()) {
-                throw new IllegalStateException("Toku no retornó link_payment para la invoice");
-            }
+            synchronizeApplication(application, payment);
+            ChargeResponse charge = admissionClient.createCharge(chargeRequest(application, payment));
+            validateCharge(charge, payment);
+            payment.setInstitutionalChargeId(charge.chargeId());
+            payment.setProviderInvoiceId(charge.tokuInvoiceId());
+            payment.setCheckoutUrl(charge.paymentLink());
+            payment.setExternalStatus(upper(charge.paymentStatus()));
             paymentRepository.save(payment);
-            audit(payment, "checkout.created", invoice);
-            return Map.of("success", true, "data", statusResponse(application, payment));
-        } catch (RuntimeException ex) {
-            payment.setStatus(PaymentStatus.FAILED);
-            application.setPaymentStatus(PaymentStatus.FAILED);
+            audit(payment, "charge.created", sanitizedCharge(charge));
+            if ("PAGADO".equalsIgnoreCase(charge.paymentStatus())) reconcile(payment);
+            return wrap(statusResponse(application, payment));
+        } catch (PaymentIntegrationException ex) {
+            boolean chargeAlreadyCreated = payment.getInstitutionalChargeId() != null;
+            payment.setStatus(chargeAlreadyCreated ? PaymentStatus.PAYMENT_PENDING : PaymentStatus.FAILED);
+            application.setPaymentStatus(chargeAlreadyCreated ? PaymentStatus.PAYMENT_PENDING : PaymentStatus.FAILED);
             paymentRepository.save(payment);
             applicationRepository.save(application);
-            audit(payment, "checkout.failed", Map.of("message", ex.getMessage()));
+            audit(payment, chargeAlreadyCreated ? "reconciliation.deferred" : "checkout.failed", Map.of("code", ex.code()));
             throw ex;
         }
     }
 
-    @Transactional(readOnly = true)
+    @Transactional(noRollbackFor = PaymentIntegrationException.class)
     public Map<String, Object> status(Long applicationId, Long userId) {
         ApplicationEntity application = loadOwnedApplication(applicationId, userId);
-        PaymentEntity payment = paymentRepository.findFirstByApplicationIdAndStatusInOrderByCreatedAtDesc(applicationId, ACTIVE_STATUSES)
-            .orElse(null);
-        return Map.of("success", true, "data", statusResponse(application, payment));
+        PaymentEntity payment = paymentRepository.findFirstByApplicationIdOrderByCreatedAtDesc(applicationId).orElse(null);
+        if (payment != null && payment.getStatus() == PaymentStatus.PAYMENT_PENDING && payment.getInstitutionalChargeId() != null) {
+            reconcile(payment);
+        }
+        return wrap(statusResponse(application, payment));
     }
 
     @Transactional
-    public Map<String, Object> tokuWebhook(String signatureHeader, String rawBody) {
-        Map<String, Object> payload = readMap(rawBody);
-        String eventId = stringValue(payload.get("id"));
-        if (!signatureVerifier.isValid(signatureHeader, eventId, properties.toku().webhookSecret(), properties.webhookToleranceSeconds())) {
-            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Firma Toku inválida");
+    public void reconcilePendingForUserBestEffort(Long userId) {
+        if (!properties.enabled()) return;
+        List<PaymentEntity> pending = paymentRepository
+            .findByGuardianUserIdAndStatusAndInstitutionalChargeIdIsNotNull(userId, PaymentStatus.PAYMENT_PENDING);
+        for (PaymentEntity payment : pending) {
+            try {
+                reconcile(payment);
+            } catch (RuntimeException ex) {
+                log.warn("[payments] No se pudo conciliar paymentId={} applicationId={}: {}",
+                    payment.getId(), payment.getApplication().getId(), ex.getMessage());
+                audit(payment, "status.check_failed", Map.of("type", ex.getClass().getSimpleName()));
+            }
         }
-        if (paymentEventRepository.existsByProviderAndProviderEventId(PROVIDER, eventId)) {
-            return Map.of("success", true, "duplicate", true);
+    }
+
+    private void synchronizeApplication(ApplicationEntity application, PaymentEntity payment) {
+        ApplicationSchoolSyncEntity sync = schoolSyncRepository.findByApplicationId(application.getId()).orElseGet(() -> {
+            ApplicationSchoolSyncEntity created = new ApplicationSchoolSyncEntity();
+            created.setApplication(application);
+            return created;
+        });
+        sync.setSyncStatus("SYNCING");
+        sync.setLastAttemptAt(LocalDateTime.now(providerZone));
+        schoolSyncRepository.save(sync);
+        try {
+            AdmissionResponse response = admissionClient.synchronizeAdmission(admissionRequest(application));
+            persistAdmissionResponse(sync, response);
+            validateAdmission(response);
+            sync.setSyncStatus("SYNCED");
+            sync.setLastSuccessAt(LocalDateTime.now(providerZone));
+            schoolSyncRepository.save(sync);
+            audit(payment, "admission.synchronized", sanitizedAdmission(response));
+        } catch (PaymentIntegrationException ex) {
+            sync.setSyncStatus("FAILED");
+            sync.setErrors(jsonSupport.write(List.of(ex.code())));
+            schoolSyncRepository.save(sync);
+            throw ex;
         }
+    }
 
-        String eventType = stringValue(payload.get("event_type"));
-        Map<String, Object> invoice = nestedMap(payload, "invoice");
-        Map<String, Object> paymentIntent = nestedMap(payload, "payment_intent");
-        String invoiceId = firstNonBlank(invoice.get("id"), paymentIntent.get("invoice"), paymentIntent.get("invoice_id"));
-        PaymentEntity payment = invoiceId == null ? null : paymentRepository.findFirstByProviderInvoiceIdOrderByCreatedAtDesc(invoiceId).orElse(null);
+    private AdmissionRequest admissionRequest(ApplicationEntity application) {
+        GuardianEntity guardian = application.getGuardian();
+        StudentEntity student = application.getStudent();
+        ChileanRut.Parts guardianRut = ChileanRut.parse(guardian.getRut(), "apoderado");
+        ChileanRut.Parts studentRut = ChileanRut.parse(student.getRut(), "alumno");
+        return new AdmissionRequest(
+            guardianRut.body(), guardianRut.verifier(), guardian.getFullName(), emptyToNull(guardian.getEmail()),
+            emptyToNull(guardian.getPhone()), emptyToNull(guardian.getAddress()), null,
+            blank(properties.defaultCity()) ? "Santiago" : properties.defaultCity(), null,
+            List.of(new StudentRequest(studentRut.body(), studentRut.verifier(), studentName(student), courseCode(student.getGradeApplied())))
+        );
+    }
 
-        PaymentEventEntity event = new PaymentEventEntity();
-        event.setProvider(PROVIDER);
-        event.setProviderEventId(eventId);
-        event.setEventType(eventType.isBlank() ? "unknown" : eventType);
-        event.setPayload(rawBody == null || rawBody.isBlank() ? "{}" : rawBody);
-        event.setPayment(payment);
-        paymentEventRepository.save(event);
+    private ChargeRequest chargeRequest(ApplicationEntity application, PaymentEntity payment) {
+        GuardianEntity guardian = application.getGuardian();
+        StudentEntity student = application.getStudent();
+        ChileanRut.Parts guardianRut = ChileanRut.parse(guardian.getRut(), "apoderado");
+        ChileanRut.Parts studentRut = ChileanRut.parse(student.getRut(), "alumno");
+        return new ChargeRequest(
+            guardianRut.body(), guardianRut.verifier(), guardian.getFullName(), emptyToNull(guardian.getEmail()), emptyToNull(guardian.getPhone()),
+            studentRut.body(), studentRut.verifier(), studentName(student), courseCode(student.getGradeApplied()),
+            payment.getAmount(), payment.getCurrency(), LocalDate.now(providerZone).plusDays(properties.dueDays()).toString(),
+            paymentConcept(application), payment.getIdempotencyKey()
+        );
+    }
 
-        if (payment == null) {
-            return Map.of("success", true, "matched", false);
+    private void validateAdmission(AdmissionResponse response) {
+        if (response == null || !Boolean.TRUE.equals(response.ok())) {
+            throw PaymentIntegrationException.schoolValidation("El colegio no pudo sincronizar al apoderado y alumno");
         }
-
-        if (isPaid(eventType, invoice, paymentIntent)) {
-            markPaid(payment, firstNonBlank(paymentIntent.get("id"), payload.get("payment"), invoice.get("id")));
-        } else if (isFailed(eventType, invoice, paymentIntent)) {
-            markFailed(payment);
+        StudentResponse student = firstStudent(response);
+        if (!SUCCESSFUL_STUDENT_STATES.contains(lower(student.estado()))) {
+            throw PaymentIntegrationException.schoolValidation("El colegio rechazó la sincronización del alumno");
         }
-        return Map.of("success", true, "matched", true);
+        if (!SUCCESSFUL_CUSTOMER_STATES.contains(lower(response.tokuCustomerState()))) {
+            throw PaymentIntegrationException.schoolValidation("El cliente MTN Pay del apoderado no quedó confirmado");
+        }
+        if (!SUCCESSFUL_STUDENT_STATES.contains(lower(student.tokuSubscriptionState()))) {
+            throw PaymentIntegrationException.schoolValidation("La suscripción MTN Pay del alumno no quedó confirmada");
+        }
+    }
+
+    private void validateCharge(ChargeResponse response, PaymentEntity payment) {
+        if (response == null || !Boolean.TRUE.equals(response.ok())
+            || !("OK".equalsIgnoreCase(response.estado()) || "YA_EXISTIA".equalsIgnoreCase(response.estado()))
+            || response.chargeId() == null) {
+            throw PaymentIntegrationException.schoolValidation("El colegio no pudo crear el cobro de la postulación");
+        }
+        if (response.amount() == null || response.amount().compareTo(payment.getAmount()) != 0) {
+            throw PaymentIntegrationException.schoolValidation("El monto creado por el colegio no coincide con el configurado");
+        }
+        if (blank(response.currency()) || !payment.getCurrency().equalsIgnoreCase(response.currency())) {
+            throw PaymentIntegrationException.schoolValidation("La moneda creada por el colegio no coincide con la configurada");
+        }
+        if (!"PAGADO".equalsIgnoreCase(response.paymentStatus())) validatePaymentLink(response.paymentLink());
+    }
+
+    private void validatePaymentLink(String link) {
+        if (blank(link)) throw PaymentIntegrationException.missingLink();
+        try {
+            URI uri = URI.create(link);
+            if (!("https".equalsIgnoreCase(uri.getScheme()) || "http".equalsIgnoreCase(uri.getScheme())) || blank(uri.getHost())) {
+                throw PaymentIntegrationException.missingLink();
+            }
+        } catch (IllegalArgumentException ex) {
+            throw PaymentIntegrationException.missingLink();
+        }
+    }
+
+    private void reconcile(PaymentEntity payment) {
+        ChargeStatusResponse response = admissionClient.chargeStatus(payment.getInstitutionalChargeId());
+        payment.setLastStatusCheckedAt(LocalDateTime.now(providerZone));
+        if (response == null || Boolean.FALSE.equals(response.encontrado())) {
+            paymentRepository.save(payment);
+            throw PaymentIntegrationException.unavailable("El colegio no encontró el cobro registrado");
+        }
+        payment.setExternalStatus(upper(response.estado()));
+        if (!blank(response.paymentLink())) payment.setCheckoutUrl(response.paymentLink());
+        if (Boolean.TRUE.equals(response.pagado()) || "PAGADO".equalsIgnoreCase(response.estado())) {
+            validatePaidAmounts(payment, response);
+            markPaid(payment, response);
+        } else {
+            paymentRepository.save(payment);
+        }
+        audit(payment, "status.checked", sanitizedStatus(response));
+    }
+
+    private void validatePaidAmounts(PaymentEntity payment, ChargeStatusResponse response) {
+        if (!payment.getCurrency().equalsIgnoreCase(response.currency())) {
+            throw PaymentIntegrationException.schoolValidation("La moneda confirmada por el colegio no coincide con el cobro");
+        }
+        if (response.paidAmount() == null || response.paidAmount().compareTo(payment.getAmount()) < 0) {
+            throw PaymentIntegrationException.schoolValidation("El monto confirmado por el colegio no cubre el cobro esperado");
+        }
+    }
+
+    private void markPaid(PaymentEntity payment, ChargeStatusResponse response) {
+        if (payment.getStatus() == PaymentStatus.PAID) return;
+        LocalDateTime paidAt = parseSchoolDate(response.paidAt());
+        payment.setStatus(PaymentStatus.PAID);
+        payment.setPaidAt(paidAt);
+        payment.setPaidAmount(response.paidAmount());
+        payment.setProviderTransactionId(response.transactionId());
+        payment.setVoucher(response.voucher());
+        payment.setPaymentMethod(response.paymentMethod());
+        paymentRepository.save(payment);
+        ApplicationEntity application = payment.getApplication();
+        application.setPaymentStatus(PaymentStatus.PAID);
+        application.setPaidAt(paidAt);
+        applicationRepository.save(application);
+    }
+
+    private PaymentEntity newPayment(ApplicationEntity application, Long userId) {
+        UserEntity user = userRepository.findById(userId)
+            .orElseThrow(() -> PaymentIntegrationException.invalidData("Usuario autenticado no encontrado"));
+        PaymentEntity payment = new PaymentEntity();
+        payment.setApplication(application);
+        payment.setGuardianUser(user);
+        payment.setIdempotencyKey(idempotencyKey(application.getId()));
+        return payment;
+    }
+
+    private void resetForAttempt(PaymentEntity payment) {
+        payment.setProvider(PROVIDER);
+        payment.setAmount(properties.applicationFee());
+        payment.setCurrency(upper(properties.currency()));
+        payment.setStatus(PaymentStatus.PAYMENT_PENDING);
+        payment.setCheckoutUrl(null);
+        payment.setInstitutionalChargeId(null);
+        payment.setProviderInvoiceId(null);
+        payment.setProviderTransactionId(null);
+        payment.setPaidAmount(null);
+        payment.setVoucher(null);
+        payment.setPaymentMethod(null);
+        payment.setExternalStatus("CREATING");
+        payment.setPaidAt(null);
+        payment.setExpiresAt(LocalDate.now(providerZone).plusDays(properties.dueDays()).atStartOfDay());
+    }
+
+    private void validateApplicationData(ApplicationEntity application) {
+        if (application.getGuardian() == null) throw PaymentIntegrationException.invalidData("La postulación no tiene un apoderado asociado");
+        if (application.getStudent() == null) throw PaymentIntegrationException.invalidData("La postulación no tiene un alumno asociado");
+        if (blank(application.getGuardian().getFullName())) throw PaymentIntegrationException.invalidData("El apoderado no tiene nombre");
+        if (blank(studentName(application.getStudent()))) throw PaymentIntegrationException.invalidData("El alumno no tiene nombre");
+        ChileanRut.parse(application.getGuardian().getRut(), "apoderado");
+        ChileanRut.parse(application.getStudent().getRut(), "alumno");
     }
 
     private ApplicationEntity loadOwnedApplication(Long applicationId, Long userId) {
         ApplicationEntity application = applicationRepository.findActiveById(applicationId)
-            .orElseThrow(() -> new IllegalArgumentException("Postulación no encontrada"));
-        if (application.getApplicantUser() == null || !userId.equals(application.getApplicantUser().getId())) {
-            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "No puede operar sobre esta postulación");
-        }
+            .orElseThrow(() -> PaymentIntegrationException.invalidData("Postulación no encontrada"));
+        assertOwnership(application, userId);
         return application;
     }
 
-    private String ensureTokuCustomer(PaymentEntity payment) {
-        if (payment.getProviderCustomerId() != null && !payment.getProviderCustomerId().isBlank()) {
-            return payment.getProviderCustomerId();
-        }
-        UserEntity user = payment.getGuardianUser();
-        String existing = paymentRepository.findFirstByGuardianUserIdAndProviderCustomerIdIsNotNullOrderByCreatedAtDesc(user.getId())
-            .map(PaymentEntity::getProviderCustomerId)
-            .orElse(null);
-        if (existing != null && !existing.isBlank()) return existing;
-
-        Map<String, Object> customer = tokuClient.createCustomer(
-            sanitizeRut(user.getRut()),
-            user.getEmail(),
-            (stringValue(user.getFirstName()) + " " + stringValue(user.getLastName())).trim(),
-            user.getPhone(),
-            "admitia-user-" + user.getId()
-        );
-        String customerId = stringValue(customer.get("id"));
-        if (customerId.isBlank()) {
-            throw new IllegalStateException("Toku no retornó id de customer");
-        }
-        audit(payment, "customer.created", customer);
-        return customerId;
+    private ApplicationEntity loadOwnedApplicationForUpdate(Long applicationId, Long userId) {
+        ApplicationEntity application = applicationRepository.findActiveByIdForUpdate(applicationId)
+            .orElseThrow(() -> PaymentIntegrationException.invalidData("Postulación no encontrada"));
+        assertOwnership(application, userId);
+        return application;
     }
 
-    private void markPaid(PaymentEntity payment, String transactionId) {
-        payment.setStatus(PaymentStatus.PAID);
-        payment.setProviderTransactionId(transactionId);
-        payment.setPaidAt(LocalDateTime.now());
-        paymentRepository.save(payment);
-        ApplicationEntity application = payment.getApplication();
-        application.setPaymentStatus(PaymentStatus.PAID);
-        application.setPaidAt(payment.getPaidAt());
-        applicationRepository.save(application);
-        audit(payment, "payment.paid", Map.of("transactionId", transactionId == null ? "" : transactionId));
+    private void assertOwnership(ApplicationEntity application, Long userId) {
+        if (application.getApplicantUser() == null || !userId.equals(application.getApplicantUser().getId())) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "No puede operar sobre esta postulación");
+        }
     }
 
-    private void markFailed(PaymentEntity payment) {
-        if (payment.getStatus() == PaymentStatus.PAID) return;
-        payment.setStatus(PaymentStatus.FAILED);
-        paymentRepository.save(payment);
-        ApplicationEntity application = payment.getApplication();
-        application.setPaymentStatus(PaymentStatus.FAILED);
-        applicationRepository.save(application);
-        audit(payment, "payment.failed", Map.of("providerInvoiceId", stringValue(payment.getProviderInvoiceId())));
+    private void persistAdmissionResponse(ApplicationSchoolSyncEntity sync, AdmissionResponse response) {
+        if (response == null) throw PaymentIntegrationException.schoolValidation("El colegio devolvió una respuesta de alta vacía");
+        StudentResponse student = firstStudent(response);
+        sync.setBusinessPartnerId(response.businessPartnerId());
+        sync.setBusinessPartnerLocationId(response.businessPartnerLocationId());
+        sync.setStudentUserId(student.userId());
+        sync.setTokuCustomerId(response.tokuCustomerId());
+        sync.setTokuSubscriptionId(student.tokuSubscriptionId());
+        sync.setGuardianState(response.guardianState());
+        sync.setCustomerState(response.tokuCustomerState());
+        sync.setStudentState(student.estado());
+        sync.setSubscriptionState(student.tokuSubscriptionState());
+        sync.setWarnings(jsonSupport.write(safeList(response.advertencias())));
+        sync.setErrors(jsonSupport.write(safeList(response.errores())));
+        schoolSyncRepository.save(sync);
+    }
+
+    private StudentResponse firstStudent(AdmissionResponse response) {
+        if (response.alumnos() == null || response.alumnos().isEmpty() || response.alumnos().get(0) == null) {
+            throw PaymentIntegrationException.schoolValidation("El colegio no informó el resultado del alumno");
+        }
+        return response.alumnos().get(0);
     }
 
     private Map<String, Object> statusResponse(ApplicationEntity application, PaymentEntity payment) {
@@ -248,6 +391,8 @@ public class PaymentService {
         return data;
     }
 
+    private Map<String, Object> wrap(Map<String, Object> data) { return Map.of("success", true, "data", data); }
+
     private void audit(PaymentEntity payment, String eventType, Object payload) {
         PaymentEventEntity event = new PaymentEventEntity();
         event.setPayment(payment);
@@ -257,78 +402,73 @@ public class PaymentService {
         paymentEventRepository.save(event);
     }
 
-    private String idempotencyKey(Long applicationId, Long userId) {
-        return properties.processId() + "-application-" + applicationId + "-guardian-" + userId;
+    private Map<String, Object> sanitizedAdmission(AdmissionResponse response) {
+        StudentResponse student = firstStudent(response);
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("estado", response.estado());
+        result.put("businessPartnerId", response.businessPartnerId());
+        result.put("studentUserId", student.userId());
+        result.put("guardianState", response.guardianState());
+        result.put("customerState", response.tokuCustomerState());
+        result.put("studentState", student.estado());
+        result.put("subscriptionState", student.tokuSubscriptionState());
+        result.put("warnings", safeList(response.advertencias()));
+        return result;
     }
 
-    private String productId(ApplicationEntity application) {
-        return "admision-" + properties.processId() + "-app-" + application.getId();
+    private Map<String, Object> sanitizedCharge(ChargeResponse response) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("estado", response.estado());
+        result.put("chargeId", response.chargeId());
+        result.put("invoiceId", nullToEmpty(response.tokuInvoiceId()));
+        result.put("amount", response.amount());
+        result.put("currency", nullToEmpty(response.currency()));
+        return result;
     }
 
-    private Map<String, Object> metadata(ApplicationEntity application, PaymentEntity payment) {
-        Map<String, Object> metadata = new LinkedHashMap<>();
-        metadata.put("application_id", String.valueOf(application.getId()));
-        metadata.put("guardian_user_id", String.valueOf(payment.getGuardianUser().getId()));
-        metadata.put("process_id", properties.processId());
-        metadata.put("student_rut", stringValue(application.getStudent().getRut()));
-        return metadata;
+    private Map<String, Object> sanitizedStatus(ChargeStatusResponse response) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("chargeId", response.chargeId());
+        result.put("estado", nullToEmpty(response.estado()));
+        result.put("paid", Boolean.TRUE.equals(response.pagado()));
+        result.put("amount", response.amount());
+        result.put("paidAmount", response.paidAmount());
+        result.put("currency", nullToEmpty(response.currency()));
+        return result;
     }
 
-    private boolean isPaid(String eventType, Map<String, Object> invoice, Map<String, Object> paymentIntent) {
-        String invoiceStatus = stringValue(invoice.get("status")).toUpperCase();
-        String intentStatus = stringValue(paymentIntent.get("status")).toUpperCase();
-        return "invoice.paid".equals(eventType)
-            || "payment_intent.succeeded".equals(eventType)
-            || Boolean.TRUE.equals(invoice.get("is_paid"))
-            || "PAID".equals(invoiceStatus)
-            || "SUCCESS".equals(intentStatus)
-            || "SUCCEEDED".equals(intentStatus);
+    private String idempotencyKey(Long applicationId) {
+        String prefix = blank(properties.referencePrefix()) ? "ADMITIA" : properties.referencePrefix().trim();
+        return prefix + "-" + applicationId;
     }
 
-    private boolean isFailed(String eventType, Map<String, Object> invoice, Map<String, Object> paymentIntent) {
-        String invoiceStatus = stringValue(invoice.get("status")).toUpperCase();
-        String intentStatus = stringValue(paymentIntent.get("status")).toUpperCase();
-        return eventType.contains("failed")
-            || eventType.contains("voided")
-            || "FAILED".equals(invoiceStatus)
-            || "VOID".equals(invoiceStatus)
-            || "VOIDED".equals(invoiceStatus)
-            || "FAILED".equals(intentStatus);
+    private String courseCode(String gradeApplied) {
+        return emptyToNull(gradeApplied);
     }
 
-    private Map<String, Object> readMap(String rawBody) {
-        try {
-            if (rawBody == null || rawBody.isBlank()) return Map.of();
-            return objectMapper.readValue(rawBody, new TypeReference<>() {});
-        } catch (Exception ex) {
-            throw new IllegalArgumentException("Webhook Toku inválido");
+    private String paymentConcept(ApplicationEntity application) {
+        int applicationYear = application.getSubmissionDate() == null
+            ? LocalDate.now(providerZone).getYear()
+            : application.getSubmissionDate().getYear();
+        return "Matricula " + (applicationYear + 1);
+    }
+
+    private LocalDateTime parseSchoolDate(String value) {
+        if (!blank(value)) {
+            try { return LocalDateTime.parse(value, SCHOOL_DATE_TIME); } catch (DateTimeParseException ignored) {}
+            try { return LocalDateTime.parse(value); } catch (DateTimeParseException ignored) {}
         }
+        return LocalDateTime.now(providerZone);
     }
 
-    private Map<String, Object> nestedMap(Map<String, Object> payload, String key) {
-        Object value = payload.get(key);
-        if (value instanceof Map<?, ?> map) {
-            Map<String, Object> result = new LinkedHashMap<>();
-            map.forEach((k, v) -> result.put(String.valueOf(k), v));
-            return result;
-        }
-        return Map.of();
+    private static String studentName(StudentEntity student) {
+        return (nullToEmpty(student.getFirstName()) + " " + nullToEmpty(student.getPaternalLastName()) + " " + nullToEmpty(student.getMaternalLastName())).trim();
     }
 
-    private String firstNonBlank(Object... values) {
-        for (Object value : values) {
-            String text = stringValue(value);
-            if (!text.isBlank()) return text;
-        }
-        return null;
-    }
-
-    private String stringValue(Object value) {
-        return value == null ? "" : String.valueOf(value);
-    }
-
-    private String sanitizeRut(String value) {
-        String rut = stringValue(value).replace(".", "").replace("-", "").trim();
-        return rut.isBlank() ? "admitia" : rut;
-    }
+    private static List<String> safeList(List<String> values) { return values == null ? List.of() : values; }
+    private static String lower(String value) { return nullToEmpty(value).trim().toLowerCase(Locale.ROOT); }
+    private static String upper(String value) { return nullToEmpty(value).trim().toUpperCase(Locale.ROOT); }
+    private static String emptyToNull(String value) { return blank(value) ? null : value.trim(); }
+    private static String nullToEmpty(String value) { return value == null ? "" : value; }
+    private static boolean blank(String value) { return value == null || value.isBlank(); }
 }

@@ -49,6 +49,9 @@ public class PaymentEntity extends BaseEntity {
     @Column(name = "provider_transaction_id")
     private String providerTransactionId;
 
+    @Column(name = "institutional_charge_id", unique = true)
+    private Long institutionalChargeId;
+
     @Column(name = "idempotency_key", nullable = false, unique = true)
     private String idempotencyKey;
 
@@ -70,4 +73,19 @@ public class PaymentEntity extends BaseEntity {
 
     @Column(name = "paid_at")
     private LocalDateTime paidAt;
+
+    @Column(name = "paid_amount", precision = 12, scale = 2)
+    private BigDecimal paidAmount;
+
+    @Column(name = "voucher")
+    private String voucher;
+
+    @Column(name = "payment_method")
+    private String paymentMethod;
+
+    @Column(name = "external_status", length = 40)
+    private String externalStatus;
+
+    @Column(name = "last_status_checked_at")
+    private LocalDateTime lastStatusCheckedAt;
 }
