@@ -15,12 +15,16 @@ class MtnAdmissionDtosTest {
 
     @Test
     void omitsCourseFieldsWhenApplicationHasNoSelectedCourse() throws Exception {
-        AdmissionRequest admission = new AdmissionRequest("12345678", "5", "Juan", null, null, null, null,
+        AdmissionRequest admission = new AdmissionRequest("12345678", "5", "Juan", null, null, null,
             "Santiago", null, List.of(new StudentRequest("11111111", "1", "Ana", null)));
-        ChargeRequest charge = new ChargeRequest("12345678", "5", "Juan", null, null, "11111111", "1", "Ana",
+        ChargeRequest charge = new ChargeRequest("12345678", "5", "Juan", null, "11111111", "1", "Ana",
             null, new BigDecimal("50000"), "CLP", "2026-07-24", "Matrícula", "ADMITIA-1");
 
-        assertFalse(objectMapper.writeValueAsString(admission).contains("codCurso"));
-        assertFalse(objectMapper.writeValueAsString(charge).contains("alumno_curso"));
+        String admissionJson = objectMapper.writeValueAsString(admission);
+        String chargeJson = objectMapper.writeValueAsString(charge);
+        assertFalse(admissionJson.contains("codCurso"));
+        assertFalse(admissionJson.contains("phone"));
+        assertFalse(chargeJson.contains("alumno_curso"));
+        assertFalse(chargeJson.contains("apoderado_fono"));
     }
 }

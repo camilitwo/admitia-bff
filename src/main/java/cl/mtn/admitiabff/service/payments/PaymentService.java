@@ -177,9 +177,9 @@ public class PaymentService {
         schoolSyncRepository.save(sync);
         try {
             AdmissionRequest request = admissionRequest(application);
-            log.info("[mtn-payment] operation=admission.sync applicationId={} paymentId={} studentCount={} course={} emailPresent={} phoneE164={} addressPresent={}",
+            log.info("[mtn-payment] operation=admission.sync applicationId={} paymentId={} studentCount={} course={} emailPresent={} addressPresent={}",
                 application.getId(), payment.getId(), request.alumnos().size(), nullToEmpty(request.alumnos().get(0).codCurso()),
-                !blank(request.email()), request.phone() != null && request.phone().startsWith("+"), !blank(request.address1()));
+                !blank(request.email()), !blank(request.address1()));
             AdmissionResponse response = admissionClient.synchronizeAdmission(request);
             persistAdmissionResponse(sync, response);
             StudentResponse studentResult = firstStudent(response);
@@ -211,7 +211,7 @@ public class PaymentService {
         ChileanRut.Parts studentRut = ChileanRut.parse(student.getRut(), "alumno");
         return new AdmissionRequest(
             guardianRut.body(), guardianRut.verifier(), normalizedName(guardian.getFullName()), guardianEmail(application),
-            normalizePhone(guardianPhone(application)), guardianAddress(application), null,
+            guardianAddress(application), null,
             blank(properties.defaultCity()) ? "Santiago" : properties.defaultCity(), null,
             List.of(new StudentRequest(studentRut.body(), studentRut.verifier(), studentName(student), courseCode(student.getGradeApplied())))
         );
@@ -223,7 +223,7 @@ public class PaymentService {
         ChileanRut.Parts guardianRut = ChileanRut.parse(guardian.getRut(), "apoderado");
         ChileanRut.Parts studentRut = ChileanRut.parse(student.getRut(), "alumno");
         return new ChargeRequest(
-            guardianRut.body(), guardianRut.verifier(), normalizedName(guardian.getFullName()), guardianEmail(application), normalizePhone(guardianPhone(application)),
+            guardianRut.body(), guardianRut.verifier(), normalizedName(guardian.getFullName()), guardianEmail(application),
             studentRut.body(), studentRut.verifier(), studentName(student), courseCode(student.getGradeApplied()),
             payment.getAmount(), payment.getCurrency(), LocalDate.now(providerZone).plusDays(properties.dueDays()).toString(),
             paymentConcept(application), payment.getIdempotencyKey()
@@ -391,10 +391,6 @@ public class PaymentService {
         if (blank(email) || !email.matches("^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$")) {
             throw PaymentIntegrationException.invalidData("El apoderado no tiene un correo válido para MTN Pay");
         }
-        String phone = normalizePhone(guardianPhone(application));
-        if (blank(phone) || !phone.matches("^\\+56\\d{9}$")) {
-            throw PaymentIntegrationException.invalidData("El teléfono del apoderado debe tener formato +56XXXXXXXXX");
-        }
         if (blank(guardianAddress(application))) {
             throw PaymentIntegrationException.invalidData("El apoderado no tiene una dirección disponible para MTN Pay");
         }
@@ -528,14 +524,6 @@ public class PaymentService {
         return email == null ? null : email.trim().toLowerCase(Locale.ROOT);
     }
 
-    private String guardianPhone(ApplicationEntity application) {
-        GuardianEntity guardian = application.getGuardian();
-        return firstNonBlank(
-            guardian == null ? null : guardian.getPhone(),
-            guardian == null || guardian.getUser() == null ? null : guardian.getUser().getPhone(),
-            application.getApplicantUser() == null ? null : application.getApplicantUser().getPhone());
-    }
-
     private String guardianAddress(ApplicationEntity application) {
         GuardianEntity guardian = application.getGuardian();
         String direct = guardian == null ? null : emptyToNull(guardian.getAddress());
@@ -553,17 +541,6 @@ public class PaymentService {
 
     private static String parentAddress(ParentEntity parent) {
         return parent == null ? null : emptyToNull(parent.getAddress());
-    }
-
-    private static String normalizePhone(String value) {
-        String raw = emptyToNull(value);
-        if (raw == null) return null;
-        String digits = raw.replaceAll("[^0-9]", "");
-        if (digits.startsWith("00") && digits.length() > 2) return "+" + digits.substring(2);
-        if (digits.startsWith("56") && digits.length() == 11) return "+" + digits;
-        if (digits.length() == 9) return "+56" + digits;
-        if (raw.trim().startsWith("+") && digits.length() >= 8) return "+" + digits;
-        return raw.trim();
     }
 
     private static String normalizedName(String value) {

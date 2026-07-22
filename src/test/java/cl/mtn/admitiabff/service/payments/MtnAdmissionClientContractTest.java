@@ -1,6 +1,7 @@
 package cl.mtn.admitiabff.service.payments;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 
 import cl.mtn.admitiabff.service.payments.MtnAdmissionDtos.AdmissionRequest;
@@ -44,7 +45,7 @@ class MtnAdmissionClientContractTest {
             assertEquals("2", body.path("valueValidator").asText());
             assertEquals("Juan Perez QA", body.path("name").asText());
             assertEquals("juan.perez@example.invalid", body.path("email").asText());
-            assertEquals("+56911111111", body.path("phone").asText());
+            assertFalse(body.has("phone"));
             assertEquals("Calle QA 123", body.path("address1").asText());
             assertEquals("Santiago", body.path("city").asText());
             assertEquals("23831685", body.path("alumnos").path(0).path("value").asText());
@@ -67,7 +68,7 @@ class MtnAdmissionClientContractTest {
                 JsonNode body = JSON.readTree(exchange.getRequestBody());
                 assertEquals("18121456", body.path("apoderado_rut").asText());
                 assertEquals("2", body.path("apoderado_dv").asText());
-                assertEquals("+56911111111", body.path("apoderado_fono").asText());
+                assertFalse(body.has("apoderado_fono"));
                 assertEquals("23831685", body.path("alumno_rut").asText());
                 assertEquals("5", body.path("alumno_dv").asText());
                 assertEquals("1A", body.path("alumno_curso").asText());
@@ -90,13 +91,13 @@ class MtnAdmissionClientContractTest {
     @Test
     void mapsAdmissionChargeAndStatusContracts() {
         var admission = client.synchronizeAdmission(new AdmissionRequest("18121456", "2", "Juan Perez QA",
-            "juan.perez@example.invalid", "+56911111111", "Calle QA 123", null, "Santiago", null,
+            "juan.perez@example.invalid", "Calle QA 123", null, "Santiago", null,
             List.of(new StudentRequest("23831685", "5", "Ana Perez QA", "1A"))));
         assertEquals(105L, admission.businessPartnerId());
         assertEquals(205L, admission.alumnos().get(0).userId());
 
         var charge = client.createCharge(new ChargeRequest("18121456", "2", "Juan Perez QA",
-            "juan.perez@example.invalid", "+56911111111", "23831685", "5", "Ana Perez QA", "1A",
+            "juan.perez@example.invalid", "23831685", "5", "Ana Perez QA", "1A",
             new BigDecimal("50000"), "CLP", "2026-08-15", "Matricula 2027", "ADMITIA-1"));
         assertEquals(301L, charge.chargeId());
         assertNotNull(charge.paymentLink());
@@ -110,7 +111,7 @@ class MtnAdmissionClientContractTest {
     void refreshesTokenOnceAfterBusinessRequestReturnsUnauthorized() {
         rejectFirstCharge = true;
         var charge = client.createCharge(new ChargeRequest("18121456", "2", "Juan Perez QA",
-            "juan.perez@example.invalid", "+56911111111", "23831685", "5", "Ana Perez QA", "1A",
+            "juan.perez@example.invalid", "23831685", "5", "Ana Perez QA", "1A",
             new BigDecimal("50000"), "CLP", "2026-08-15", "Matricula 2027", "ADMITIA-1"));
 
         assertEquals(301L, charge.chargeId());

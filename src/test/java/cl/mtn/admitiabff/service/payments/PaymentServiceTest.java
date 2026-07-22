@@ -138,10 +138,8 @@ class PaymentServiceTest {
         assertEquals("1_BASICO", admissionRequest.getValue().alumnos().get(0).codCurso());
         assertEquals("Juan Perez", admissionRequest.getValue().name());
         assertEquals("juan@example.invalid", admissionRequest.getValue().email());
-        assertEquals("+56911111111", admissionRequest.getValue().phone());
         assertEquals("Calle QA 123", admissionRequest.getValue().address1());
         assertEquals("1_BASICO", chargeRequest.getValue().studentCourse());
-        assertEquals("+56911111111", chargeRequest.getValue().guardianPhone());
         assertEquals("Matricula 2027", chargeRequest.getValue().concept());
         verify(client, times(1)).chargeStatus(301L);
     }
