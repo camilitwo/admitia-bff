@@ -72,6 +72,22 @@ class InterviewerPairServiceTest {
         assertEquals("NO_PAIRS_CONFIGURED", data.get("reasonCode"));
     }
 
+    @Test
+    void requiresConfiguredPairForCycleDirectorInterview() {
+        InterviewerPairException error = assertThrows(InterviewerPairException.class, () ->
+            service().requireEligiblePair(null, 20L, null, null, 60, null)
+        );
+
+        assertEquals("PAIR_REQUIRED", error.getCode());
+    }
+
+    @Test
+    void reservesDirectorPsychologistCompositionInBothOrders() {
+        assertEquals(true, InterviewService.isCycleDirectorPsychologistComposition(Role.CYCLE_DIRECTOR, Role.PSYCHOLOGIST));
+        assertEquals(true, InterviewService.isCycleDirectorPsychologistComposition(Role.PSYCHOLOGIST, Role.CYCLE_DIRECTOR));
+        assertEquals(false, InterviewService.isCycleDirectorPsychologistComposition(Role.INTERVIEWER, Role.PSYCHOLOGIST));
+    }
+
     private InterviewerPairService service() {
         return new InterviewerPairService(pairRepository, userRepository, applicationRepository, interviewRepository, scheduleRepository);
     }

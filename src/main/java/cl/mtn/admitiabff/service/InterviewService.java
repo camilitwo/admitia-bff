@@ -2,6 +2,7 @@ package cl.mtn.admitiabff.service;
 
 import cl.mtn.admitiabff.domain.common.EvaluationStatus;
 import cl.mtn.admitiabff.domain.common.InterviewStatus;
+import cl.mtn.admitiabff.domain.common.Role;
 import cl.mtn.admitiabff.domain.email.EmailRequestDTO;
 import cl.mtn.admitiabff.domain.evaluation.EvaluationEntity;
 import cl.mtn.admitiabff.domain.interview.InterviewEntity;
@@ -26,7 +27,6 @@ import java.util.Locale;
 import cl.mtn.admitiabff.util.TemplateUtils;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.beans.factory.annotation.Value;
 
 @Service
 @Transactional(readOnly = true)
@@ -39,9 +39,6 @@ public class InterviewService {
     private final cl.mtn.admitiabff.service.notification.EmailComposerService emailComposerService;
     private final InterviewConfirmationService confirmationService;
     private final InterviewerPairService interviewerPairService;
-
-    @Value("${app.interviewer-pairs.enforcement-enabled:false}")
-    private boolean interviewerPairEnforcementEnabled;
 
     public InterviewService(InterviewRepository interviewRepository, InterviewerScheduleRepository scheduleRepository, ApplicationRepository applicationRepository, UserRepository userRepository, EvaluationRepository evaluationRepository, cl.mtn.admitiabff.service.notification.EmailComposerService emailComposerService, InterviewConfirmationService confirmationService, InterviewerPairService interviewerPairService) {
         this.interviewRepository = interviewRepository;
@@ -281,6 +278,7 @@ public class InterviewService {
         InterviewEntity entity = new InterviewEntity();
         merge(entity, payload);
         boolean pairApplied = applyInterviewerPair(entity, payload, null);
+        validateInterviewerComposition(entity);
 
         // Validar que no exista una entrevista activa del mismo tipo para esta postulación
         Long applicationId = entity.getApplication() != null ? entity.getApplication().getId() : null;
@@ -303,6 +301,7 @@ public class InterviewService {
         InterviewEntity entity = load(id);
         merge(entity, payload);
         boolean pairApplied = applyInterviewerPair(entity, payload, id);
+        validateInterviewerComposition(entity);
         if (!pairApplied) ensureInterviewersAvailable(entity);
         return Map.of("success", true, "message", "Entrevista actualizada", "data", toResponse(interviewRepository.save(entity)));
     }
@@ -329,6 +328,7 @@ public class InterviewService {
         entity.setStatus(InterviewStatus.RESCHEDULED);
         entity.setNotes(payload.get("notes") == null ? entity.getNotes() : String.valueOf(payload.get("notes")));
         boolean pairApplied = applyInterviewerPair(entity, payload, id);
+        validateInterviewerComposition(entity);
         if (!pairApplied) ensureInterviewersAvailable(entity);
         return Map.of("success", true, "message", "Entrevista reprogramada", "data", toResponse(interviewRepository.save(entity)));
     }
@@ -496,16 +496,42 @@ public class InterviewService {
         if (applicationId == null) {
             throw new InterviewerPairException("APPLICATION_REQUIRED", "La entrevista requiere una postulación");
         }
-        if (pairId == null && !interviewerPairEnforcementEnabled) {
-            entity.setInterviewerPair(null);
-            return false;
-        }
         InterviewerPairEntity pair = interviewerPairService.requireEligiblePair(
             pairId, applicationId, entity.getScheduledDate(), entity.getScheduledTime(), entity.getDuration(), excludedInterviewId);
         entity.setInterviewerPair(pair);
         entity.setInterviewer(pair.getCycleDirector());
         entity.setSecondInterviewer(pair.getPsychologist());
         return true;
+    }
+
+    private void validateInterviewerComposition(InterviewEntity entity) {
+        if (!"FAMILY".equals(entity.getInterviewType())) return;
+        if (entity.getInterviewer() == null || entity.getSecondInterviewer() == null) {
+            throw new InterviewerPairException(
+                "FAMILY_PAIR_REQUIRED",
+                "La entrevista familiar requiere dos entrevistadores"
+            );
+        }
+        if (entity.getInterviewer().getId().equals(entity.getSecondInterviewer().getId())) {
+            throw new InterviewerPairException(
+                "FAMILY_PAIR_DUPLICATED",
+                "La entrevista familiar requiere dos entrevistadores distintos"
+            );
+        }
+        Role firstRole = entity.getInterviewer().getRole();
+        Role secondRole = entity.getSecondInterviewer().getRole();
+        boolean reservedCyclePair = isCycleDirectorPsychologistComposition(firstRole, secondRole);
+        if (reservedCyclePair) {
+            throw new InterviewerPairException(
+                "FAMILY_PAIR_RESERVED_FOR_CYCLE_DIRECTOR",
+                "La combinación Director de Ciclo + Psicólogo solo puede utilizarse en entrevistas de Director de Ciclo"
+            );
+        }
+    }
+
+    static boolean isCycleDirectorPsychologistComposition(Role firstRole, Role secondRole) {
+        return (firstRole == Role.CYCLE_DIRECTOR && secondRole == Role.PSYCHOLOGIST)
+            || (firstRole == Role.PSYCHOLOGIST && secondRole == Role.CYCLE_DIRECTOR);
     }
 
     private InterviewEntity load(Long id) {
