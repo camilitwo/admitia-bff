@@ -34,6 +34,9 @@ spring:
     cache: false
 
 app:
+  interviewer-pairs:
+    # Activar solo después de configurar parejas, ejecutar el dry-run y desplegar el frontend compatible.
+    enforcement-enabled: ${APP_INTERVIEWER_PAIRS_ENFORCEMENT_ENABLED:false}
   jwt:
     secret: ${APP_JWT_SECRET}
     expiration-minutes: ${APP_JWT_EXPIRATION_MINUTES}

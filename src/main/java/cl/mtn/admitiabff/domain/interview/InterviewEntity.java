@@ -41,6 +41,10 @@ public class InterviewEntity extends BaseEntity {
     @JoinColumn(name = "second_interviewer_id")
     private UserEntity secondInterviewer;
 
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "interviewer_pair_id")
+    private InterviewerPairEntity interviewerPair;
+
     @Column(name = "interview_type", nullable = false)
     private String interviewType;
 

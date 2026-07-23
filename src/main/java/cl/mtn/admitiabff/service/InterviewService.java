@@ -6,6 +6,7 @@ import cl.mtn.admitiabff.domain.email.EmailRequestDTO;
 import cl.mtn.admitiabff.domain.evaluation.EvaluationEntity;
 import cl.mtn.admitiabff.domain.interview.InterviewEntity;
 import cl.mtn.admitiabff.domain.interview.InterviewerScheduleEntity;
+import cl.mtn.admitiabff.domain.interview.InterviewerPairEntity;
 import cl.mtn.admitiabff.repository.ApplicationRepository;
 import cl.mtn.admitiabff.repository.EvaluationRepository;
 import cl.mtn.admitiabff.repository.InterviewRepository;
@@ -25,6 +26,7 @@ import java.util.Locale;
 import cl.mtn.admitiabff.util.TemplateUtils;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.beans.factory.annotation.Value;
 
 @Service
 @Transactional(readOnly = true)
@@ -36,8 +38,12 @@ public class InterviewService {
     private final EvaluationRepository evaluationRepository;
     private final cl.mtn.admitiabff.service.notification.EmailComposerService emailComposerService;
     private final InterviewConfirmationService confirmationService;
+    private final InterviewerPairService interviewerPairService;
 
-    public InterviewService(InterviewRepository interviewRepository, InterviewerScheduleRepository scheduleRepository, ApplicationRepository applicationRepository, UserRepository userRepository, EvaluationRepository evaluationRepository, cl.mtn.admitiabff.service.notification.EmailComposerService emailComposerService, InterviewConfirmationService confirmationService) {
+    @Value("${app.interviewer-pairs.enforcement-enabled:false}")
+    private boolean interviewerPairEnforcementEnabled;
+
+    public InterviewService(InterviewRepository interviewRepository, InterviewerScheduleRepository scheduleRepository, ApplicationRepository applicationRepository, UserRepository userRepository, EvaluationRepository evaluationRepository, cl.mtn.admitiabff.service.notification.EmailComposerService emailComposerService, InterviewConfirmationService confirmationService, InterviewerPairService interviewerPairService) {
         this.interviewRepository = interviewRepository;
         this.scheduleRepository = scheduleRepository;
         this.applicationRepository = applicationRepository;
@@ -45,6 +51,7 @@ public class InterviewService {
         this.evaluationRepository = evaluationRepository;
         this.emailComposerService = emailComposerService;
         this.confirmationService = confirmationService;
+        this.interviewerPairService = interviewerPairService;
     }
 
     public List<Map<String, Object>> publicInterviewers() {
@@ -124,16 +131,16 @@ public class InterviewService {
             ))
             .toList();
 
-        return Map.of(
-            "success", true,
-            "data", Map.of(
-                "date", dateStr,
-                "time", timeStr,
-                "duration", interviewDuration,
-                "availableInterviewers", freeInterviewers,
-                "interviewerCount", freeInterviewers.size()
-            )
-        );
+        List<Map<String, Object>> availablePairs = interviewerPairService.availablePairs(date, time, interviewDuration);
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("date", dateStr);
+        data.put("time", timeStr);
+        data.put("duration", interviewDuration);
+        data.put("availableInterviewers", freeInterviewers);
+        data.put("interviewerCount", freeInterviewers.size());
+        data.put("availablePairs", availablePairs);
+        data.put("availablePairCount", availablePairs.size());
+        return Map.of("success", true, "data", data);
     }
 
     public Map<String, Object> availableSlots(Long interviewerId, String date, Integer duration) {
@@ -273,6 +280,7 @@ public class InterviewService {
     public Map<String, Object> create(Map<String, Object> payload) {
         InterviewEntity entity = new InterviewEntity();
         merge(entity, payload);
+        boolean pairApplied = applyInterviewerPair(entity, payload, null);
 
         // Validar que no exista una entrevista activa del mismo tipo para esta postulación
         Long applicationId = entity.getApplication() != null ? entity.getApplication().getId() : null;
@@ -281,7 +289,7 @@ public class InterviewService {
             ensureNoDuplicateInterview(applicationId, interviewType, null);
         }
 
-        ensureInterviewersAvailable(entity);
+        if (!pairApplied) ensureInterviewersAvailable(entity);
         InterviewEntity saved = interviewRepository.save(entity);
 
         // Crear automáticamente la evaluación para entrevistas familiares y de director
@@ -294,7 +302,8 @@ public class InterviewService {
     public Map<String, Object> update(Long id, Map<String, Object> payload) {
         InterviewEntity entity = load(id);
         merge(entity, payload);
-        ensureInterviewersAvailable(entity);
+        boolean pairApplied = applyInterviewerPair(entity, payload, id);
+        if (!pairApplied) ensureInterviewersAvailable(entity);
         return Map.of("success", true, "message", "Entrevista actualizada", "data", toResponse(interviewRepository.save(entity)));
     }
 
@@ -319,6 +328,8 @@ public class InterviewService {
         entity.setScheduledTime(LocalTime.parse(String.valueOf(payload.get("scheduledTime"))));
         entity.setStatus(InterviewStatus.RESCHEDULED);
         entity.setNotes(payload.get("notes") == null ? entity.getNotes() : String.valueOf(payload.get("notes")));
+        boolean pairApplied = applyInterviewerPair(entity, payload, id);
+        if (!pairApplied) ensureInterviewersAvailable(entity);
         return Map.of("success", true, "message", "Entrevista reprogramada", "data", toResponse(interviewRepository.save(entity)));
     }
 
@@ -471,6 +482,30 @@ public class InterviewService {
         entity.setMode(payload.get("mode") == null ? entity.getMode() : String.valueOf(payload.get("mode")));
         if (payload.get("status") != null) entity.setStatus(InterviewStatus.valueOf(String.valueOf(payload.get("status")).toUpperCase()));
         entity.setNotes(payload.get("notes") == null ? entity.getNotes() : String.valueOf(payload.get("notes")));
+    }
+
+    private boolean applyInterviewerPair(InterviewEntity entity, Map<String, Object> payload, Long excludedInterviewId) {
+        if (!"CYCLE_DIRECTOR".equals(entity.getInterviewType())) {
+            entity.setInterviewerPair(null);
+            return false;
+        }
+        Long pairId = payload.get("interviewerPairId") instanceof Number number
+            ? number.longValue()
+            : entity.getInterviewerPair() == null ? null : entity.getInterviewerPair().getId();
+        Long applicationId = entity.getApplication() == null ? null : entity.getApplication().getId();
+        if (applicationId == null) {
+            throw new InterviewerPairException("APPLICATION_REQUIRED", "La entrevista requiere una postulación");
+        }
+        if (pairId == null && !interviewerPairEnforcementEnabled) {
+            entity.setInterviewerPair(null);
+            return false;
+        }
+        InterviewerPairEntity pair = interviewerPairService.requireEligiblePair(
+            pairId, applicationId, entity.getScheduledDate(), entity.getScheduledTime(), entity.getDuration(), excludedInterviewId);
+        entity.setInterviewerPair(pair);
+        entity.setInterviewer(pair.getCycleDirector());
+        entity.setSecondInterviewer(pair.getPsychologist());
+        return true;
     }
 
     private InterviewEntity load(Long id) {
@@ -639,6 +674,8 @@ public class InterviewService {
         response.put("applicationId", entity.getApplication().getId());
         response.put("interviewerId", entity.getInterviewer() == null ? null : entity.getInterviewer().getId());
         response.put("secondInterviewerId", entity.getSecondInterviewer() == null ? null : entity.getSecondInterviewer().getId());
+        response.put("interviewerPairId", entity.getInterviewerPair() == null ? null : entity.getInterviewerPair().getId());
+        response.put("interviewerPairRevision", entity.getInterviewerPair() == null ? null : entity.getInterviewerPair().getRevision());
         response.put("interviewType", entity.getInterviewType());
         response.put("scheduledDate", entity.getScheduledDate());
         response.put("scheduledTime", entity.getScheduledTime());
@@ -901,6 +938,9 @@ public class InterviewService {
                 slotData.put("time", time.toString());
                 slotData.put("availableInterviewers", availableInterviewers);
                 slotData.put("interviewerCount", availableInterviewers.size());
+                List<Map<String, Object>> availablePairs = interviewerPairService.availablePairs(date, time, duration);
+                slotData.put("availablePairs", availablePairs);
+                slotData.put("availablePairCount", availablePairs.size());
 
                 // Sugerir pareja si hay 2+ entrevistadores
                 if (availableInterviewers.size() >= 2) {

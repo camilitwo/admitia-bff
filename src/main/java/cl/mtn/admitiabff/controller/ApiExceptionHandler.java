@@ -1,6 +1,7 @@
 package cl.mtn.admitiabff.controller;
 
 import cl.mtn.admitiabff.service.TokenService;
+import cl.mtn.admitiabff.service.InterviewerPairException;
 import cl.mtn.admitiabff.service.payments.PaymentIntegrationException;
 import cl.mtn.admitiabff.util.ApiResponse;
 import java.util.Map;
@@ -17,6 +18,11 @@ import org.springframework.web.servlet.resource.NoResourceFoundException;
 @RestControllerAdvice
 public class ApiExceptionHandler {
     private static final Logger log = LoggerFactory.getLogger(ApiExceptionHandler.class);
+
+    @ExceptionHandler(InterviewerPairException.class)
+    ResponseEntity<Map<String, Object>> handleInterviewerPair(InterviewerPairException ex) {
+        return ResponseEntity.badRequest().body(ApiResponse.error(ex.getCode(), ex.getMessage()));
+    }
 
     @ExceptionHandler(IllegalArgumentException.class)
     ResponseEntity<Map<String, Object>> handleIllegalArgument(IllegalArgumentException ex) {
