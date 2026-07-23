@@ -82,10 +82,11 @@ class InterviewerPairServiceTest {
     }
 
     @Test
-    void reservesDirectorPsychologistCompositionInBothOrders() {
-        assertEquals(true, InterviewService.isCycleDirectorPsychologistComposition(Role.CYCLE_DIRECTOR, Role.PSYCHOLOGIST));
-        assertEquals(true, InterviewService.isCycleDirectorPsychologistComposition(Role.PSYCHOLOGIST, Role.CYCLE_DIRECTOR));
-        assertEquals(false, InterviewService.isCycleDirectorPsychologistComposition(Role.INTERVIEWER, Role.PSYCHOLOGIST));
+    void reservesCycleDirectorAndPsychologistRolesForCycleInterviews() {
+        assertEquals(true, InterviewService.isCycleInterviewRole(Role.CYCLE_DIRECTOR));
+        assertEquals(true, InterviewService.isCycleInterviewRole(Role.PSYCHOLOGIST));
+        assertEquals(false, InterviewService.isCycleInterviewRole(Role.INTERVIEWER));
+        assertEquals(false, InterviewService.isCycleInterviewRole(Role.COORDINATOR));
     }
 
     private InterviewerPairService service() {

@@ -520,18 +520,16 @@ public class InterviewService {
         }
         Role firstRole = entity.getInterviewer().getRole();
         Role secondRole = entity.getSecondInterviewer().getRole();
-        boolean reservedCyclePair = isCycleDirectorPsychologistComposition(firstRole, secondRole);
-        if (reservedCyclePair) {
+        if (isCycleInterviewRole(firstRole) || isCycleInterviewRole(secondRole)) {
             throw new InterviewerPairException(
                 "FAMILY_PAIR_RESERVED_FOR_CYCLE_DIRECTOR",
-                "La combinación Director de Ciclo + Psicólogo solo puede utilizarse en entrevistas de Director de Ciclo"
+                "Directores de Ciclo y Psicólogos no pueden participar en entrevistas familiares"
             );
         }
     }
 
-    static boolean isCycleDirectorPsychologistComposition(Role firstRole, Role secondRole) {
-        return (firstRole == Role.CYCLE_DIRECTOR && secondRole == Role.PSYCHOLOGIST)
-            || (firstRole == Role.PSYCHOLOGIST && secondRole == Role.CYCLE_DIRECTOR);
+    static boolean isCycleInterviewRole(Role role) {
+        return role == Role.CYCLE_DIRECTOR || role == Role.PSYCHOLOGIST;
     }
 
     private InterviewEntity load(Long id) {
