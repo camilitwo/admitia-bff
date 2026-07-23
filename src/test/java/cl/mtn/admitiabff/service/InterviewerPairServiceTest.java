@@ -82,11 +82,12 @@ class InterviewerPairServiceTest {
     }
 
     @Test
-    void reservesCycleDirectorAndPsychologistRolesForCycleInterviews() {
-        assertEquals(true, InterviewService.isCycleInterviewRole(Role.CYCLE_DIRECTOR));
-        assertEquals(true, InterviewService.isCycleInterviewRole(Role.PSYCHOLOGIST));
-        assertEquals(false, InterviewService.isCycleInterviewRole(Role.INTERVIEWER));
-        assertEquals(false, InterviewService.isCycleInterviewRole(Role.COORDINATOR));
+    void limitsFamilyInterviewsToInterviewersAndCoordinators() {
+        assertEquals(true, InterviewService.isFamilyInterviewerRole(Role.INTERVIEWER));
+        assertEquals(true, InterviewService.isFamilyInterviewerRole(Role.COORDINATOR));
+        assertEquals(false, InterviewService.isFamilyInterviewerRole(Role.CYCLE_DIRECTOR));
+        assertEquals(false, InterviewService.isFamilyInterviewerRole(Role.PSYCHOLOGIST));
+        assertEquals(false, InterviewService.isFamilyInterviewerRole(Role.TEACHER));
     }
 
     private InterviewerPairService service() {

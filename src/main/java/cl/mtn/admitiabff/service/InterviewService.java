@@ -129,6 +129,8 @@ public class InterviewService {
             .toList();
 
         List<Map<String, Object>> availablePairs = interviewerPairService.availablePairs(date, time, interviewDuration);
+        int familyPairCount = countFamilyPairs(freeInterviewers);
+        List<String> availableInterviewTypes = availableInterviewTypes(familyPairCount, availablePairs.size());
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("date", dateStr);
         data.put("time", timeStr);
@@ -137,6 +139,8 @@ public class InterviewService {
         data.put("interviewerCount", freeInterviewers.size());
         data.put("availablePairs", availablePairs);
         data.put("availablePairCount", availablePairs.size());
+        data.put("familyPairCount", familyPairCount);
+        data.put("availableInterviewTypes", availableInterviewTypes);
         return Map.of("success", true, "data", data);
     }
 
@@ -222,11 +226,11 @@ public class InterviewService {
             });
 
             List<Map<String, Object>> daySlots = availabilityByTime.entrySet().stream()
-                .filter(entry -> entry.getValue().size() >= 2)
+                .filter(entry -> countFamilyPairs(new ArrayList<>(entry.getValue().values())) > 0)
                 .sorted(Map.Entry.comparingByKey())
                 .map(entry -> {
                     List<Map<String, Object>> availableInterviewers = new ArrayList<>(entry.getValue().values());
-                    Map<String, Object> suggestedPair = pickBestPair(availableInterviewers);
+                    Map<String, Object> suggestedPair = pickBestFamilyPair(availableInterviewers);
 
                     Map<String, Object> slot = new LinkedHashMap<>();
                     slot.put("time", entry.getKey().toString());
@@ -520,16 +524,16 @@ public class InterviewService {
         }
         Role firstRole = entity.getInterviewer().getRole();
         Role secondRole = entity.getSecondInterviewer().getRole();
-        if (isCycleInterviewRole(firstRole) || isCycleInterviewRole(secondRole)) {
+        if (!isFamilyInterviewerRole(firstRole) || !isFamilyInterviewerRole(secondRole)) {
             throw new InterviewerPairException(
-                "FAMILY_PAIR_RESERVED_FOR_CYCLE_DIRECTOR",
-                "Directores de Ciclo y Psicólogos no pueden participar en entrevistas familiares"
+                "FAMILY_INTERVIEWER_ROLE_INVALID",
+                "La entrevista familiar solo puede asignarse a Entrevistadores o Coordinadores"
             );
         }
     }
 
-    static boolean isCycleInterviewRole(Role role) {
-        return role == Role.CYCLE_DIRECTOR || role == Role.PSYCHOLOGIST;
+    static boolean isFamilyInterviewerRole(Role role) {
+        return role == Role.INTERVIEWER || role == Role.COORDINATOR;
     }
 
     private InterviewEntity load(Long id) {
@@ -652,12 +656,14 @@ public class InterviewService {
         return item;
     }
 
-    private Map<String, Object> pickBestPair(List<Map<String, Object>> interviewers) {
+    private Map<String, Object> pickBestFamilyPair(List<Map<String, Object>> interviewers) {
         List<Map<String, Object>> sorted = interviewers.stream()
+            .filter(this::isFamilyInterviewer)
             .sorted(Comparator
                 .comparingInt((Map<String, Object> item) -> rolePriority(String.valueOf(item.get("role"))))
                 .thenComparing(item -> String.valueOf(item.get("name"))))
             .toList();
+        if (sorted.size() < 2) return null;
 
         Map<String, Object> first = sorted.get(0);
         Map<String, Object> second = sorted.stream()
@@ -673,12 +679,27 @@ public class InterviewService {
 
     private int rolePriority(String role) {
         return switch (role) {
-            case "CYCLE_DIRECTOR" -> 0;
-            case "PSYCHOLOGIST" -> 1;
-            case "COORDINATOR" -> 2;
-            case "INTERVIEWER" -> 3;
-            default -> 4;
+            case "COORDINATOR" -> 0;
+            case "INTERVIEWER" -> 1;
+            default -> 2;
         };
+    }
+
+    private boolean isFamilyInterviewer(Map<String, Object> interviewer) {
+        String role = String.valueOf(interviewer.getOrDefault("role", ""));
+        return "INTERVIEWER".equals(role) || "COORDINATOR".equals(role);
+    }
+
+    private int countFamilyPairs(List<Map<String, Object>> interviewers) {
+        long eligible = interviewers.stream().filter(this::isFamilyInterviewer).count();
+        return eligible < 2 ? 0 : Math.toIntExact((eligible * (eligible - 1)) / 2);
+    }
+
+    private List<String> availableInterviewTypes(int familyPairCount, int cyclePairCount) {
+        List<String> types = new ArrayList<>(2);
+        if (familyPairCount > 0) types.add("FAMILY");
+        if (cyclePairCount > 0) types.add("CYCLE_DIRECTOR");
+        return types;
     }
 
     private String formatDayLabel(LocalDate date) {
@@ -965,10 +986,13 @@ public class InterviewService {
                 List<Map<String, Object>> availablePairs = interviewerPairService.availablePairs(date, time, duration);
                 slotData.put("availablePairs", availablePairs);
                 slotData.put("availablePairCount", availablePairs.size());
+                int familyPairCount = countFamilyPairs(availableInterviewers);
+                slotData.put("familyPairCount", familyPairCount);
+                slotData.put("availableInterviewTypes", availableInterviewTypes(familyPairCount, availablePairs.size()));
 
-                // Sugerir pareja si hay 2+ entrevistadores
-                if (availableInterviewers.size() >= 2) {
-                    Map<String, Object> pair = pickBestInterviewersPair(availableInterviewers);
+                // La sugerencia del endpoint general corresponde siempre a entrevista familiar.
+                if (familyPairCount > 0) {
+                    Map<String, Object> pair = pickBestFamilyPair(availableInterviewers);
                     if (pair != null) {
                         slotData.put("suggestedPair", pair);
                     }
@@ -976,42 +1000,9 @@ public class InterviewService {
 
                 return slotData;
             })
+            .filter(slot -> ((int) slot.getOrDefault("familyPairCount", 0)) > 0
+                || ((int) slot.getOrDefault("availablePairCount", 0)) > 0)
             .toList();
-    }
-
-    /**
-     * Selecciona la mejor pareja de entrevistadores basada en roles.
-     */
-    private Map<String, Object> pickBestInterviewersPair(List<Map<String, Object>> interviewers) {
-        if (interviewers.size() < 2) return null;
-
-        // Ordenar por prioridad de rol
-        List<Map<String, Object>> sorted = interviewers.stream()
-            .sorted(Comparator.comparingInt((Map<String, Object> i) -> {
-                String role = String.valueOf(i.getOrDefault("role", "UNKNOWN"));
-                return switch (role) {
-                    case "CYCLE_DIRECTOR" -> 0;
-                    case "PSYCHOLOGIST" -> 1;
-                    case "COORDINATOR" -> 2;
-                    case "INTERVIEWER" -> 3;
-                    default -> 4;
-                };
-            }).thenComparing(i -> String.valueOf(i.getOrDefault("name", ""))))
-            .toList();
-
-        Map<String, Object> first = sorted.get(0);
-        Map<String, Object> second = sorted.stream()
-            .filter(i -> !String.valueOf(i.getOrDefault("role", ""))
-                .equals(String.valueOf(first.getOrDefault("role", ""))))
-            .findFirst()
-            .orElse(sorted.size() > 1 ? sorted.get(1) : null);
-
-        if (second == null) return null;
-
-        return Map.of(
-            "interviewer1", first,
-            "interviewer2", second
-        );
     }
 
     private String toTitleCase(String text) {
