@@ -191,10 +191,18 @@ public class ApplicationService {
         ApplicationEntity entity = new ApplicationEntity();
         entity.setStudent(resolveStudent(payload));
 
-        // Validar vacante disponible para el nivel seleccionado
+        // Validar vacante disponible para el nivel seleccionado según género
         String gradeApplied = entity.getStudent().getGradeApplied();
-        if (gradeApplied != null && !gradeAvailabilityRepository.existsByGradeLevelAndHasVacancyTrue(gradeApplied)) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "No hay vacantes disponibles para el nivel seleccionado: " + gradeApplied);
+        String gender = entity.getStudent().getGender();
+        if (gradeApplied != null && gender != null) {
+            boolean hasVacancy = switch (gender) {
+                case "MALE" -> gradeAvailabilityRepository.existsByGradeLevelAndHasVacancyMTrue(gradeApplied);
+                case "FEMALE" -> gradeAvailabilityRepository.existsByGradeLevelAndHasVacancyFTrue(gradeApplied);
+                default -> false;
+            };
+            if (!hasVacancy) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "No hay vacantes disponibles para el nivel seleccionado: " + gradeApplied);
+            }
         }
 
         entity.setFather(resolveParent(payload, "father", "parent1", "FATHER", true));

@@ -14,8 +14,11 @@ public class GradeAvailabilityEntity {
     @Column(name = "grade_level", nullable = false, unique = true, length = 50)
     private String gradeLevel;
 
-    @Column(name = "has_vacancy", nullable = false)
-    private Boolean hasVacancy;
+    @Column(name = "has_vacancy_m", nullable = false)
+    private Boolean hasVacancyM;
+
+    @Column(name = "has_vacancy_f", nullable = false)
+    private Boolean hasVacancyF;
 
     @Column(name = "updated_at", nullable = false)
     private LocalDateTime updatedAt;
@@ -25,9 +28,10 @@ public class GradeAvailabilityEntity {
 
     public GradeAvailabilityEntity() {}
 
-    public GradeAvailabilityEntity(String gradeLevel, Boolean hasVacancy) {
+    public GradeAvailabilityEntity(String gradeLevel, Boolean hasVacancyM, Boolean hasVacancyF) {
         this.gradeLevel = gradeLevel;
-        this.hasVacancy = hasVacancy;
+        this.hasVacancyM = hasVacancyM;
+        this.hasVacancyF = hasVacancyF;
         this.updatedAt = LocalDateTime.now();
     }
 
@@ -43,8 +47,11 @@ public class GradeAvailabilityEntity {
     public String getGradeLevel() { return gradeLevel; }
     public void setGradeLevel(String gradeLevel) { this.gradeLevel = gradeLevel; }
 
-    public Boolean getHasVacancy() { return hasVacancy; }
-    public void setHasVacancy(Boolean hasVacancy) { this.hasVacancy = hasVacancy; }
+    public Boolean getHasVacancyM() { return hasVacancyM; }
+    public void setHasVacancyM(Boolean hasVacancyM) { this.hasVacancyM = hasVacancyM; }
+
+    public Boolean getHasVacancyF() { return hasVacancyF; }
+    public void setHasVacancyF(Boolean hasVacancyF) { this.hasVacancyF = hasVacancyF; }
 
     public LocalDateTime getUpdatedAt() { return updatedAt; }
     public void setUpdatedAt(LocalDateTime updatedAt) { this.updatedAt = updatedAt; }
