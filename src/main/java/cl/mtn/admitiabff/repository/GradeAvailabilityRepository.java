@@ -15,11 +15,15 @@ public interface GradeAvailabilityRepository extends JpaRepository<GradeAvailabi
 
     Optional<GradeAvailabilityEntity> findByGradeLevel(String gradeLevel);
 
-    List<GradeAvailabilityEntity> findByHasVacancyTrue();
+    List<GradeAvailabilityEntity> findByHasVacancyMTrue();
+
+    List<GradeAvailabilityEntity> findByHasVacancyFTrue();
 
     @Modifying
-    @Query("UPDATE GradeAvailabilityEntity g SET g.hasVacancy = :hasVacancy, g.updatedAt = CURRENT_TIMESTAMP, g.updatedBy = :updatedBy WHERE g.gradeLevel = :gradeLevel")
-    int updateVacancy(@Param("gradeLevel") String gradeLevel, @Param("hasVacancy") Boolean hasVacancy, @Param("updatedBy") String updatedBy);
+    @Query("UPDATE GradeAvailabilityEntity g SET g.hasVacancyM = :hasVacancyM, g.hasVacancyF = :hasVacancyF, g.updatedAt = CURRENT_TIMESTAMP, g.updatedBy = :updatedBy WHERE g.gradeLevel = :gradeLevel")
+    int updateVacancy(@Param("gradeLevel") String gradeLevel, @Param("hasVacancyM") Boolean hasVacancyM, @Param("hasVacancyF") Boolean hasVacancyF, @Param("updatedBy") String updatedBy);
 
-    boolean existsByGradeLevelAndHasVacancyTrue(String gradeLevel);
+    boolean existsByGradeLevelAndHasVacancyMTrue(String gradeLevel);
+
+    boolean existsByGradeLevelAndHasVacancyFTrue(String gradeLevel);
 }

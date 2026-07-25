@@ -27,11 +27,12 @@ public class GradeAvailabilityService {
     }
 
     public Map<String, Object> getAvailable() {
-        List<Map<String, Object>> data = repository.findByHasVacancyTrue().stream()
+        List<Map<String, Object>> data = repository.findAll().stream()
             .map(entity -> {
                 Map<String, Object> map = new LinkedHashMap<>();
                 map.put("gradeLevel", entity.getGradeLevel());
-                map.put("hasVacancy", entity.getHasVacancy());
+                map.put("hasVacancyM", entity.getHasVacancyM());
+                map.put("hasVacancyF", entity.getHasVacancyF());
                 return map;
             })
             .toList();
@@ -42,10 +43,12 @@ public class GradeAvailabilityService {
     public Map<String, Object> bulkUpdate(List<Map<String, Object>> updates, String updatedBy) {
         for (Map<String, Object> update : updates) {
             String gradeLevel = String.valueOf(update.get("gradeLevel"));
-            Boolean hasVacancy = (Boolean) update.get("hasVacancy");
+            Boolean hasVacancyM = (Boolean) update.get("hasVacancyM");
+            Boolean hasVacancyF = (Boolean) update.get("hasVacancyF");
 
             repository.findByGradeLevel(gradeLevel).ifPresent(entity -> {
-                entity.setHasVacancy(hasVacancy);
+                if (hasVacancyM != null) entity.setHasVacancyM(hasVacancyM);
+                if (hasVacancyF != null) entity.setHasVacancyF(hasVacancyF);
                 entity.setUpdatedBy(updatedBy);
                 repository.save(entity);
             });
@@ -57,15 +60,21 @@ public class GradeAvailabilityService {
         return Map.of("success", true, "message", "Disponibilidad de vacantes actualizada correctamente", "data", data);
     }
 
-    public boolean hasVacancy(String gradeLevel) {
-        return repository.existsByGradeLevelAndHasVacancyTrue(gradeLevel);
+    public boolean hasVacancy(String gradeLevel, String gender) {
+        if (gender == null) return false;
+        return switch (gender) {
+            case "MALE" -> repository.existsByGradeLevelAndHasVacancyMTrue(gradeLevel);
+            case "FEMALE" -> repository.existsByGradeLevelAndHasVacancyFTrue(gradeLevel);
+            default -> false;
+        };
     }
 
     private Map<String, Object> toResponse(GradeAvailabilityEntity entity) {
         Map<String, Object> response = new LinkedHashMap<>();
         response.put("id", entity.getId());
         response.put("gradeLevel", entity.getGradeLevel());
-        response.put("hasVacancy", entity.getHasVacancy());
+        response.put("hasVacancyM", entity.getHasVacancyM());
+        response.put("hasVacancyF", entity.getHasVacancyF());
         response.put("updatedAt", entity.getUpdatedAt());
         response.put("updatedBy", entity.getUpdatedBy());
         return response;
