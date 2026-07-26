@@ -228,7 +228,7 @@ public class DashboardService {
         int year = academicYear == null ? LocalDate.now().getYear() + 1 : academicYear;
         List<ApplicationEntity> apps = applicationRepository.findAll().stream()
             .filter(app -> app.getDeletedAt() == null && !app.isArchived())
-            .filter(app -> year == academicYearOf(app))
+            .filter(app -> app.getAcademicYear() != null && year == app.getAcademicYear())
             .toList();
 
         List<Map<String, Object>> rows = apps.stream()

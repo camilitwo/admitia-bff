@@ -213,6 +213,12 @@ public class ApplicationService {
         entity.setStatus(parseStatus(value(payload.getOrDefault("status", "PENDING"))));
         entity.setNotes(value(payload.get("notes")));
         entity.setSubmissionDate(LocalDateTime.now());
+        Object academicYearObj = payload.get("academicYear");
+        if (academicYearObj != null) {
+            entity.setAcademicYear(Integer.valueOf(academicYearObj.toString()));
+        } else {
+            entity.setAcademicYear(LocalDate.now().getYear() + 1);
+        }
         ApplicationEntity saved = applicationRepository.save(entity);
         return Map.of("success", true, "message", "Postulación creada correctamente", "data", toFullResponse(saved));
     }

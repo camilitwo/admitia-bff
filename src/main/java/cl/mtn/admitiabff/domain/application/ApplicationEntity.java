@@ -87,4 +87,7 @@ public class ApplicationEntity extends BaseEntity {
 
     @Column(name = "is_archived", nullable = false)
     private boolean archived;
+
+    @Column(name = "academic_year")
+    private Integer academicYear;
 }
