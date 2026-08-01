@@ -625,6 +625,9 @@ public class AuthService {
         response.put("emailVerified", user.isEmailVerified());
         response.put("mustChangePassword", user.isMustChangePassword());
         response.put("temporaryPasswordExpiresAt", user.getTemporaryPasswordExpiresAt());
+        response.put("temporaryPasswordExpired", user.isMustChangePassword()
+            && (user.getTemporaryPasswordExpiresAt() == null
+                || !user.getTemporaryPasswordExpiresAt().isAfter(LocalDateTime.now())));
         response.put("lastLoginAt", user.getLastLoginAt());
         response.put("preferences", jsonSupport.readMap(user.getPreferencesJson()));
         return response;

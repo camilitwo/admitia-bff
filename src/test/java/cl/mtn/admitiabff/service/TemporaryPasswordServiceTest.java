@@ -90,7 +90,7 @@ class TemporaryPasswordServiceTest {
     void resetFirebaseKeepsAccountFederatedAndRevokesProviderSessions() {
         when(userRepository.findById(admin.getId())).thenReturn(Optional.of(admin));
         UserEntity target = user(2L, Role.CYCLE_DIRECTOR, "director@cmtn.cl");
-        target.setFirebaseUid("stale-firebase-uid");
+        target.setFirebaseUid(null);
         target.setPasswordHash("FIREBASE_MANAGED");
         when(userRepository.findById(target.getId())).thenReturn(Optional.of(target));
         when(firebaseCredentialService.resolveByEmail(target.getEmail()))

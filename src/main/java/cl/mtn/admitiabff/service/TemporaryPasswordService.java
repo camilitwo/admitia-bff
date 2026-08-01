@@ -251,6 +251,9 @@ public class TemporaryPasswordService {
     }
 
     private char random(char[] chars) { return chars[RANDOM.nextInt(chars.length)]; }
-    private boolean isFirebaseLinked(UserEntity user) { return user.getFirebaseUid() != null && !user.getFirebaseUid().isBlank(); }
+    private boolean isFirebaseLinked(UserEntity user) {
+        return (user.getFirebaseUid() != null && !user.getFirebaseUid().isBlank())
+            || "FIREBASE_MANAGED".equals(user.getPasswordHash());
+    }
     private String fullName(UserEntity user) { return (user.getFirstName() + " " + user.getLastName()).trim(); }
 }
