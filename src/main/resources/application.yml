@@ -43,6 +43,7 @@ app:
     clock-skew-seconds: ${APP_JWT_CLOCK_SKEW}
   firebase:
     service-account-json: ${FIREBASE_SERVICE_ACCOUNT_JSON}
+    expected-project-id: ${APP_FIREBASE_EXPECTED_PROJECT_ID:admitia-55514}
     allowed-providers: ${APP_FIREBASE_ALLOWED_PROVIDERS}
     max-auth-age-seconds: ${APP_FIREBASE_MAX_AUTH_AGE_SECONDS}
     check-revoked: ${APP_FIREBASE_CHECK_REVOKED}

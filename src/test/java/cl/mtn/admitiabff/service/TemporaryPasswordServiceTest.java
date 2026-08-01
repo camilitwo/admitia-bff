@@ -90,20 +90,25 @@ class TemporaryPasswordServiceTest {
     void resetFirebaseKeepsAccountFederatedAndRevokesProviderSessions() {
         when(userRepository.findById(admin.getId())).thenReturn(Optional.of(admin));
         UserEntity target = user(2L, Role.CYCLE_DIRECTOR, "director@cmtn.cl");
-        target.setFirebaseUid("firebase-uid");
+        target.setFirebaseUid("stale-firebase-uid");
         target.setPasswordHash("FIREBASE_MANAGED");
         when(userRepository.findById(target.getId())).thenReturn(Optional.of(target));
+        when(firebaseCredentialService.resolveByEmail(target.getEmail()))
+            .thenReturn(new FirebaseCredentialService.ResolvedUser("resolved-firebase-uid", target.getEmail()));
+        when(userRepository.findByFirebaseUid("resolved-firebase-uid")).thenReturn(Optional.empty());
         when(passwordEncoder.encode(anyString())).thenReturn("temporary-bcrypt");
         when(emailComposerService.send(any())).thenReturn(Map.of("success", true));
 
         service.reset(target.getId());
 
         ArgumentCaptor<String> password = ArgumentCaptor.forClass(String.class);
-        verify(firebaseCredentialService).updatePassword(org.mockito.ArgumentMatchers.eq("firebase-uid"), password.capture());
+        verify(firebaseCredentialService).updatePassword(org.mockito.ArgumentMatchers.eq("resolved-firebase-uid"), password.capture());
         assertThat(password.getValue()).hasSize(16);
-        verify(firebaseCredentialService).revokeRefreshTokens("firebase-uid");
+        verify(firebaseCredentialService).revokeRefreshTokens("resolved-firebase-uid");
+        assertThat(target.getFirebaseUid()).isEqualTo("resolved-firebase-uid");
         assertThat(target.getPasswordHash()).isEqualTo("FIREBASE_MANAGED");
         assertThat(target.isMustChangePassword()).isTrue();
+        assertThat(target.isActive()).isTrue();
     }
 
     @Test
@@ -168,12 +173,14 @@ class TemporaryPasswordServiceTest {
         when(passwordEncoder.matches("NuevaClave9", "temporary-bcrypt")).thenReturn(false);
         when(passwordEncoder.encode("NuevaClave9")).thenReturn("definitive-bcrypt");
 
-        service.change(Map.of("newPassword", "NuevaClave9"));
+        Map<String, Object> result = service.change(Map.of("newPassword", "NuevaClave9"));
 
         assertThat(target.getPasswordHash()).isEqualTo("definitive-bcrypt");
         assertThat(target.isMustChangePassword()).isFalse();
         assertThat(target.getTemporaryPasswordHash()).isNull();
         assertThat(target.getTemporaryPasswordExpiresAt()).isNull();
+        assertThat(target.isActive()).isTrue();
+        assertThat(((Map<?, ?>) ((Map<?, ?>) result.get("data")).get("user")).get("active")).isEqualTo(true);
         verify(tokenService, never()).revokeAllForUser(any(), anyString());
         verify(activeSessionRepository, never()).deleteByUser(any());
     }
@@ -210,15 +217,42 @@ class TemporaryPasswordServiceTest {
         target.setTemporaryPasswordHash("temporary-bcrypt");
         AuthContext.set(new AuthUser(target.getId(), target.getEmail(), target.getRole().name()));
         when(userRepository.findById(target.getId())).thenReturn(Optional.of(target));
+        when(firebaseCredentialService.resolveByEmail(target.getEmail()))
+            .thenReturn(new FirebaseCredentialService.ResolvedUser("resolved-firebase-uid", target.getEmail()));
+        when(userRepository.findByFirebaseUid("resolved-firebase-uid")).thenReturn(Optional.empty());
         when(passwordEncoder.matches("Definitiva8", "temporary-bcrypt")).thenReturn(false);
 
-        service.change(Map.of("newPassword", "Definitiva8"));
+        Map<String, Object> result = service.change(Map.of("newPassword", "Definitiva8"));
 
-        verify(firebaseCredentialService).updatePassword("firebase-uid", "Definitiva8");
+        verify(firebaseCredentialService).updatePassword("resolved-firebase-uid", "Definitiva8");
+        assertThat(target.getFirebaseUid()).isEqualTo("resolved-firebase-uid");
         assertThat(target.getPasswordHash()).isEqualTo("FIREBASE_MANAGED");
         assertThat(target.isMustChangePassword()).isFalse();
+        assertThat(target.isActive()).isTrue();
+        assertThat(((Map<?, ?>) ((Map<?, ?>) result.get("data")).get("user")).get("active")).isEqualTo(true);
         verify(tokenService, never()).revokeAllForUser(any(), anyString());
         verify(activeSessionRepository, never()).deleteByUser(any());
+    }
+
+    @Test
+    void firebaseIdentityFailureStopsBeforeSendingEmailOrChangingAccess() {
+        when(userRepository.findById(admin.getId())).thenReturn(Optional.of(admin));
+        UserEntity target = user(2L, Role.CYCLE_DIRECTOR, "director@cmtn.cl");
+        target.setFirebaseUid("stale-firebase-uid");
+        target.setPasswordHash("FIREBASE_MANAGED");
+        when(userRepository.findById(target.getId())).thenReturn(Optional.of(target));
+        when(firebaseCredentialService.resolveByEmail(target.getEmail()))
+            .thenThrow(new IllegalStateException("Firebase identity missing"));
+
+        assertThatThrownBy(() -> service.reset(target.getId()))
+            .isInstanceOf(IllegalStateException.class)
+            .hasMessageContaining("Firebase identity missing");
+
+        assertThat(target.isActive()).isTrue();
+        assertThat(target.isMustChangePassword()).isFalse();
+        verify(emailComposerService, never()).send(any());
+        verify(firebaseCredentialService, never()).updatePassword(anyString(), anyString());
+        verify(tokenService, never()).revokeAllForUser(any(), anyString());
     }
 
     private static UserEntity user(Long id, Role role, String email) {

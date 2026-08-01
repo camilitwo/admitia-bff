@@ -84,6 +84,10 @@ public class TemporaryPasswordService {
             }
         }
 
+        FirebaseCredentialService.ResolvedUser firebaseIdentity = isFirebaseLinked(target)
+            ? resolveFirebaseIdentity(target)
+            : null;
+
         String temporaryPassword = generatePassword();
         LocalDateTime expiresAt = now.plusHours(validityHours);
         String loginUrl = frontendBaseUrl + (target.getRole() == Role.ADMIN ? "/admin/login" : "/profesor/login");
@@ -114,9 +118,10 @@ public class TemporaryPasswordService {
 
         try {
             String encodedTemporaryPassword = passwordEncoder.encode(temporaryPassword);
-            if (isFirebaseLinked(target)) {
-                firebaseCredentialService.revokeRefreshTokens(target.getFirebaseUid());
-                firebaseCredentialService.updatePassword(target.getFirebaseUid(), temporaryPassword);
+            if (firebaseIdentity != null) {
+                firebaseCredentialService.revokeRefreshTokens(firebaseIdentity.uid());
+                firebaseCredentialService.updatePassword(firebaseIdentity.uid(), temporaryPassword);
+                target.setFirebaseUid(firebaseIdentity.uid());
             } else {
                 target.setPasswordHash(encodedTemporaryPassword);
             }
@@ -156,7 +161,9 @@ public class TemporaryPasswordService {
         }
 
         if (isFirebaseLinked(user)) {
-            firebaseCredentialService.updatePassword(user.getFirebaseUid(), newPassword);
+            FirebaseCredentialService.ResolvedUser firebaseIdentity = resolveFirebaseIdentity(user);
+            firebaseCredentialService.updatePassword(firebaseIdentity.uid(), newPassword);
+            user.setFirebaseUid(firebaseIdentity.uid());
         } else {
             user.setPasswordHash(passwordEncoder.encode(newPassword));
         }
@@ -165,7 +172,10 @@ public class TemporaryPasswordService {
         user.setTemporaryPasswordExpiresAt(null);
         userRepository.save(user);
         log.info("event=temporary_password_changed userId={}", user.getId());
-        return Map.of("success", true, "message", "Contraseña actualizada correctamente");
+        return Map.of(
+            "success", true,
+            "message", "Contraseña actualizada correctamente",
+            "data", Map.of("user", passwordState(user)));
     }
 
     public static void ensureNotExpired(UserEntity user) {
@@ -202,6 +212,28 @@ public class TemporaryPasswordService {
                 || !password.matches(".*[0-9].*")) {
             throw new IllegalArgumentException("La contraseña debe tener entre 8 y 128 caracteres, mayúscula, minúscula y número");
         }
+    }
+
+    private FirebaseCredentialService.ResolvedUser resolveFirebaseIdentity(UserEntity user) {
+        FirebaseCredentialService.ResolvedUser identity = firebaseCredentialService.resolveByEmail(user.getEmail());
+        userRepository.findByFirebaseUid(identity.uid())
+            .filter(owner -> !owner.getId().equals(user.getId()))
+            .ifPresent(owner -> {
+                throw new SecurityWorkflowException("FIREBASE_IDENTITY_CONFLICT",
+                    "La identidad Firebase está asociada a otro usuario", HttpStatus.CONFLICT);
+            });
+        return identity;
+    }
+
+    private Map<String, Object> passwordState(UserEntity user) {
+        Map<String, Object> state = new LinkedHashMap<>();
+        state.put("id", user.getId());
+        state.put("email", user.getEmail());
+        state.put("role", user.getRole().name());
+        state.put("active", user.isActive());
+        state.put("mustChangePassword", user.isMustChangePassword());
+        state.put("temporaryPasswordExpiresAt", user.getTemporaryPasswordExpiresAt());
+        return state;
     }
 
     private String generatePassword() {

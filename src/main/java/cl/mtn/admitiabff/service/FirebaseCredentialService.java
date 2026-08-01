@@ -8,6 +8,23 @@ import org.springframework.stereotype.Service;
 /** Aísla las mutaciones de Firebase Admin para poder probar el flujo sin el proveedor. */
 @Service
 public class FirebaseCredentialService {
+    public record ResolvedUser(String uid, String email) {}
+
+    public ResolvedUser resolveByEmail(String email) {
+        requireConfigured();
+        try {
+            UserRecord user = FirebaseAuth.getInstance().getUserByEmail(email);
+            if (user.getEmail() == null || !user.getEmail().equalsIgnoreCase(email)) {
+                throw new IllegalStateException("La identidad Firebase no coincide con el correo del usuario");
+            }
+            return new ResolvedUser(user.getUid(), user.getEmail());
+        } catch (IllegalStateException ex) {
+            throw ex;
+        } catch (Exception ex) {
+            throw new IllegalStateException("No existe una identidad Firebase válida para el correo del usuario", ex);
+        }
+    }
+
     public void updatePassword(String firebaseUid, String password) {
         requireConfigured();
         try {

@@ -111,8 +111,16 @@ public class AuthService {
         String password = decrypt(payload, "password");
         String portalType = stringValue(payload.get("portalType")).trim().toUpperCase();
         UserEntity user = userRepository.findByEmailIgnoreCase(email).orElseThrow(() -> new IllegalArgumentException("Credenciales inválidas"));
-        if (!user.isActive() || !passwordEncoder.matches(password, user.getPasswordHash())) {
+        boolean temporaryCredential = user.isMustChangePassword()
+            && user.getTemporaryPasswordHash() != null
+            && passwordEncoder.matches(password, user.getTemporaryPasswordHash());
+        boolean localCredential = (user.getFirebaseUid() == null || user.getFirebaseUid().isBlank())
+            && passwordEncoder.matches(password, user.getPasswordHash());
+        if (!user.isActive() || (!temporaryCredential && !localCredential)) {
             throw new IllegalArgumentException("Credenciales inválidas");
+        }
+        if (temporaryCredential) {
+            TemporaryPasswordService.ensureNotExpired(user);
         }
         if (!portalType.isEmpty()) {
             Set<Role> allowedRoles = switch (portalType) {
