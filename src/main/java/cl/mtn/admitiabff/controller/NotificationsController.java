@@ -166,7 +166,17 @@ public class NotificationsController {
      */
     private Map<String, Object> institutionalForApplication(EmailTemplate template, Long applicationId, Map<String, Object> rawPayload) {
         String fallbackTo = recipientResolver.resolveForApplication(applicationId).orElse(null);
-        return institutional(template, "APPLICATION", applicationId, rawPayload, fallbackTo);
+        Map<String, Object> payload = rawPayload == null ? new LinkedHashMap<>() : new LinkedHashMap<>(rawPayload);
+        @SuppressWarnings("unchecked")
+        Map<String, Object> data = payload.get("data") instanceof Map<?, ?> nested
+            ? new LinkedHashMap<>((Map<String, Object>) nested)
+            : new LinkedHashMap<>(payload);
+        data.putIfAbsent("applicationId", applicationId);
+        recipientResolver.resolveContextForApplication(applicationId).forEach((key, value) -> {
+            if (isBlank(data.get(key))) data.put(key, value);
+        });
+        payload.put("data", data);
+        return institutional(template, "APPLICATION", applicationId, payload, fallbackTo);
     }
 
     /**

@@ -9,9 +9,11 @@ import cl.mtn.admitiabff.util.TemplateUtils;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
+import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
+import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -81,6 +83,16 @@ public class EmailComposerService {
         Map<String, Object> data = payload.get("data") instanceof Map
                 ? new LinkedHashMap<>((Map<String, Object>) payload.get("data"))
                 : new LinkedHashMap<>(payload); // si el front no anida, usamos todo el payload como data
+
+        // Los endpoints institucionales agregan metadatos en el sobre del
+        // payload. Cuando el front envía { data: {...} }, esos valores también
+        // deben estar disponibles para interpolar el template.
+        copyIfMissing(data, payload, "applicationId");
+        copyIfMissing(data, payload, "recipientId");
+
+        if (template == EmailTemplate.DOCUMENT_REVIEW) {
+            normalizeDocumentReviewData(data);
+        }
 
         // Para DOCUMENT_ALL_APPROVED, generar URLs de confirmación con JWT si hay entrevista
         if (template == EmailTemplate.DOCUMENT_ALL_APPROVED) {
@@ -224,5 +236,67 @@ public class EmailComposerService {
         if (value == null) return null;
         String s = String.valueOf(value);
         return s.isBlank() ? null : s;
+    }
+
+    private static void copyIfMissing(Map<String, Object> target, Map<String, Object> source, String key) {
+        if (stringOrNull(target.get(key)) == null && source.get(key) != null) {
+            target.put(key, source.get(key));
+        }
+    }
+
+    /**
+     * Mantiene compatibilidad con los dos contratos históricos del front:
+     * reviewStatus/comments y approvedDocuments/rejectedDocuments/allApproved.
+     */
+    private static void normalizeDocumentReviewData(Map<String, Object> data) {
+        String approved = joinValues(data.get("approvedDocuments"));
+        String rejected = joinValues(data.get("rejectedDocuments"));
+        boolean allApproved = Boolean.TRUE.equals(data.get("allApproved"))
+            || "true".equalsIgnoreCase(String.valueOf(data.get("allApproved")));
+
+        String reviewStatus = firstNonBlank(
+            stringOrNull(data.get("reviewStatus")),
+            stringOrNull(data.get("reviewResult")));
+        if (reviewStatus == null) {
+            if (allApproved) reviewStatus = "Aprobada";
+            else if (!rejected.isBlank()) reviewStatus = "Requiere correcciones";
+            else if (!approved.isBlank()) reviewStatus = "Revisión parcial";
+            else reviewStatus = "Pendiente de documentación";
+        }
+
+        String comments = firstNonBlank(
+            stringOrNull(data.get("comments")),
+            stringOrNull(data.get("notes")),
+            stringOrNull(data.get("generalComments")));
+        if (comments == null) {
+            if (allApproved) {
+                comments = approved.isBlank()
+                    ? "Todos los documentos revisados fueron aprobados."
+                    : "Documentos aprobados: " + approved + ".";
+            } else if (!rejected.isBlank()) {
+                comments = (approved.isBlank() ? "" : "Documentos aprobados: " + approved + ". ")
+                    + "Documentos que requieren corrección: " + rejected + ".";
+            } else if (!approved.isBlank()) {
+                comments = "Documentos aprobados: " + approved
+                    + ". La revisión de los documentos restantes continúa pendiente.";
+            } else {
+                comments = "No se encontraron documentos adjuntos para revisar.";
+            }
+        }
+
+        data.put("reviewStatus", reviewStatus);
+        data.put("reviewResult", reviewStatus);
+        data.put("comments", comments);
+        data.put("notes", comments);
+    }
+
+    private static String joinValues(Object value) {
+        if (!(value instanceof Collection<?> values)) return "";
+        return values.stream()
+            .filter(Objects::nonNull)
+            .map(String::valueOf)
+            .map(String::trim)
+            .filter(item -> !item.isBlank())
+            .collect(Collectors.joining(", "));
     }
 }
