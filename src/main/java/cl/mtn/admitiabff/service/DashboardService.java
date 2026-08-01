@@ -363,6 +363,7 @@ public class DashboardService {
         data.put("prekinderProcess", prekinderProcess(evaluations, interviews, documents));
         data.put("exams", exams);
         data.put("cycleDirector", cycleInterview);
+        data.put("familyInterview", familyInterviewScore(applicationId));
         data.put("documents", documents.stream().map(document -> {
             Map<String, Object> item = new LinkedHashMap<>();
             item.put("type", document.getDocumentType());
@@ -491,6 +492,38 @@ public class DashboardService {
         if (score == null) return null;
         BigDecimal max = maxScore == null || maxScore.compareTo(BigDecimal.ZERO) == 0 ? BigDecimal.valueOf(100) : maxScore;
         return score.multiply(BigDecimal.valueOf(100)).divide(max, 2, java.math.RoundingMode.HALF_UP);
+    }
+
+    private Map<String, Object> familyInterviewScore(Long applicationId) {
+        List<EvaluationEntity> familyEvals = evaluationRepository.findByApplicationIdOrderByCreatedAtDesc(applicationId).stream()
+            .filter(item -> "FAMILY_INTERVIEW".equals(item.getEvaluationType()))
+            .filter(item -> item.getStatus() == EvaluationStatus.COMPLETED)
+            .toList();
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        if (familyEvals.isEmpty()) {
+            result.put("percentage", null);
+            result.put("count", 0);
+            result.put("scores", List.of());
+            return result;
+        }
+
+        List<BigDecimal> scores = familyEvals.stream()
+            .map(EvaluationEntity::getFamilyInterviewScore)
+            .filter(s -> s != null)
+            .toList();
+
+        result.put("count", scores.size());
+        result.put("scores", scores);
+
+        if (scores.isEmpty()) {
+            result.put("percentage", null);
+        } else {
+            BigDecimal sum = scores.stream().reduce(BigDecimal.ZERO, BigDecimal::add);
+            BigDecimal avg = sum.divide(BigDecimal.valueOf(scores.size()), 2, java.math.RoundingMode.HALF_UP);
+            result.put("percentage", avg);
+        }
+        return result;
     }
 
     private String cycleDirectorDecision(Long applicationId) {
