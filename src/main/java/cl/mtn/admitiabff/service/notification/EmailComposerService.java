@@ -99,6 +99,8 @@ public class EmailComposerService {
                 .recipientType(stringOrNull(payload.get("recipientType")))
                 .recipientId(recipientId)
                 .data(data)
+                .sensitive(Boolean.TRUE.equals(payload.get("sensitive")))
+                .templateName(template.name())
                 .build();
 
         log.debug("Email compose payload template={} to={}", template, request.to);
@@ -178,6 +180,8 @@ public class EmailComposerService {
         mailPayload.put("subject", subject);
         mailPayload.put("message", html); // HTML final renderizado
         mailPayload.put("templateData", data);
+        mailPayload.put("sensitive", request.sensitive);
+        if (request.templateName != null) mailPayload.put("templateName", request.templateName);
         if (request.recipientType != null) mailPayload.put("recipientType", request.recipientType);
         if (request.recipientId != null) mailPayload.put("recipientId", request.recipientId);
 

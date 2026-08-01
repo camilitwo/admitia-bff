@@ -166,15 +166,6 @@ public class UserService {
     }
 
     @Transactional
-    public Map<String, Object> resetPassword(Long id) {
-        UserEntity user = userRepository.findById(id).orElseThrow(() -> new IllegalArgumentException("Usuario no encontrado"));
-        String temporaryPassword = "Tmp-" + UUID.randomUUID().toString().substring(0, 8);
-        user.setPasswordHash(authService.hashPassword(temporaryPassword));
-        userRepository.save(user);
-        return Map.of("success", true, "message", "Contraseña temporal generada", "data", Map.of("temporaryPassword", temporaryPassword));
-    }
-
-    @Transactional
     public Map<String, Object> verifyEmail(Long id) {
         UserEntity user = userRepository.findById(id).orElseThrow(() -> new IllegalArgumentException("Usuario no encontrado"));
         user.setEmailVerified(true);
@@ -281,6 +272,8 @@ public class UserService {
         response.put("phone", user.getPhone());
         response.put("active", user.isActive());
         response.put("emailVerified", user.isEmailVerified());
+        response.put("mustChangePassword", user.isMustChangePassword());
+        response.put("temporaryPasswordExpiresAt", user.getTemporaryPasswordExpiresAt());
         response.put("canInterview", EVALUATOR_ROLES.contains(user.getRole()));
         response.put("createdAt", user.getCreatedAt());
         return response;

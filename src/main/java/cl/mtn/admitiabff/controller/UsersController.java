@@ -1,6 +1,7 @@
 package cl.mtn.admitiabff.controller;
 
 import cl.mtn.admitiabff.service.UserService;
+import cl.mtn.admitiabff.service.TemporaryPasswordService;
 import java.util.Map;
 import org.springframework.web.bind.annotation.*;
 
@@ -8,8 +9,12 @@ import org.springframework.web.bind.annotation.*;
 @RequestMapping("/api/users")
 public class UsersController {
     private final UserService userService;
+    private final TemporaryPasswordService temporaryPasswordService;
 
-    public UsersController(UserService userService) { this.userService = userService; }
+    public UsersController(UserService userService, TemporaryPasswordService temporaryPasswordService) {
+        this.userService = userService;
+        this.temporaryPasswordService = temporaryPasswordService;
+    }
 
     @GetMapping("/roles") public Map<String, Object> roles() { return userService.roles(); }
     @GetMapping("/public/school-staff") public Map<String, Object> publicSchoolStaff(@RequestParam(required = false) Boolean activeOnly) { return userService.publicSchoolStaff(activeOnly); }
@@ -31,8 +36,10 @@ public class UsersController {
     @PatchMapping("/{id}/status") public Map<String, Object> status(@PathVariable Long id, @RequestBody Map<String, Object> payload) { return userService.status(id, Boolean.TRUE.equals(payload.get("active"))); }
     @PutMapping("/{id}/activate") public Map<String, Object> activate(@PathVariable Long id) { return userService.status(id, true); }
     @PutMapping("/{id}/deactivate") public Map<String, Object> deactivate(@PathVariable Long id) { return userService.status(id, false); }
-    @PutMapping("/{id}/reset-password") public Map<String, Object> resetPasswordPut(@PathVariable Long id) { return userService.resetPassword(id); }
-    @PostMapping("/{id}/reset-password") public Map<String, Object> resetPasswordPost(@PathVariable Long id) { return userService.resetPassword(id); }
+    @org.springframework.security.access.prepost.PreAuthorize("hasRole('ADMIN')")
+    @PutMapping("/{id}/reset-password") public Map<String, Object> resetPasswordPut(@PathVariable Long id) { return temporaryPasswordService.reset(id); }
+    @org.springframework.security.access.prepost.PreAuthorize("hasRole('ADMIN')")
+    @PostMapping("/{id}/reset-password") public Map<String, Object> resetPasswordPost(@PathVariable Long id) { return temporaryPasswordService.reset(id); }
     @PostMapping("/{id}/verify-email") public Map<String, Object> verifyEmail(@PathVariable Long id) { return userService.verifyEmail(id); }
     @PatchMapping("/{id}/preferences") public Map<String, Object> preferences(@PathVariable Long id, @RequestBody Map<String, Object> payload) { return userService.preferences(id, payload); }
 }

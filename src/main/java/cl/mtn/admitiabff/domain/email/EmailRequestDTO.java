@@ -19,6 +19,8 @@ public class EmailRequestDTO {
         public final String recipientType;
         public final Long recipientId;
         public final Map<String, Object> data;
+        public final boolean sensitive;
+        public final String templateName;
 
 
         /*public static Builder builder() { return new Builder(); }*/

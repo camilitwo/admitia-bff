@@ -47,10 +47,12 @@ public class EmailNotificationStrategy implements NotificationChannelStrategy {
         entity.setChannel(NotificationChannel.EMAIL);
         entity.setType(String.valueOf(payload.getOrDefault("type", "EMAIL")));
         entity.setSubject((String) payload.get("subject"));
-        entity.setMessage((String) payload.get("message"));
-        //TODO replace template html
+        boolean sensitive = Boolean.TRUE.equals(payload.get("sensitive"));
+        String renderedMessage = (String) payload.get("message");
+        entity.setMessage(sensitive ? "[CONTENIDO SENSIBLE OMITIDO]" : renderedMessage);
+        entity.setDispatchMessage(sensitive ? renderedMessage : null);
         entity.setTemplateName((String) payload.get("templateName"));
-        entity.setTemplateData(jsonSupport.write(payload.getOrDefault("templateData", Map.of())));
+        entity.setTemplateData(jsonSupport.write(sensitive ? Map.of("redacted", true) : payload.getOrDefault("templateData", Map.of())));
         entity.setStatus(NotificationStatus.SENT);
         entity.setCreatedAt(LocalDateTime.now());
         return entity;
@@ -60,10 +62,15 @@ public class EmailNotificationStrategy implements NotificationChannelStrategy {
     public void dispatch(NotificationEntity notification) {
         if (mockMode) {
             log.info("[MOCK] Email a {} - {}", notification.getRecipient(), notification.getSubject());
+            notification.setDispatchMessage(null);
             return;
         }
         try {
-            resendEmailSender.send(notification.getRecipient(), notification.getSubject(), notification.getMessage());
+            String message = notification.getDispatchMessage() != null
+                    ? notification.getDispatchMessage()
+                    : notification.getMessage();
+            resendEmailSender.send(notification.getRecipient(), notification.getSubject(), message);
+            notification.setDispatchMessage(null);
         } catch (Exception ex) {
             log.error("Error enviando email a {}: {}", notification.getRecipient(), ex.getMessage(), ex);
             notification.setStatus(NotificationStatus.FAILED);
@@ -71,4 +78,3 @@ public class EmailNotificationStrategy implements NotificationChannelStrategy {
         }
     }
 }
-

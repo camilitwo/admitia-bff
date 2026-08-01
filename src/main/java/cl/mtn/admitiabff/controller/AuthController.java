@@ -1,6 +1,7 @@
 package cl.mtn.admitiabff.controller;
 
 import cl.mtn.admitiabff.service.AuthService;
+import cl.mtn.admitiabff.service.TemporaryPasswordService;
 import jakarta.servlet.http.Cookie;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -28,6 +29,7 @@ public class AuthController {
     public static final String REFRESH_COOKIE = "admitia_refresh";
 
     private final AuthService authService;
+    private final TemporaryPasswordService temporaryPasswordService;
 
     @Value("${app.cookies.secure:true}")
     private boolean cookieSecure;
@@ -35,8 +37,9 @@ public class AuthController {
     @Value("${app.cookies.same-site:None}")
     private String cookieSameSite;
 
-    public AuthController(AuthService authService) {
+    public AuthController(AuthService authService, TemporaryPasswordService temporaryPasswordService) {
         this.authService = authService;
+        this.temporaryPasswordService = temporaryPasswordService;
     }
 
     @GetMapping("/csrf-token")
@@ -166,6 +169,11 @@ public class AuthController {
 
     @PutMapping("/change-password")
     public Map<String, Object> changePassword(@RequestBody Map<String, Object> payload) { return authService.changePassword(payload); }
+
+    @PutMapping("/change-temporary-password")
+    public Map<String, Object> changeTemporaryPassword(@RequestBody Map<String, Object> payload) {
+        return temporaryPasswordService.change(payload);
+    }
 
     // ---- helpers de cookie ------------------------------------------------
     private void attachRefreshCookie(HttpServletResponse response, String token, long maxAgeSeconds) {

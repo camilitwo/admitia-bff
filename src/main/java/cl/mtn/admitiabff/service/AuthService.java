@@ -615,6 +615,8 @@ public class AuthService {
         response.put("educationalLevel", user.getEducationalLevel());
         response.put("active", user.isActive());
         response.put("emailVerified", user.isEmailVerified());
+        response.put("mustChangePassword", user.isMustChangePassword());
+        response.put("temporaryPasswordExpiresAt", user.getTemporaryPasswordExpiresAt());
         response.put("lastLoginAt", user.getLastLoginAt());
         response.put("preferences", jsonSupport.readMap(user.getPreferencesJson()));
         return response;
@@ -682,6 +684,7 @@ public class AuthService {
      */
     @Transactional
     public Map<String, Object> issueAuthResponse(UserEntity user, String userAgent, String ipAddress, boolean singleSession) {
+        TemporaryPasswordService.ensureNotExpired(user);
         if (singleSession) {
             // Mantiene el comportamiento histórico de "una sesión activa por usuario".
             tokenService.revokeAllForUser(user, "LOGIN_NEW_SESSION");
@@ -758,6 +761,7 @@ public class AuthService {
             tokenService.revokeAllForUser(user, "USER_INACTIVE");
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Cuenta inactiva");
         }
+        TemporaryPasswordService.ensureNotExpired(user);
         JwtService.IssuedToken access = jwtService.issueAccessToken(user.getId(), user.getEmail(), user.getRole().name());
 
         // Crear/actualizar la sesión activa para el nuevo access token.
