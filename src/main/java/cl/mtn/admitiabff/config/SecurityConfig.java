@@ -22,12 +22,15 @@ import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 @EnableMethodSecurity
 public class SecurityConfig {
     private final FirebaseAuthenticationFilter firebaseAuthenticationFilter;
+    private final TemporaryPasswordEnforcementFilter temporaryPasswordEnforcementFilter;
 
     @Value("${app.cors.allowed-origins}")
     private String allowedOrigins;
 
-    public SecurityConfig(FirebaseAuthenticationFilter firebaseAuthenticationFilter) {
+    public SecurityConfig(FirebaseAuthenticationFilter firebaseAuthenticationFilter,
+                          TemporaryPasswordEnforcementFilter temporaryPasswordEnforcementFilter) {
         this.firebaseAuthenticationFilter = firebaseAuthenticationFilter;
+        this.temporaryPasswordEnforcementFilter = temporaryPasswordEnforcementFilter;
     }
 
     @Bean
@@ -52,6 +55,7 @@ public class SecurityConfig {
                 .anyRequest().authenticated()
             )
             .addFilterBefore(firebaseAuthenticationFilter, UsernamePasswordAuthenticationFilter.class)
+            .addFilterAfter(temporaryPasswordEnforcementFilter, FirebaseAuthenticationFilter.class)
             .build();
     }
 

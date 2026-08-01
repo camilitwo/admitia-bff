@@ -124,8 +124,10 @@ public final class EmailTemplateRenderers {
     public static class DocumentReviewRenderer implements EmailTemplateRenderer {
         @Override public EmailTemplate template() { return EmailTemplate.DOCUMENT_REVIEW; }
         @Override public String render(Map<String, Object> data) {
-            String result = EmailLayout.str(data, "reviewResult", "revisado");
-            String notes = EmailLayout.str(data, "notes", "");
+            String result = EmailLayout.str(data, "reviewStatus",
+                EmailLayout.str(data, "reviewResult", "Revisada"));
+            String notes = EmailLayout.str(data, "comments",
+                EmailLayout.str(data, "notes", "Sin comentarios adicionales."));
             String body = EmailLayout.heading("Revisión de documentos")
                     + EmailLayout.paragraph("El estado de la revisión de tus documentos es: <strong>" + EmailLayout.escape(result) + "</strong>.")
                     + (notes.isBlank() ? "" : EmailLayout.callout(EmailLayout.escape(notes)));
@@ -359,4 +361,3 @@ public final class EmailTemplateRenderers {
         }
     }
 }
-

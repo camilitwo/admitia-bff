@@ -67,4 +67,19 @@ public class UserEntity extends BaseEntity {
 
     @Column(name = "firebase_uid", unique = true)
     private String firebaseUid;
+
+    @Column(name = "must_change_password", nullable = false)
+    private boolean mustChangePassword;
+
+    @Column(name = "temporary_password_hash")
+    private String temporaryPasswordHash;
+
+    @Column(name = "temporary_password_expires_at")
+    private LocalDateTime temporaryPasswordExpiresAt;
+
+    @Column(name = "password_reset_at")
+    private LocalDateTime passwordResetAt;
+
+    @Column(name = "password_reset_by")
+    private Long passwordResetBy;
 }

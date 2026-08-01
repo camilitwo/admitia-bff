@@ -68,6 +68,7 @@ public final class TemplateUtils {
             case "email_verification_link"           -> EMAIL_VERIFICATION_LINK_BODY;
             case "password_reset"                    -> PASSWORD_RESET_BODY;
             case "password_changed"                  -> PASSWORD_CHANGED_BODY;
+            case "temporary_password"                -> TEMPORARY_PASSWORD_BODY;
             case "user_invitation"                   -> USER_INVITATION_BODY;
 
             // System
@@ -282,6 +283,38 @@ public final class TemplateUtils {
                   cuanto antes a
                   <a href="mailto:admision@mtn.cl" style="color:#273b7a;">admision@mtn.cl</a>
                   para resguardar su cuenta.
+                </p>
+                <p style="margin:24px 0 0 0;">
+                  Un cordial saludo,<br/>
+                  <strong>Equipo de Admisión</strong><br/>
+                  Colegio Monte Tabor y Nazaret
+                </p>
+              </td>
+            </tr>
+            """;
+
+    private static final String TEMPORARY_PASSWORD_BODY = """
+            <tr>
+              <td class="content" style="padding:40px 30px;color:#333;line-height:1.7;font-family:'Segoe UI',Arial,sans-serif;font-size:15px;">
+                <h2 style="color:#273b7a;margin:0 0 16px 0;font-size:22px;">Estimado/a {{name}}</h2>
+                <p style="margin:0 0 14px 0;">
+                  Un administrador restableció la contraseña de su cuenta en el portal de admisión.
+                </p>
+                <p style="margin:0 0 8px 0;"><strong>Contraseña temporal:</strong></p>
+                <p style="margin:0 0 18px 0;padding:12px 16px;background:#f4f6fa;border-radius:6px;font-family:monospace;font-size:18px;letter-spacing:1px;">
+                  {{temporaryPassword}}
+                </p>
+                <p style="margin:0 0 18px 0;">
+                  Esta contraseña vence el <strong>{{expiresAt}}</strong> y deberá reemplazarla por una nueva al ingresar.
+                </p>
+                <p style="margin:0 0 18px 0;">
+                  <a href="{{loginUrl}}" class="button"
+                     style="display:inline-block;background:#ff9e18;color:#fff;text-decoration:none;padding:12px 24px;border-radius:4px;font-weight:bold;">
+                    Ingresar al portal
+                  </a>
+                </p>
+                <p style="margin:0 0 14px 0;color:#666;font-size:13px;">
+                  Si no esperaba este cambio, contacte de inmediato al administrador del sistema.
                 </p>
                 <p style="margin:24px 0 0 0;">
                   Un cordial saludo,<br/>

@@ -2,6 +2,7 @@ package cl.mtn.admitiabff.controller;
 
 import cl.mtn.admitiabff.service.TokenService;
 import cl.mtn.admitiabff.service.InterviewerPairException;
+import cl.mtn.admitiabff.service.SecurityWorkflowException;
 import cl.mtn.admitiabff.service.payments.PaymentIntegrationException;
 import cl.mtn.admitiabff.util.ApiResponse;
 import java.util.Map;
@@ -27,6 +28,11 @@ public class ApiExceptionHandler {
     @ExceptionHandler(IllegalArgumentException.class)
     ResponseEntity<Map<String, Object>> handleIllegalArgument(IllegalArgumentException ex) {
         return ResponseEntity.badRequest().body(ApiResponse.error("BAD_REQUEST", ex.getMessage()));
+    }
+
+    @ExceptionHandler(SecurityWorkflowException.class)
+    ResponseEntity<Map<String, Object>> handleSecurityWorkflow(SecurityWorkflowException ex) {
+        return ResponseEntity.status(ex.getStatus()).body(ApiResponse.error(ex.getCode(), ex.getMessage()));
     }
 
     @ExceptionHandler(IllegalStateException.class)

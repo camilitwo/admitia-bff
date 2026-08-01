@@ -25,6 +25,7 @@ public enum EmailTemplate {
     EMAIL_VERIFICATION_LINK("Verifica tu correo electrónico - MTN", Category.AUTH),
     PASSWORD_RESET("Recupera tu contraseña", Category.AUTH),
     PASSWORD_CHANGED("Tu contraseña fue actualizada", Category.AUTH),
+    TEMPORARY_PASSWORD("Tu contraseña temporal de acceso", Category.AUTH),
     USER_INVITATION("Invitación a la plataforma MTN", Category.AUTH),
 
     // ---------- Application ----------
@@ -95,4 +96,3 @@ public enum EmailTemplate {
         AUTH, APPLICATION, INTERVIEW, EVALUATION, SYSTEM
     }
 }
-

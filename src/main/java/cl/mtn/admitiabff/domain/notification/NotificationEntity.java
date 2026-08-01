@@ -10,6 +10,7 @@ import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
+import jakarta.persistence.Transient;
 import java.time.LocalDateTime;
 import lombok.Getter;
 import lombok.Setter;
@@ -60,4 +61,8 @@ public class NotificationEntity {
 
     @Column(name = "created_at", nullable = false)
     private LocalDateTime createdAt;
+
+    /** Contenido sólo en memoria para despachar correos sensibles; nunca se persiste. */
+    @Transient
+    private String dispatchMessage;
 }

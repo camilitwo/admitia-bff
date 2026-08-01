@@ -43,6 +43,7 @@ app:
     clock-skew-seconds: ${APP_JWT_CLOCK_SKEW}
   firebase:
     service-account-json: ${FIREBASE_SERVICE_ACCOUNT_JSON}
+    expected-project-id: ${APP_FIREBASE_EXPECTED_PROJECT_ID:admitia-55514}
     allowed-providers: ${APP_FIREBASE_ALLOWED_PROVIDERS}
     max-auth-age-seconds: ${APP_FIREBASE_MAX_AUTH_AGE_SECONDS}
     check-revoked: ${APP_FIREBASE_CHECK_REVOKED}
@@ -83,6 +84,9 @@ app:
   # En staging/prod: configurar via APP_FRONTEND_BASE_URL en Railway
   frontend:
     base-url: ${APP_FRONTEND_BASE_URL:https://admisiones.dev.admitia.dedyn.io}
+  temporary-password:
+    validity-hours: ${APP_TEMPORARY_PASSWORD_VALIDITY_HOURS:24}
+    reset-cooldown-seconds: ${APP_TEMPORARY_PASSWORD_RESET_COOLDOWN_SECONDS:60}
   # URL base pública del BFF (para URLs de confirmación de entrevistas)
   # NOTA: Como el BFF no está expuesto públicamente, esta URL debe ser la del NGINX
   # que expone el endpoint /api/public/interview/confirm y lo reenvía al BFF

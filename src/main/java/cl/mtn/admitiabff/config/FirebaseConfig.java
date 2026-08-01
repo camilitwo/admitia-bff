@@ -1,6 +1,7 @@
 package cl.mtn.admitiabff.config;
 
 import com.google.auth.oauth2.GoogleCredentials;
+import com.google.auth.oauth2.ServiceAccountCredentials;
 import com.google.firebase.FirebaseApp;
 import com.google.firebase.FirebaseOptions;
 import jakarta.annotation.PostConstruct;
@@ -20,6 +21,9 @@ public class FirebaseConfig {
 
     @Value("${app.firebase.service-account-json:}")
     private String serviceAccountJson;
+
+    @Value("${app.firebase.expected-project-id:}")
+    private String expectedProjectId;
 
     @PostConstruct
     public void init() throws IOException {
@@ -45,10 +49,20 @@ public class FirebaseConfig {
             }
         }
 
-        FirebaseOptions options = FirebaseOptions.builder()
-            .setCredentials(GoogleCredentials.fromStream(serviceAccount))
-            .build();
+        GoogleCredentials credentials = GoogleCredentials.fromStream(serviceAccount);
+        String actualProjectId = credentials instanceof ServiceAccountCredentials serviceAccountCredentials
+            ? serviceAccountCredentials.getProjectId()
+            : null;
+        if (expectedProjectId != null && !expectedProjectId.isBlank()
+                && !expectedProjectId.equals(actualProjectId)) {
+            throw new IllegalStateException("El proyecto Firebase Admin no coincide con el proyecto esperado");
+        }
+        FirebaseOptions.Builder optionsBuilder = FirebaseOptions.builder().setCredentials(credentials);
+        if (actualProjectId != null && !actualProjectId.isBlank()) {
+            optionsBuilder.setProjectId(actualProjectId);
+        }
+        FirebaseOptions options = optionsBuilder.build();
         FirebaseApp.initializeApp(options);
-        log.info("[Firebase] Initialized successfully");
+        log.info("[Firebase] Initialized successfully projectId={}", actualProjectId);
     }
 }
