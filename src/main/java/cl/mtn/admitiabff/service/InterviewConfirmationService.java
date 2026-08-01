@@ -6,6 +6,7 @@ import cl.mtn.admitiabff.domain.interview.InterviewEntity;
 import cl.mtn.admitiabff.domain.user.UserEntity;
 import cl.mtn.admitiabff.repository.InterviewRepository;
 import cl.mtn.admitiabff.service.notification.EmailComposerService;
+import cl.mtn.admitiabff.util.EmailDisplayFormatter;
 import cl.mtn.admitiabff.util.TemplateUtils;
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.Jwts;
@@ -316,10 +317,10 @@ public class InterviewConfirmationService {
             Map<String, Object> data = new LinkedHashMap<>();
             data.put("interviewerName", interviewer.getFirstName() + " " + interviewer.getLastName());
             data.put("studentName", studentName);
-            data.put("interviewType", interview.getInterviewType());
+            data.put("interviewType", EmailDisplayFormatter.interviewType(interview.getInterviewType()));
             data.put("scheduledDate", interview.getScheduledDate().toString());
             data.put("scheduledTime", interview.getScheduledTime().toString());
-            data.put("mode", interview.getMode());
+            data.put("mode", EmailDisplayFormatter.mode(interview.getMode()));
             data.put("location", interview.getLocation());
 
             String bodyHtml = TemplateUtils.generateTemplate("interview_confirmed_for_interviewer", data);

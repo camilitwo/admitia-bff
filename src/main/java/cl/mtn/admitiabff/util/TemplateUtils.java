@@ -738,7 +738,6 @@ public final class TemplateUtils {
                 <div class="info-box" style="background:#f8f9fa;padding:15px 20px;border-radius:6px;margin:0 0 18px 0;border-left:4px solid #ff9e18;">
                   <strong>Postulante:</strong> {{studentName}}<br/>
                   <strong>Curso al que postula:</strong> {{gradeApplied}}<br/>
-                  <strong>Tipo de evaluación:</strong> {{evaluationType}}<br/>
                   <strong>Plazo:</strong> {{deadline}}
                 </div>
                 <p style="margin:0 0 14px 0;">

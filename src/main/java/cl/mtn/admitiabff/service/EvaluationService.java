@@ -15,6 +15,7 @@ import cl.mtn.admitiabff.repository.EvaluationRepository;
 import cl.mtn.admitiabff.repository.InterviewRepository;
 import cl.mtn.admitiabff.repository.UserRepository;
 import cl.mtn.admitiabff.util.CsvUtils;
+import cl.mtn.admitiabff.util.EmailDisplayFormatter;
 import cl.mtn.admitiabff.util.JsonSupport;
 import cl.mtn.admitiabff.util.TemplateUtils;
 import java.math.BigDecimal;
@@ -220,13 +221,12 @@ public class EvaluationService {
                                 + saved.getApplication().getStudent().getPaternalLastName()).trim()
                         : "";
                 String gradeApplied = saved.getApplication() != null && saved.getApplication().getStudent() != null
-                        ? String.valueOf(saved.getApplication().getStudent().getGradeApplied())
+                        ? EmailDisplayFormatter.grade(saved.getApplication().getStudent().getGradeApplied())
                         : "";
                 Map<String, Object> data = new LinkedHashMap<>();
                 data.put("evaluatorName", ev.getFirstName() == null ? "" : ev.getFirstName());
                 data.put("studentName", studentName);
                 data.put("gradeApplied", gradeApplied);
-                data.put("evaluationType", saved.getSubject() == null ? "" : saved.getSubject());
                 data.put("deadline", saved.getEvaluationDate() == null ? "" : String.valueOf(saved.getEvaluationDate()));
                 data.put("evaluationId", saved.getId());
 
