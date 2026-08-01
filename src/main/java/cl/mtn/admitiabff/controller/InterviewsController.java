@@ -2,15 +2,21 @@ package cl.mtn.admitiabff.controller;
 
 import cl.mtn.admitiabff.service.InterviewService;
 import java.util.Map;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.web.bind.annotation.*;
 
 @RestController
 @RequestMapping("/api/interviews")
 public class InterviewsController {
     private final InterviewService interviewService;
+    private final String bffPublicBaseUrl;
 
-
-    public InterviewsController(InterviewService interviewService) { this.interviewService = interviewService; }
+    public InterviewsController(
+            InterviewService interviewService,
+            @Value("${app.bff.public-base-url}") String bffPublicBaseUrl) {
+        this.interviewService = interviewService;
+        this.bffPublicBaseUrl = bffPublicBaseUrl;
+    }
 
     @GetMapping("/public/interviewers") public Object publicInterviewers() { return interviewService.publicInterviewers(); }
     @GetMapping public Map<String, Object> all() { return interviewService.all(); }
@@ -33,10 +39,7 @@ public class InterviewsController {
     @PostMapping("/application/{applicationId}/send-summary") public Map<String, Object> sendSummary(@PathVariable Long applicationId) { return interviewService.sendSummary(applicationId); }
 
     @PostMapping("/{id}/send-invitation")
-    public Map<String, Object> sendInvitation(@PathVariable Long id, @RequestHeader(value = "X-Base-Url", required = false) String baseUrl) {
-        // Usar nginx como URL pública (para que el email tenga el link correcto)
-        // El nginx enruta /api/public/interview/confirm al BFF
-        String publicBaseUrl = baseUrl != null ? baseUrl : "https://admitia-nginx-staging.up.railway.app";
-        return interviewService.sendInterviewInvitation(id, publicBaseUrl);
+    public Map<String, Object> sendInvitation(@PathVariable Long id) {
+        return interviewService.sendInterviewInvitation(id, bffPublicBaseUrl);
     }
 }

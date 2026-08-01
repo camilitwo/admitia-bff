@@ -1,6 +1,8 @@
 package cl.mtn.admitiabff.controller;
 
 import cl.mtn.admitiabff.service.ApplicationService;
+import cl.mtn.admitiabff.service.AuthService;
+import cl.mtn.admitiabff.service.payments.PaymentService;
 import java.util.Map;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -9,8 +11,14 @@ import org.springframework.web.bind.annotation.*;
 @RequestMapping("/api/applications")
 public class ApplicationsController {
     private final ApplicationService applicationService;
+    private final AuthService authService;
+    private final PaymentService paymentService;
 
-    public ApplicationsController(ApplicationService applicationService) { this.applicationService = applicationService; }
+    public ApplicationsController(ApplicationService applicationService, AuthService authService, PaymentService paymentService) {
+        this.applicationService = applicationService;
+        this.authService = authService;
+        this.paymentService = paymentService;
+    }
 
     @GetMapping("/stats") public Map<String, Object> stats() { return applicationService.stats(); }
     @GetMapping("/statistics") public Map<String, Object> statistics() { return applicationService.stats(); }
@@ -23,7 +31,11 @@ public class ApplicationsController {
     @GetMapping("/export") public ResponseEntity<?> export(@RequestParam(required = false) String status, @RequestParam(defaultValue = "json") String format, @RequestParam(required = false) String search) { return applicationService.export(status, format, search); }
     @GetMapping("/status/{status}") public Map<String, Object> byStatus(@PathVariable String status, @RequestParam(defaultValue = "0") int page, @RequestParam(defaultValue = "10") int limit) { return applicationService.byStatus(status, page, limit); }
     @GetMapping("/user/{userId}") public Map<String, Object> byUser(@PathVariable Long userId) { return applicationService.byUser(userId); }
-    @GetMapping("/my-applications") public Map<String, Object> myApplications() { return applicationService.myApplications(); }
+    @GetMapping("/my-applications") public Map<String, Object> myApplications() {
+        Long userId = authService.requireAuth().id();
+        paymentService.reconcilePendingForUserBestEffort(userId);
+        return applicationService.byUser(userId);
+    }
     @GetMapping("/for-evaluation/{evaluatorId}") public Map<String, Object> forEvaluation(@PathVariable Long evaluatorId) { return applicationService.forEvaluation(evaluatorId); }
     @GetMapping("/special-category/{category}") public Map<String, Object> specialCategory(@PathVariable String category) { return applicationService.specialCategory(category); }
     @GetMapping("/{id}") public Map<String, Object> get(@PathVariable Long id) { return applicationService.get(id); }

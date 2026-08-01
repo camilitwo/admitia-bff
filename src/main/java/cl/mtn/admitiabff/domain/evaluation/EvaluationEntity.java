@@ -79,4 +79,7 @@ public class EvaluationEntity extends BaseEntity {
 
     @Column(name = "completed_at")
     private LocalDateTime completedAt;
+
+    @Column(name = "areas_for_improvement", columnDefinition = "text")
+    private String areasForImprovement;
 }

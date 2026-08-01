@@ -1,6 +1,8 @@
 package cl.mtn.admitiabff.controller;
 
 import cl.mtn.admitiabff.service.TokenService;
+import cl.mtn.admitiabff.service.InterviewerPairException;
+import cl.mtn.admitiabff.service.payments.PaymentIntegrationException;
 import cl.mtn.admitiabff.util.ApiResponse;
 import java.util.Map;
 import org.slf4j.Logger;
@@ -16,6 +18,11 @@ import org.springframework.web.servlet.resource.NoResourceFoundException;
 @RestControllerAdvice
 public class ApiExceptionHandler {
     private static final Logger log = LoggerFactory.getLogger(ApiExceptionHandler.class);
+
+    @ExceptionHandler(InterviewerPairException.class)
+    ResponseEntity<Map<String, Object>> handleInterviewerPair(InterviewerPairException ex) {
+        return ResponseEntity.badRequest().body(ApiResponse.error(ex.getCode(), ex.getMessage()));
+    }
 
     @ExceptionHandler(IllegalArgumentException.class)
     ResponseEntity<Map<String, Object>> handleIllegalArgument(IllegalArgumentException ex) {
@@ -80,6 +87,13 @@ public class ApiExceptionHandler {
             default -> "HTTP_ERROR";
         };
         return ResponseEntity.status(status).body(ApiResponse.error(code, reason));
+    }
+
+    @ExceptionHandler(PaymentIntegrationException.class)
+    ResponseEntity<Map<String, Object>> handlePaymentIntegration(PaymentIntegrationException ex) {
+        Map<String, Object> body = new java.util.LinkedHashMap<>(ApiResponse.error(ex.code(), ex.getMessage()));
+        body.put("message", ex.getMessage());
+        return ResponseEntity.status(ex.status()).body(body);
     }
 
     @ExceptionHandler(Exception.class)

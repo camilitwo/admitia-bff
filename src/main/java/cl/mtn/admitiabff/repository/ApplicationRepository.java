@@ -9,7 +9,9 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.EntityGraph;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.repository.query.Param;
+import jakarta.persistence.LockModeType;
 
 public interface ApplicationRepository extends JpaRepository<ApplicationEntity, Long> {
     /** Listados admin: excluye soft-delete y archivadas; orden estable para paginación. */
@@ -87,6 +89,10 @@ public interface ApplicationRepository extends JpaRepository<ApplicationEntity, 
     @EntityGraph(attributePaths = {"student", "father", "mother", "guardian", "supporter", "applicantUser"})
     @Query("select a from ApplicationEntity a where a.deletedAt is null and a.id = :id")
     java.util.Optional<ApplicationEntity> findActiveById(@Param("id") Long id);
+
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("select a from ApplicationEntity a where a.deletedAt is null and a.id = :id")
+    java.util.Optional<ApplicationEntity> findActiveByIdForUpdate(@Param("id") Long id);
 
     @EntityGraph(attributePaths = {"student"})
     List<ApplicationEntity> findByDeletedAtIsNullOrderBySubmissionDateDesc(Pageable pageable);

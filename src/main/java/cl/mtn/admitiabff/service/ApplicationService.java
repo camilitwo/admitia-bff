@@ -191,10 +191,18 @@ public class ApplicationService {
         ApplicationEntity entity = new ApplicationEntity();
         entity.setStudent(resolveStudent(payload));
 
-        // Validar vacante disponible para el nivel seleccionado
+        // Validar vacante disponible para el nivel seleccionado según género
         String gradeApplied = entity.getStudent().getGradeApplied();
-        if (gradeApplied != null && !gradeAvailabilityRepository.existsByGradeLevelAndHasVacancyTrue(gradeApplied)) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "No hay vacantes disponibles para el nivel seleccionado: " + gradeApplied);
+        String gender = entity.getStudent().getGender();
+        if (gradeApplied != null && gender != null) {
+            boolean hasVacancy = switch (gender) {
+                case "MALE" -> gradeAvailabilityRepository.existsByGradeLevelAndHasVacancyMTrue(gradeApplied);
+                case "FEMALE" -> gradeAvailabilityRepository.existsByGradeLevelAndHasVacancyFTrue(gradeApplied);
+                default -> false;
+            };
+            if (!hasVacancy) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "No hay vacantes disponibles para el nivel seleccionado: " + gradeApplied);
+            }
         }
 
         entity.setFather(resolveParent(payload, "father", "parent1", "FATHER", true));
@@ -205,6 +213,12 @@ public class ApplicationService {
         entity.setStatus(parseStatus(value(payload.getOrDefault("status", "PENDING"))));
         entity.setNotes(value(payload.get("notes")));
         entity.setSubmissionDate(LocalDateTime.now());
+        Object academicYearObj = payload.get("academicYear");
+        if (academicYearObj != null) {
+            entity.setAcademicYear(Integer.valueOf(academicYearObj.toString()));
+        } else {
+            entity.setAcademicYear(LocalDate.now().getYear() + 1);
+        }
         ApplicationEntity saved = applicationRepository.save(entity);
         return Map.of("success", true, "message", "Postulación creada correctamente", "data", toFullResponse(saved));
     }
@@ -434,6 +448,8 @@ public class ApplicationService {
         student.setInclusionStudent(booleanValue(source.getOrDefault("isInclusionStudent", false)));
         student.setInclusionType(value(source.get("inclusionType")));
         student.setInclusionNotes(value(source.get("inclusionNotes")));
+        student.setHasSiblingsInSchool(booleanValue(source.getOrDefault("hasSiblingsInSchool", false)));
+        student.setSiblingsInSchoolDetails(value(source.get("siblingsInSchoolDetails")));
         return studentRepository.save(student);
     }
 
@@ -545,6 +561,8 @@ public class ApplicationService {
         studentMap.put("isInclusionStudent", student.isInclusionStudent());
         studentMap.put("inclusionType", student.getInclusionType());
         studentMap.put("inclusionNotes", student.getInclusionNotes());
+        studentMap.put("hasSiblingsInSchool", student.isHasSiblingsInSchool());
+        studentMap.put("siblingsInSchoolDetails", student.getSiblingsInSchoolDetails());
         response.put("student", studentMap);
 
         // Father
@@ -640,6 +658,8 @@ public class ApplicationService {
         studentMap.put("specialNeeds", entity.getStudent().isSpecialNeeds());
         studentMap.put("specialNeedsDescription", entity.getStudent().getSpecialNeedsDescription());
         studentMap.put("gender", entity.getStudent().getGender());
+        studentMap.put("hasSiblingsInSchool", entity.getStudent().isHasSiblingsInSchool());
+        studentMap.put("siblingsInSchoolDetails", entity.getStudent().getSiblingsInSchoolDetails());
         response.put("student", studentMap);
         if (entity.getGuardian() != null) {
             Map<String, Object> guardianMap = new LinkedHashMap<>();

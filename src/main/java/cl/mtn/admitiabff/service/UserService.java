@@ -6,6 +6,7 @@ import cl.mtn.admitiabff.domain.user.UserEntity;
 import cl.mtn.admitiabff.repository.EvaluationRepository;
 import cl.mtn.admitiabff.repository.InterviewRepository;
 import cl.mtn.admitiabff.repository.InterviewerScheduleRepository;
+import cl.mtn.admitiabff.repository.InterviewerPairRepository;
 import cl.mtn.admitiabff.repository.UserRepository;
 import cl.mtn.admitiabff.util.JsonSupport;
 import java.util.Arrays;
@@ -30,14 +31,16 @@ public class UserService {
     private final EvaluationRepository evaluationRepository;
     private final InterviewRepository interviewRepository;
     private final InterviewerScheduleRepository interviewerScheduleRepository;
+    private final InterviewerPairRepository interviewerPairRepository;
     private final AuthService authService;
     private final JsonSupport jsonSupport;
 
-    public UserService(UserRepository userRepository, EvaluationRepository evaluationRepository, InterviewRepository interviewRepository, InterviewerScheduleRepository interviewerScheduleRepository, AuthService authService, JsonSupport jsonSupport) {
+    public UserService(UserRepository userRepository, EvaluationRepository evaluationRepository, InterviewRepository interviewRepository, InterviewerScheduleRepository interviewerScheduleRepository, InterviewerPairRepository interviewerPairRepository, AuthService authService, JsonSupport jsonSupport) {
         this.userRepository = userRepository;
         this.evaluationRepository = evaluationRepository;
         this.interviewRepository = interviewRepository;
         this.interviewerScheduleRepository = interviewerScheduleRepository;
+        this.interviewerPairRepository = interviewerPairRepository;
         this.authService = authService;
         this.jsonSupport = jsonSupport;
     }
@@ -114,7 +117,8 @@ public class UserService {
         long evaluations = evaluationRepository.findByEvaluatorIdOrderByCreatedAtDesc(id).size();
         long interviews = interviewRepository.findVisibleForInterviewer(id, List.of()).size();
         long schedules = interviewerScheduleRepository.findByInterviewerIdOrderByYearDescDayOfWeekAscStartTimeAsc(id).size();
-        return Map.of("success", true, "data", Map.of("evaluations", evaluations, "interviews", interviews, "schedules", schedules));
+        long interviewerPairs = interviewerPairRepository.countByMember(id);
+        return Map.of("success", true, "data", Map.of("evaluations", evaluations, "interviews", interviews, "schedules", schedules, "interviewerPairs", interviewerPairs));
     }
 
     public Map<String, Object> get(Long id) {
@@ -147,7 +151,7 @@ public class UserService {
 
     @Transactional
     public Map<String, Object> delete(Long id) {
-        if (evaluationRepository.findByEvaluatorIdOrderByCreatedAtDesc(id).size() > 0 || interviewRepository.findVisibleForInterviewer(id, List.of()).size() > 0 || interviewerScheduleRepository.findByInterviewerIdOrderByYearDescDayOfWeekAscStartTimeAsc(id).size() > 0) {
+        if (evaluationRepository.findByEvaluatorIdOrderByCreatedAtDesc(id).size() > 0 || interviewRepository.findVisibleForInterviewer(id, List.of()).size() > 0 || interviewerScheduleRepository.findByInterviewerIdOrderByYearDescDayOfWeekAscStartTimeAsc(id).size() > 0 || interviewerPairRepository.countByMember(id) > 0) {
             throw new IllegalArgumentException("No se puede eliminar el usuario porque tiene datos asociados");
         }
         userRepository.deleteById(id);

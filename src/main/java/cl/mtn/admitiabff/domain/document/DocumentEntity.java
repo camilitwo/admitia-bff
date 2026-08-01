@@ -1,8 +1,9 @@
 package cl.mtn.admitiabff.domain.document;
 
 import cl.mtn.admitiabff.domain.application.ApplicationEntity;
-import cl.mtn.admitiabff.domain.common.DocumentApprovalStatus;
 import cl.mtn.admitiabff.domain.common.BaseEntity;
+import cl.mtn.admitiabff.domain.common.DocumentApprovalStatus;
+import cl.mtn.admitiabff.domain.common.DocumentType;
 import cl.mtn.admitiabff.domain.user.UserEntity;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
@@ -32,8 +33,9 @@ public class DocumentEntity extends BaseEntity {
     @JoinColumn(name = "application_id", nullable = false)
     private ApplicationEntity application;
 
+    @Enumerated(EnumType.STRING)
     @Column(name = "document_type")
-    private String documentType;
+    private DocumentType documentType;
 
     @Column(name = "file_name", nullable = false)
     private String fileName;
