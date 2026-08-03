@@ -572,7 +572,7 @@ public final class TemplateUtils {
                   Resultado del proceso de admisión
                 </h2>
                 <p style="margin:0 0 14px 0;">
-                  Estimada familia <strong>{{familyNames}}</strong>:
+                  Estimado/a <strong>{{guardianName}}</strong>:
                 </p>
                 <p style="margin:0 0 22px 0;">
                   Junto con saludarles, les comunicamos el resultado del proceso
@@ -588,6 +588,14 @@ public final class TemplateUtils {
                   <tr>
                     <td style="padding:16px 18px;border-bottom:1px solid #e5e7eb;color:#6b7280;">Curso</td>
                     <td style="padding:16px 18px;border-bottom:1px solid #e5e7eb;font-weight:600;color:#111827;">{{gradeApplied}}</td>
+                  </tr>
+                  <tr>
+                    <td style="padding:16px 18px;border-bottom:1px solid #e5e7eb;color:#6b7280;">Apoderado</td>
+                    <td style="padding:16px 18px;border-bottom:1px solid #e5e7eb;font-weight:600;color:#111827;">{{guardianName}}</td>
+                  </tr>
+                  <tr>
+                    <td style="padding:16px 18px;border-bottom:1px solid #e5e7eb;color:#6b7280;">Padre y madre</td>
+                    <td style="padding:16px 18px;border-bottom:1px solid #e5e7eb;font-weight:600;color:#111827;">{{parentsSummary}}</td>
                   </tr>
                   <tr>
                     <td style="padding:16px 18px;color:#6b7280;">N° de postulación</td>

@@ -173,25 +173,15 @@ public class EmailComposerService {
                     "Destinatario (to) requerido y no puede estar vacío. Resolverlo desde el front o desde la base de datos antes de invocar al composer.");
         }
 
-        Map<String, Object> data = request.data == null ? Map.of() : request.data;
+        RenderedEmail rendered = render(request);
 
-        // request.template es el FRAGMENTO HTML (body) que reemplaza {{html_replace}}.
-        // Si viene null/blank, usamos un body genérico del flujo GENERIC.
-        String body = (request.template == null || request.template.isBlank())
-                ? TemplateUtils.generateTemplate(EmailTemplate.GENERIC.name(), data)
-                : request.template;
-
-        String html = loadBaseLayout().replace(BODY_PLACEHOLDER, body);
-
-        String subject = firstNonBlank(request.subject, "Notificación MTN");
-
-        log.debug("Email send to={} subject={}", request.to, subject);
+        log.debug("Email send to={} subject={}", request.to, rendered.subject());
 
         Map<String, Object> mailPayload = new LinkedHashMap<>();
         mailPayload.put("to", request.to);
-        mailPayload.put("subject", subject);
-        mailPayload.put("message", html); // HTML final renderizado
-        mailPayload.put("templateData", data);
+        mailPayload.put("subject", rendered.subject());
+        mailPayload.put("message", rendered.html());
+        mailPayload.put("templateData", request.data == null ? Map.of() : request.data);
         mailPayload.put("sensitive", request.sensitive);
         if (request.templateName != null) mailPayload.put("templateName", request.templateName);
         if (request.recipientType != null) mailPayload.put("recipientType", request.recipientType);
@@ -199,6 +189,22 @@ public class EmailComposerService {
 
         return notificationService.email(mailPayload);
     }
+
+    /**
+     * Renderiza el correo sin persistirlo ni enviarlo. El cierre masivo usa este
+     * método para congelar el payload antes de contactar al proveedor.
+     */
+    public RenderedEmail render(EmailRequestDTO request) {
+        Objects.requireNonNull(request, "request requerido");
+        Map<String, Object> data = request.data == null ? Map.of() : request.data;
+        String body = (request.template == null || request.template.isBlank())
+                ? TemplateUtils.generateTemplate(EmailTemplate.GENERIC.name(), data)
+                : request.template;
+        String html = loadBaseLayout().replace(BODY_PLACEHOLDER, body);
+        return new RenderedEmail(firstNonBlank(request.subject, "Notificación MTN"), html);
+    }
+
+    public record RenderedEmail(String subject, String html) {}
 
     // ------------------------------------------------------------------
     // Helpers internos.

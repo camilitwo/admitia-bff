@@ -90,6 +90,10 @@ public interface ApplicationRepository extends JpaRepository<ApplicationEntity, 
     @Query("select a from ApplicationEntity a where a.deletedAt is null and a.id = :id")
     java.util.Optional<ApplicationEntity> findActiveById(@Param("id") Long id);
 
+    @EntityGraph(attributePaths = {"student", "father", "mother", "guardian"})
+    @Query("select a from ApplicationEntity a where a.deletedAt is null and a.id in :ids")
+    List<ApplicationEntity> findAllForAdmissionDispatch(@Param("ids") List<Long> ids);
+
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("select a from ApplicationEntity a where a.deletedAt is null and a.id = :id")
     java.util.Optional<ApplicationEntity> findActiveByIdForUpdate(@Param("id") Long id);

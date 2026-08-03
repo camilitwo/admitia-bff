@@ -42,7 +42,8 @@ class EvaluationServiceTest {
                 userRepository,
                 composer,
                 mock(AuthService.class),
-                mock(JsonSupport.class));
+                mock(JsonSupport.class),
+                mock(AdmissionCycleGuard.class));
 
         StudentEntity student = new StudentEntity();
         student.setFirstName("ALONSO");

@@ -31,14 +31,16 @@ public class DocumentService {
     private final UserRepository userRepository;
     private final AuthService authService;
     private final VercelBlobService blobService;
+    private final AdmissionCycleGuard admissionCycleGuard;
     private final Path uploadsDir;
 
-    public DocumentService(DocumentRepository documentRepository, ApplicationRepository applicationRepository, UserRepository userRepository, AuthService authService, VercelBlobService blobService, @Value("${app.uploads-dir}") String uploadsDir) {
+    public DocumentService(DocumentRepository documentRepository, ApplicationRepository applicationRepository, UserRepository userRepository, AuthService authService, VercelBlobService blobService, AdmissionCycleGuard admissionCycleGuard, @Value("${app.uploads-dir}") String uploadsDir) {
         this.documentRepository = documentRepository;
         this.applicationRepository = applicationRepository;
         this.userRepository = userRepository;
         this.authService = authService;
         this.blobService = blobService;
+        this.admissionCycleGuard = admissionCycleGuard;
         this.uploadsDir = Path.of(uploadsDir).toAbsolutePath();
     }
 
@@ -50,6 +52,7 @@ public class DocumentService {
     public Map<String, Object> upload(List<MultipartFile> files, Map<String, Object> metadata) throws IOException {
         Long applicationId = Long.parseLong(String.valueOf(metadata.get("applicationId")));
         var application = applicationRepository.findActiveById(applicationId).orElseThrow(() -> new IllegalArgumentException("Postulación no encontrada"));
+        admissionCycleGuard.assertOpen(application);
         for (MultipartFile file : files) {
             DocumentEntity document = new DocumentEntity();
             document.setApplication(application);
@@ -116,6 +119,7 @@ public class DocumentService {
     @Transactional
     public Map<String, Object> replace(Long id, MultipartFile file) throws IOException {
         DocumentEntity document = documentRepository.findById(id).orElseThrow(() -> new IllegalArgumentException("Documento no encontrado"));
+        admissionCycleGuard.assertOpen(document.getApplication());
         // Best-effort delete of previous file
         String previous = document.getFilePath();
         if (isBlobUrl(previous)) { blobService.delete(previous); } else if (previous != null) { Files.deleteIfExists(Path.of(previous)); }
@@ -136,6 +140,7 @@ public class DocumentService {
     @Transactional
     public Map<String, Object> approval(Long id, Map<String, Object> payload) {
         DocumentEntity document = documentRepository.findById(id).orElseThrow(() -> new IllegalArgumentException("Documento no encontrado"));
+        admissionCycleGuard.assertOpen(document.getApplication());
         document.setApprovalStatus(DocumentApprovalStatus.valueOf(String.valueOf(payload.getOrDefault("approvalStatus", "PENDING"))));
         document.setRejectionReason(payload.get("rejectionReason") == null ? null : String.valueOf(payload.get("rejectionReason")));
         document.setApprovalDate(LocalDateTime.now());
@@ -147,6 +152,7 @@ public class DocumentService {
     @Transactional
     public Map<String, Object> delete(Long id) throws IOException {
         DocumentEntity document = documentRepository.findById(id).orElseThrow(() -> new IllegalArgumentException("Documento no encontrado"));
+        admissionCycleGuard.assertOpen(document.getApplication());
         String path = document.getFilePath();
         if (isBlobUrl(path)) {
             blobService.delete(path);

@@ -1,0 +1,234 @@
+{
+  "info": {
+    "_postman_id": "5ffaf5b9-0db1-4dbc-bf4c-c54817817c58",
+    "name": "MTN - API de Admisión v1",
+    "description": "Contrato ejecutable para validar autenticación, alta, cobros, idempotencia y errores de la API institucional MTN.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [{ "key": "token", "value": "{{access_token}}", "type": "string" }]
+  },
+  "event": [{
+    "listen": "prerequest",
+    "script": {
+      "type": "text/javascript",
+      "exec": [
+        "if (!pm.environment.get('due_date')) {",
+        "  const due = new Date(); due.setUTCDate(due.getUTCDate() + 3);",
+        "  pm.environment.set('due_date', due.toISOString().slice(0, 10));",
+        "}",
+        "pm.environment.set('concept', 'Matricula ' + (new Date().getUTCFullYear() + 1));",
+        "if (!pm.environment.get('external_reference')) {",
+        "  const suffix = Date.now().toString();",
+        "  pm.environment.set('external_reference', 'POSTMAN-QA-' + suffix);",
+        "  pm.environment.set('second_external_reference', 'POSTMAN-QA-SECOND-' + suffix);",
+        "}"
+      ]
+    }
+  }],
+  "item": [
+    {
+      "name": "01 Autenticación",
+      "item": [
+        {
+          "name": "Obtener token - HTTP Basic",
+          "request": {
+            "auth": { "type": "basic", "basic": [
+              { "key": "username", "value": "{{client_code}}", "type": "string" },
+              { "key": "password", "value": "{{client_secret}}", "type": "string" }
+            ]},
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/x-www-form-urlencoded" }],
+            "body": { "mode": "urlencoded", "urlencoded": [{ "key": "grant_type", "value": "client_credentials", "type": "text" }] },
+            "url": "{{base_url}}/auth/token"
+          },
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "pm.test('Token: HTTP 200', () => pm.response.to.have.status(200));",
+            "const json = pm.response.json();",
+            "pm.test('Token Bearer válido', () => { pm.expect(json.access_token).to.be.a('string').and.not.empty; pm.expect(json.token_type.toLowerCase()).to.eql('bearer'); pm.expect(json.expires_in).to.be.a('number').and.above(0); });",
+            "pm.environment.set('access_token', json.access_token);",
+            "pm.environment.set('token_expires_at', Date.now() + json.expires_in * 1000);"
+          ]}}]
+        },
+        {
+          "name": "Obtener token - formulario",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/x-www-form-urlencoded" }],
+            "body": { "mode": "urlencoded", "urlencoded": [
+              { "key": "grant_type", "value": "client_credentials", "type": "text" },
+              { "key": "client_id", "value": "{{client_code}}", "type": "text" },
+              { "key": "client_secret", "value": "{{client_secret}}", "type": "text" }
+            ]},
+            "url": "{{base_url}}/auth/token"
+          },
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "pm.test('Formulario aceptado', () => pm.response.to.have.status(200));",
+            "const json = pm.response.json(); pm.expect(json.access_token).to.be.a('string').and.not.empty;",
+            "pm.environment.set('access_token', json.access_token); pm.environment.set('token_expires_at', Date.now() + json.expires_in * 1000);"
+          ]}}]
+        },
+        {
+          "name": "Validar token y scope",
+          "request": { "method": "GET", "url": "{{base_url}}/admision/ping" },
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "pm.test('Ping autenticado', () => pm.response.to.have.status(200));",
+            "const json = pm.response.json(); pm.test('Scope ADMISION', () => pm.expect(JSON.stringify(json)).to.include('ADMISION'));"
+          ]}}]
+        }
+      ]
+    },
+    {
+      "name": "02 Alta de admisión",
+      "item": [
+        {
+          "name": "Crear o reutilizar apoderado y alumno",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"value\": \"{{guardian_rut}}\",\n  \"valueValidator\": \"{{guardian_dv}}\",\n  \"name\": \"{{guardian_name}}\",\n  \"email\": \"{{guardian_email}}\",\n  \"address1\": \"{{guardian_address}}\",\n  \"city\": \"{{guardian_city}}\",\n  \"alumnos\": [{\n    \"value\": \"{{student_rut}}\",\n    \"valueValidator\": \"{{student_dv}}\",\n    \"name\": \"{{student_name}}\",\n    \"codCurso\": \"{{course_code}}\"\n  }]\n}" },
+            "url": "{{base_url}}/admision/apoderados"
+          },
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "pm.test('Alta procesada', () => pm.response.to.have.status(200)); const json = pm.response.json();",
+            "pm.test('Alta sin error fatal', () => { pm.expect(json.ok).to.eql(true); pm.expect(['OK','PARCIAL']).to.include(json.estado); pm.expect(json.errores || []).to.be.an('array').that.is.empty; });",
+            "pm.test('Alumno informado', () => pm.expect(json.alumnos).to.be.an('array').that.is.not.empty);",
+            "pm.environment.set('c_bpartner_id', json.c_bpartner_id); pm.environment.set('ad_user_id', json.alumnos[0].ad_user_id);"
+          ]}}]
+        },
+        {
+          "name": "Repetir alta - idempotencia",
+          "request": {
+            "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"value\": \"{{guardian_rut}}\", \"valueValidator\": \"{{guardian_dv}}\", \"name\": \"{{guardian_name}}\",\n  \"email\": \"{{guardian_email}}\", \"address1\": \"{{guardian_address}}\", \"city\": \"{{guardian_city}}\",\n  \"alumnos\": [{ \"value\": \"{{student_rut}}\", \"valueValidator\": \"{{student_dv}}\", \"name\": \"{{student_name}}\", \"codCurso\": \"{{course_code}}\" }]\n}" },
+            "url": "{{base_url}}/admision/apoderados"
+          },
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "pm.test('Repetición procesada', () => pm.response.to.have.status(200)); const json = pm.response.json();",
+            "pm.test('Mismo apoderado', () => pm.expect(String(json.c_bpartner_id)).to.eql(String(pm.environment.get('c_bpartner_id'))));",
+            "pm.test('Mismo alumno', () => pm.expect(String(json.alumnos[0].ad_user_id)).to.eql(String(pm.environment.get('ad_user_id'))));"
+          ]}}]
+        },
+        {
+          "name": "RUT apoderado inválido",
+          "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\"value\":\"{{guardian_rut}}\",\"valueValidator\":\"0\",\"name\":\"Caso inválido\",\"alumnos\":[]}" }, "url": "{{base_url}}/admision/apoderados" },
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('RUT apoderado rechazado', () => pm.response.to.have.status(400));"]}}]
+        },
+        {
+          "name": "Alumno inválido - respuesta parcial",
+          "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\"value\":\"{{guardian_rut}}\",\"valueValidator\":\"{{guardian_dv}}\",\"name\":\"{{guardian_name}}\",\"alumnos\":[{\"value\":\"{{student_rut}}\",\"valueValidator\":\"0\",\"name\":\"Alumno inválido\"}]}" }, "url": "{{base_url}}/admision/apoderados" },
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "pm.test('Alumno inválido no destruye el alta', () => pm.response.to.have.status(200)); const json = pm.response.json();",
+            "pm.test('Respuesta parcial', () => { pm.expect(json.estado).to.eql('PARCIAL'); pm.expect(json.alumnos[0].estado).to.eql('rut_invalido'); });"
+          ]}}]
+        },
+        {
+          "name": "Conflicto: alumno asociado a otro apoderado (manual)",
+          "event": [
+            { "listen": "prerequest", "script": { "type": "text/javascript", "exec": [
+              "if (!pm.environment.get('conflict_student_rut') || !pm.environment.get('conflict_student_dv')) pm.execution.skipRequest();"
+            ]}},
+            { "listen": "test", "script": { "type": "text/javascript", "exec": [
+              "pm.test('Conflicto informado como parcial', () => pm.response.to.have.status(200)); const json = pm.response.json();",
+              "pm.test('Alumno no reasignado', () => { pm.expect(json.estado).to.eql('PARCIAL'); pm.expect(json.alumnos[0].estado).to.eql('conflicto_otro_apoderado'); });"
+            ]}}
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\"value\":\"{{guardian_rut}}\",\"valueValidator\":\"{{guardian_dv}}\",\"name\":\"{{guardian_name}}\",\"alumnos\":[{\"value\":\"{{conflict_student_rut}}\",\"valueValidator\":\"{{conflict_student_dv}}\",\"name\":\"Alumno conflicto QA\"}]}" },
+            "url": "{{base_url}}/admision/apoderados"
+          }
+        }
+      ]
+    },
+    {
+      "name": "03 Cobros",
+      "item": [
+        {
+          "name": "Crear cobro por postulación",
+          "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\n  \"apoderado_rut\": \"{{guardian_rut}}\", \"apoderado_dv\": \"{{guardian_dv}}\",\n  \"apoderado_nombre\": \"{{guardian_name}}\", \"apoderado_email\": \"{{guardian_email}}\",\n  \"alumno_rut\": \"{{student_rut}}\", \"alumno_dv\": \"{{student_dv}}\", \"alumno_nombre\": \"{{student_name}}\", \"alumno_curso\": \"{{course_code}}\",\n  \"monto\": {{amount}}, \"moneda\": \"{{currency}}\", \"fecha_vencimiento\": \"{{due_date}}\",\n  \"concepto\": \"{{concept}}\", \"referencia_externa\": \"{{external_reference}}\"\n}" }, "url": "{{base_url}}/admision/cobros" },
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "pm.test('Cobro procesado', () => pm.response.to.have.status(200)); const json = pm.response.json();",
+            "pm.test('Contrato de cobro completo', () => { pm.expect(json.ok).to.eql(true); pm.expect(['OK','YA_EXISTIA']).to.include(json.estado); pm.expect(json.c_orderpayschedule_id).to.be.a('number'); pm.expect(json.link_pago).to.be.a('string').and.not.empty; pm.expect(json.estado_pago).to.eql('PENDIENTE'); });",
+            "pm.environment.set('c_orderpayschedule_id', json.c_orderpayschedule_id); pm.environment.set('first_c_orderpayschedule_id', json.c_orderpayschedule_id); pm.environment.set('toku_invoice_id', json.toku_invoice_id); pm.environment.set('payment_link', json.link_pago);"
+          ]}}]
+        },
+        {
+          "name": "Repetir cobro - idempotencia",
+          "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\"apoderado_rut\":\"{{guardian_rut}}\",\"apoderado_dv\":\"{{guardian_dv}}\",\"alumno_rut\":\"{{student_rut}}\",\"alumno_dv\":\"{{student_dv}}\",\"monto\":{{amount}},\"moneda\":\"{{currency}}\",\"fecha_vencimiento\":\"{{due_date}}\",\"concepto\":\"{{concept}}\",\"referencia_externa\":\"{{external_reference}}\"}" }, "url": "{{base_url}}/admision/cobros" },
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "pm.test('Reintento procesado', () => pm.response.to.have.status(200)); const json = pm.response.json();",
+            "pm.test('Mismo identificador de cobro', () => pm.expect(String(json.c_orderpayschedule_id)).to.eql(String(pm.environment.get('first_c_orderpayschedule_id'))));"
+          ]}}]
+        },
+        {
+          "name": "Crear cobro para segunda postulación",
+          "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\"apoderado_rut\":\"{{guardian_rut}}\",\"apoderado_dv\":\"{{guardian_dv}}\",\"apoderado_nombre\":\"{{guardian_name}}\",\"alumno_rut\":\"{{second_student_rut}}\",\"alumno_dv\":\"{{second_student_dv}}\",\"alumno_nombre\":\"{{second_student_name}}\",\"alumno_curso\":\"{{course_code}}\",\"monto\":{{amount}},\"moneda\":\"{{currency}}\",\"fecha_vencimiento\":\"{{due_date}}\",\"concepto\":\"{{concept}}\",\"referencia_externa\":\"{{second_external_reference}}\"}" }, "url": "{{base_url}}/admision/cobros" },
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "pm.test('Segundo cobro procesado', () => pm.response.to.have.status(200)); const json = pm.response.json();",
+            "pm.test('Cobro distinto por postulación', () => pm.expect(String(json.c_orderpayschedule_id)).not.to.eql(String(pm.environment.get('first_c_orderpayschedule_id')))); pm.environment.set('second_c_orderpayschedule_id', json.c_orderpayschedule_id);"
+          ]}}]
+        },
+        {
+          "name": "Consultar estado pendiente",
+          "request": { "method": "GET", "url": "{{base_url}}/admision/cobros/{{first_c_orderpayschedule_id}}" },
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "pm.test('Consulta encontrada', () => pm.response.to.have.status(200)); const json = pm.response.json();",
+            "pm.test('Estado válido', () => { pm.expect(json.encontrado).to.eql(true); pm.expect(['PENDIENTE','PAGADO']).to.include(json.estado); pm.expect(json.moneda).to.eql(pm.environment.get('currency')); });"
+          ]}}]
+        },
+        {
+          "name": "Consultar identificador inexistente",
+          "request": { "method": "GET", "url": "{{base_url}}/admision/cobros/999999999999" },
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('Cobro inexistente', () => pm.response.to.have.status(404));"]}}]
+        },
+        {
+          "name": "Consultar estado después de pago manual",
+          "event": [
+            { "listen": "prerequest", "script": { "type": "text/javascript", "exec": [
+              "if (pm.environment.get('expect_paid') !== 'true') pm.execution.skipRequest();"
+            ]}},
+            { "listen": "test", "script": { "type": "text/javascript", "exec": [
+              "pm.test('Pago consultado', () => pm.response.to.have.status(200)); const json = pm.response.json();",
+              "pm.test('Pago confirmado y completo', () => { pm.expect(json.pagado).to.eql(true); pm.expect(json.estado).to.eql('PAGADO'); pm.expect(json.monto_pagado).to.be.a('number').and.at.least(Number(pm.environment.get('amount'))); pm.expect(json.fecha_pago).to.be.a('string').and.not.empty; pm.expect(json.toku_transaction_id).to.be.a('string').and.not.empty; });"
+            ]}}
+          ],
+          "request": { "method": "GET", "url": "{{base_url}}/admision/cobros/{{first_c_orderpayschedule_id}}" }
+        }
+      ]
+    },
+    {
+      "name": "04 Seguridad y errores",
+      "item": [
+        {
+          "name": "Solicitud sin token",
+          "request": { "auth": { "type": "noauth" }, "method": "GET", "url": "{{base_url}}/admision/ping" },
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('Sin token rechazado', () => pm.response.to.have.status(401));"]}}]
+        },
+        {
+          "name": "Token inválido",
+          "request": { "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "token-invalido", "type": "string" }] }, "method": "GET", "url": "{{base_url}}/admision/ping" },
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('Token inválido rechazado', () => pm.response.to.have.status(401));"]}}]
+        },
+        {
+          "name": "Token sin scope ADMISION",
+          "request": { "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{no_scope_access_token}}", "type": "string" }] }, "method": "GET", "url": "{{base_url}}/admision/ping" },
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('Scope insuficiente rechazado', () => pm.response.to.have.status(403));"]}}]
+        },
+        {
+          "name": "Payload de cobro incompleto",
+          "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\"referencia_externa\":\"POSTMAN-INCOMPLETO\"}" }, "url": "{{base_url}}/admision/cobros" },
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('Payload incompleto rechazado', () => pm.response.to.have.status(400));"]}}]
+        },
+        {
+          "name": "Monto o moneda inválidos",
+          "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\"apoderado_rut\":\"{{guardian_rut}}\",\"apoderado_dv\":\"{{guardian_dv}}\",\"alumno_rut\":\"{{student_rut}}\",\"alumno_dv\":\"{{student_dv}}\",\"monto\":-1,\"moneda\":\"USD\",\"fecha_vencimiento\":\"{{due_date}}\",\"referencia_externa\":\"POSTMAN-INVALID-AMOUNT\"}" }, "url": "{{base_url}}/admision/cobros" },
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('Monto/moneda rechazados', () => pm.response.to.have.status(400));"]}}]
+        }
+      ]
+    }
+  ]
+}

@@ -3,7 +3,6 @@ package cl.mtn.admitiabff.service;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -11,7 +10,6 @@ import static org.mockito.Mockito.when;
 import cl.mtn.admitiabff.domain.application.ApplicationEntity;
 import cl.mtn.admitiabff.domain.common.ApplicationStatus;
 import cl.mtn.admitiabff.domain.common.Role;
-import cl.mtn.admitiabff.domain.email.EmailRequestDTO;
 import cl.mtn.admitiabff.domain.person.ParentEntity;
 import cl.mtn.admitiabff.domain.student.StudentEntity;
 import cl.mtn.admitiabff.domain.user.UserEntity;
@@ -25,7 +23,6 @@ import cl.mtn.admitiabff.repository.ParentRepository;
 import cl.mtn.admitiabff.repository.StudentRepository;
 import cl.mtn.admitiabff.repository.SupporterRepository;
 import cl.mtn.admitiabff.repository.UserRepository;
-import cl.mtn.admitiabff.service.notification.EmailComposerService;
 import cl.mtn.admitiabff.util.JsonSupport;
 import java.time.LocalDateTime;
 import java.util.List;
@@ -33,19 +30,18 @@ import java.util.Map;
 import java.util.Optional;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.mockito.ArgumentCaptor;
 
 class ApplicationServiceFinalDecisionTest {
 
     private ApplicationRepository applicationRepository;
-    private EmailComposerService emailComposerService;
     private ApplicationService service;
     private ApplicationEntity application;
+    private AdmissionCycleGuard admissionCycleGuard;
 
     @BeforeEach
     void setUp() {
         applicationRepository = mock(ApplicationRepository.class);
-        emailComposerService = mock(EmailComposerService.class);
+        admissionCycleGuard = mock(AdmissionCycleGuard.class);
         AuthService authService = mock(AuthService.class);
         DocumentRepository documentRepository = mock(DocumentRepository.class);
         ComplementaryFormRepository complementaryFormRepository = mock(ComplementaryFormRepository.class);
@@ -64,8 +60,7 @@ class ApplicationServiceFinalDecisionTest {
                 evaluationRepository,
                 interviewRepository,
                 authService,
-                mock(NotificationService.class),
-                emailComposerService,
+                admissionCycleGuard,
                 mock(JsonSupport.class),
                 "uploads");
 
@@ -119,11 +114,7 @@ class ApplicationServiceFinalDecisionTest {
     }
 
     @Test
-    void waitlistPersistsDecisionSendsEmailAndReportsConfirmedDelivery() {
-        when(emailComposerService.send(any(EmailRequestDTO.class))).thenReturn(Map.of(
-                "success", true,
-                "data", Map.of("status", "SENT", "recipient", "familia@example.cl")));
-
+    void waitlistPersistsDecisionAndDefersEmailUntilCycleClose() {
         Map<String, Object> response = service.recordFinalDecision(
                 30L,
                 Map.of("decision", "WAITLIST", "note", "Les contactaremos al liberarse un cupo."));
@@ -132,57 +123,30 @@ class ApplicationServiceFinalDecisionTest {
         assertEquals("Postulación agregada a la lista de espera", response.get("message"));
 
         Map<?, ?> notification = (Map<?, ?>) response.get("notification");
-        assertTrue((Boolean) notification.get("attempted"));
-        assertTrue((Boolean) notification.get("sent"));
-        assertEquals("SENT", notification.get("status"));
-        assertEquals("familia@example.cl", notification.get("recipient"));
-
-        ArgumentCaptor<EmailRequestDTO> request = ArgumentCaptor.forClass(EmailRequestDTO.class);
-        verify(emailComposerService).send(request.capture());
-        assertEquals("familia@example.cl", request.getValue().to);
-        assertEquals("En revisión", request.getValue().data.get("previousStatus"));
-        assertEquals("Lista de espera", request.getValue().data.get("currentStatus"));
-        assertEquals("Camilo González y María Pérez", request.getValue().data.get("familyNames"));
-        assertEquals("Lista de espera", request.getValue().data.get("result"));
-        assertEquals("Resultado de admisión: lista de espera", request.getValue().subject);
-        assertEquals("ADMISSION_RESULT", request.getValue().templateName);
-        assertTrue(request.getValue().template.contains("Estimada familia <strong>Camilo González y María Pérez</strong>"));
-        assertTrue(request.getValue().template.contains("Decisión final"));
-        assertFalse(request.getValue().template.contains("WAITLIST"));
-        assertFalse(request.getValue().template.contains("UNDER_REVIEW"));
+        assertFalse((Boolean) notification.get("attempted"));
+        assertFalse((Boolean) notification.get("sent"));
+        assertEquals("DEFERRED_UNTIL_PROCESS_CLOSE", notification.get("status"));
+        verify(admissionCycleGuard).assertOpen(application);
     }
 
     @Test
-    void emailFailureDoesNotUndoDecisionAndIsReportedToTheFrontend() {
-        when(emailComposerService.send(any(EmailRequestDTO.class)))
-                .thenThrow(new RuntimeException("provider unavailable"));
-
+    void approvedDecisionIsPersistedWithoutCallingEmailProvider() {
         Map<String, Object> response = service.recordFinalDecision(
                 30L,
                 Map.of("decision", "APPROVED"));
 
         assertEquals(ApplicationStatus.APPROVED, application.getStatus());
         Map<?, ?> notification = (Map<?, ?>) response.get("notification");
-        assertTrue((Boolean) notification.get("attempted"));
+        assertFalse((Boolean) notification.get("attempted"));
         assertFalse((Boolean) notification.get("sent"));
-        assertEquals("FAILED", notification.get("status"));
+        assertEquals("DEFERRED_UNTIL_PROCESS_CLOSE", notification.get("status"));
     }
 
     @Test
-    void repeatedApprovalEmailShowsOneSpanishDecisionWithoutRedundantTransition() {
+    void repeatedApprovalRemainsDeferredAndDoesNotDuplicateEmail() {
         application.setStatus(ApplicationStatus.APPROVED);
-        when(emailComposerService.send(any(EmailRequestDTO.class))).thenReturn(Map.of(
-                "success", true,
-                "data", Map.of("status", "SENT")));
-
-        service.recordFinalDecision(30L, Map.of("decision", "APPROVED"));
-
-        ArgumentCaptor<EmailRequestDTO> request = ArgumentCaptor.forClass(EmailRequestDTO.class);
-        verify(emailComposerService).send(request.capture());
-        String template = request.getValue().template;
-        assertTrue(template.contains("Aprobada"));
-        assertFalse(template.contains("APPROVED"));
-        assertFalse(template.contains("Estado anterior"));
-        assertFalse(template.contains("Estado actual"));
+        Map<String, Object> response = service.recordFinalDecision(30L, Map.of("decision", "APPROVED"));
+        Map<?, ?> notification = (Map<?, ?>) response.get("notification");
+        assertEquals("DEFERRED_UNTIL_PROCESS_CLOSE", notification.get("status"));
     }
 }

@@ -7,8 +7,6 @@ import cl.mtn.admitiabff.domain.common.DocumentApprovalStatus;
 import cl.mtn.admitiabff.domain.common.PaymentStatus;
 import cl.mtn.admitiabff.domain.common.Role;
 import cl.mtn.admitiabff.domain.document.DocumentEntity;
-import cl.mtn.admitiabff.domain.email.EmailRequestDTO;
-import cl.mtn.admitiabff.domain.notification.EmailTemplate;
 import cl.mtn.admitiabff.domain.person.GuardianEntity;
 import cl.mtn.admitiabff.domain.person.ParentEntity;
 import cl.mtn.admitiabff.domain.person.SupporterEntity;
@@ -26,15 +24,12 @@ import cl.mtn.admitiabff.repository.StudentRepository;
 import cl.mtn.admitiabff.repository.SupporterRepository;
 import cl.mtn.admitiabff.repository.UserRepository;
 import cl.mtn.admitiabff.util.CsvUtils;
-import cl.mtn.admitiabff.util.EmailDisplayFormatter;
 import cl.mtn.admitiabff.util.JsonSupport;
-import cl.mtn.admitiabff.util.TemplateUtils;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.ByteArrayResource;
 import org.springframework.data.domain.Page;
@@ -64,14 +59,13 @@ public class ApplicationService {
     private final EvaluationRepository evaluationRepository;
     private final InterviewRepository interviewRepository;
     private final AuthService authService;
-    private final NotificationService notificationService;
-    private final cl.mtn.admitiabff.service.notification.EmailComposerService emailComposerService;
+    private final AdmissionCycleGuard admissionCycleGuard;
     private final JsonSupport jsonSupport;
     private final String uploadsDir;
     @org.springframework.beans.factory.annotation.Autowired
     private GradeAvailabilityRepository gradeAvailabilityRepository;
 
-    public ApplicationService(ApplicationRepository applicationRepository, StudentRepository studentRepository, ParentRepository parentRepository, GuardianRepository guardianRepository, SupporterRepository supporterRepository, UserRepository userRepository, DocumentRepository documentRepository, ComplementaryFormRepository complementaryFormRepository, EvaluationRepository evaluationRepository, InterviewRepository interviewRepository, AuthService authService, NotificationService notificationService, cl.mtn.admitiabff.service.notification.EmailComposerService emailComposerService, JsonSupport jsonSupport, @Value("${app.uploads-dir}") String uploadsDir) {
+    public ApplicationService(ApplicationRepository applicationRepository, StudentRepository studentRepository, ParentRepository parentRepository, GuardianRepository guardianRepository, SupporterRepository supporterRepository, UserRepository userRepository, DocumentRepository documentRepository, ComplementaryFormRepository complementaryFormRepository, EvaluationRepository evaluationRepository, InterviewRepository interviewRepository, AuthService authService, AdmissionCycleGuard admissionCycleGuard, JsonSupport jsonSupport, @Value("${app.uploads-dir}") String uploadsDir) {
         this.applicationRepository = applicationRepository;
         this.studentRepository = studentRepository;
         this.parentRepository = parentRepository;
@@ -83,8 +77,7 @@ public class ApplicationService {
         this.evaluationRepository = evaluationRepository;
         this.interviewRepository = interviewRepository;
         this.authService = authService;
-        this.notificationService = notificationService;
-        this.emailComposerService = emailComposerService;
+        this.admissionCycleGuard = admissionCycleGuard;
         this.jsonSupport = jsonSupport;
         this.uploadsDir = uploadsDir;
     }
@@ -189,6 +182,11 @@ public class ApplicationService {
 
     @Transactional
     public Map<String, Object> create(Map<String, Object> payload) {
+        Object academicYearObj = firstNonNullRaw(payload.get("academicYear"), payload.get("applicationYear"));
+        Integer academicYear = academicYearObj == null
+                ? LocalDate.now().getYear() + 1
+                : Integer.valueOf(academicYearObj.toString());
+        admissionCycleGuard.assertOpenForCreate(academicYear);
         ApplicationEntity entity = new ApplicationEntity();
         entity.setStudent(resolveStudent(payload));
 
@@ -214,12 +212,7 @@ public class ApplicationService {
         entity.setStatus(parseStatus(value(payload.getOrDefault("status", "PENDING"))));
         entity.setNotes(value(payload.get("notes")));
         entity.setSubmissionDate(LocalDateTime.now());
-        Object academicYearObj = payload.get("academicYear");
-        if (academicYearObj != null) {
-            entity.setAcademicYear(Integer.valueOf(academicYearObj.toString()));
-        } else {
-            entity.setAcademicYear(LocalDate.now().getYear() + 1);
-        }
+        entity.setAcademicYear(academicYear);
         ApplicationEntity saved = applicationRepository.save(entity);
         return Map.of("success", true, "message", "Postulación creada correctamente", "data", toFullResponse(saved));
     }
@@ -227,6 +220,7 @@ public class ApplicationService {
     @Transactional
     public Map<String, Object> update(Long id, Map<String, Object> payload) {
         ApplicationEntity entity = load(id);
+        admissionCycleGuard.assertOpen(entity);
         if (payload.containsKey("status")) entity.setStatus(parseStatus(value(payload.get("status"))));
         if (payload.containsKey("notes")) entity.setNotes(value(payload.get("notes")));
         if (payload.containsKey("studentGender")) {
@@ -239,23 +233,18 @@ public class ApplicationService {
     @Transactional
     public Map<String, Object> updateStatus(Long id, Map<String, Object> payload) {
         ApplicationEntity entity = load(id);
+        admissionCycleGuard.assertOpen(entity);
         entity.setStatus(parseStatus(value(payload.getOrDefault("status", entity.getStatus().name()))));
         if (payload.containsKey("notes")) entity.setNotes(value(payload.get("notes")));
         return Map.of("success", true, "message", "Estado actualizado correctamente", "data", toFullResponse(applicationRepository.save(entity)));
     }
 
-    /**
-     * Compatibilidad con el front ({@code POST .../final-decision} con {@code decision}, {@code note}).
-     * Paridad funcional con Node: {@code PATCH /api/applications/:id/status} + roles ADMIN/COORDINATOR
-     * y notificación {@code ADMISSION_RESULT}. La decisión no se revierte si el correo falla,
-     * pero la respuesta informa el resultado real del intento para que el front no muestre
-     * una confirmación engañosa.
-     */
+    /** Registra la decisión, pero difiere la notificación hasta el cierre maestro del ciclo. */
     @Transactional
     public Map<String, Object> recordFinalDecision(Long id, Map<String, Object> payload) {
         var auth = authService.requireAuth();
-        log.info("[final-decision] applicationId={} requested by userId={} email={} role={}",
-            id, auth.id(), auth.email(), auth.role());
+        log.info("[final-decision] applicationId={} requested by userId={} role={}",
+                id, auth.id(), auth.role());
         if (!authService.hasAnyRoleContext(auth, Role.ADMIN, Role.COORDINATOR)) {
             log.warn("[final-decision] DENIED applicationId={} role={} (need ADMIN or COORDINATOR)", id, auth.role());
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Solo administradores o coordinadores pueden registrar la decisión final");
@@ -279,7 +268,7 @@ public class ApplicationService {
         String noteOrEmpty = note == null || note.isBlank() ? null : note.trim();
 
         ApplicationEntity entity = load(id);
-        ApplicationStatus previousStatus = entity.getStatus();
+        admissionCycleGuard.assertOpen(entity);
         entity.setStatus(newStatus);
         if (noteOrEmpty != null) {
             entity.setNotes(noteOrEmpty);
@@ -290,67 +279,8 @@ public class ApplicationService {
         notification.put("attempted", false);
         notification.put("sent", false);
         notification.put("recipient", null);
-        notification.put("status", "NOT_ATTEMPTED");
-        notification.put("message", "No se encontró un email de contacto para la postulación");
-
-        String to = resolveApplicationRecipientEmail(saved);
-        if (to != null) {
-            notification.put("attempted", true);
-            notification.put("recipient", to);
-            try {
-                String studentName = saved.getStudent() != null
-                        ? (safe(saved.getStudent().getFirstName()) + " "
-                                + safe(saved.getStudent().getPaternalLastName()) + " "
-                                + safe(saved.getStudent().getMaternalLastName())).trim()
-                        : "";
-                String displayStudentName = personNameForEmail(studentName);
-                if (displayStudentName == null) displayStudentName = "el o la postulante";
-                String familyNames = resolveFamilyNamesForEmail(saved);
-                Map<String, Object> data = new LinkedHashMap<>();
-                data.put("applicationId", id);
-                data.put("studentName", escapeHtml(displayStudentName));
-                String gradeApplied = saved.getStudent() == null
-                        ? ""
-                        : EmailDisplayFormatter.grade(saved.getStudent().getGradeApplied());
-                data.put("gradeApplied", escapeHtml(gradeApplied.isBlank() ? "Curso no informado" : gradeApplied));
-                data.put("familyNames", escapeHtml(familyNames.isBlank()
-                        ? "de " + displayStudentName
-                        : familyNames));
-                data.put("parentNames", escapeHtml(familyNames.isBlank() ? "apoderado/a" : familyNames));
-                data.put("previousStatus", applicationStatusLabel(previousStatus));
-                data.put("currentStatus", applicationStatusLabel(newStatus));
-                data.put("result", applicationStatusLabel(newStatus));
-                data.put("resultBackground", decisionResultBackground(newStatus));
-                data.put("resultColor", decisionResultColor(newStatus));
-                data.put("resultBorder", decisionResultBorder(newStatus));
-                data.put("message", formatEmailMessage(
-                        noteOrEmpty == null ? defaultDecisionMessage(newStatus) : noteOrEmpty));
-
-                Map<String, Object> emailResult = emailComposerService.send(EmailRequestDTO.builder()
-                        .template(TemplateUtils.generateTemplate(EmailTemplate.ADMISSION_RESULT.name(), data))
-                        .to(to)
-                        .subject(decisionEmailSubject(newStatus))
-                        .recipientType("APPLICATION")
-                        .recipientId(id)
-                        .data(data)
-                        .templateName(EmailTemplate.ADMISSION_RESULT.name())
-                        .build());
-
-                String notificationStatus = nestedString(emailResult, "data", "status");
-                boolean sent = "SENT".equalsIgnoreCase(notificationStatus);
-                notification.put("sent", sent);
-                notification.put("status", notificationStatus == null ? "UNKNOWN" : notificationStatus);
-                notification.put("message", sent
-                        ? "Correo enviado correctamente"
-                        : "El servicio de notificaciones no confirmó el envío del correo");
-            } catch (Exception e) {
-                notification.put("status", "FAILED");
-                notification.put("message", "No fue posible enviar el correo de notificación");
-                log.warn("[final-decision] Notificación ADMISSION_RESULT no enviada para applicationId={}: {}", id, e.getMessage());
-            }
-        } else {
-            log.warn("[final-decision] sin email destinatario para applicationId={}", id);
-        }
+        notification.put("status", "DEFERRED_UNTIL_PROCESS_CLOSE");
+        notification.put("message", "La decisión fue guardada. El correo se enviará al cerrar el proceso completo.");
 
         Map<String, Object> response = new LinkedHashMap<>();
         response.put("success", true);
@@ -368,6 +298,7 @@ public class ApplicationService {
     @Transactional
     public Map<String, Object> markDocumentNotificationSent(Long id) {
         ApplicationEntity entity = load(id);
+        admissionCycleGuard.assertOpen(entity);
         long totalDocuments = documentRepository.countByApplicationId(id);
         long approvedDocuments = documentRepository.countByApplicationIdAndApprovalStatus(id, DocumentApprovalStatus.APPROVED);
         boolean allApproved = totalDocuments > 0 && totalDocuments == approvedDocuments;
@@ -380,6 +311,7 @@ public class ApplicationService {
     @Transactional
     public Map<String, Object> archive(Long id) {
         ApplicationEntity entity = load(id);
+        admissionCycleGuard.assertOpen(entity);
         entity.setArchived(true);
         entity.setStatus(ApplicationStatus.ARCHIVED);
         return Map.of("success", true, "message", "Postulación archivada", "data", toFullResponse(applicationRepository.save(entity)));
@@ -388,6 +320,7 @@ public class ApplicationService {
     @Transactional
     public Map<String, Object> delete(Long id) {
         ApplicationEntity entity = load(id);
+        admissionCycleGuard.assertOpen(entity);
         entity.setDeletedAt(LocalDateTime.now());
         applicationRepository.save(entity);
         return Map.of("success", true, "message", "Postulación eliminada correctamente");
@@ -399,6 +332,7 @@ public class ApplicationService {
         ApplicationStatus status = parseStatus(value(payload.get("status")));
         for (Object id : ids) {
             ApplicationEntity entity = load(((Number) id).longValue());
+            admissionCycleGuard.assertOpen(entity);
             entity.setStatus(status);
             entity.setNotes(value(payload.getOrDefault("notes", entity.getNotes())));
             applicationRepository.save(entity);
@@ -410,6 +344,7 @@ public class ApplicationService {
     @Transactional
     public Map<String, Object> upsertComplementaryForm(Long applicationId, Map<String, Object> payload) {
         ApplicationEntity application = load(applicationId);
+        admissionCycleGuard.assertOpen(application);
         if (application.isPaymentRequired() && application.getPaymentStatus() != PaymentStatus.PAID) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Debe pagar la postulación antes de completar el formulario complementario");
         }
@@ -580,6 +515,8 @@ public class ApplicationService {
         Map<String, Object> response = new LinkedHashMap<>();
         response.put("id", entity.getId());
         response.put("status", entity.getStatus().name());
+        response.put("academicYear", entity.getAcademicYear());
+        response.put("applicationYear", entity.getAcademicYear());
         response.put("submissionDate", entity.getSubmissionDate());
 
         // Student data - completo
@@ -841,156 +778,4 @@ public class ApplicationService {
         };
     }
 
-    private static String safe(String value) { return value == null ? "" : value; }
-
-    /**
-     * Arma un saludo familiar legible. Si un registro de padre/madre está incompleto
-     * (por ejemplo, contiene sólo "A"), intenta recuperar el nombre desde el apoderado
-     * o desde la cuenta que creó la postulación.
-     */
-    private static String resolveFamilyNamesForEmail(ApplicationEntity app) {
-        java.util.List<String> names = new java.util.ArrayList<>();
-        addFamilyName(names, app.getFather() == null ? null : app.getFather().getFullName());
-        addFamilyName(names, app.getMother() == null ? null : app.getMother().getFullName());
-        if (names.size() < 2) {
-            addFamilyName(names, app.getGuardian() == null ? null : app.getGuardian().getFullName());
-        }
-        if (names.size() < 2 && app.getGuardian() != null && app.getGuardian().getUser() != null) {
-            addFamilyName(names, (safe(app.getGuardian().getUser().getFirstName()) + " "
-                    + safe(app.getGuardian().getUser().getLastName())).trim());
-        }
-        if (names.size() < 2 && app.getApplicantUser() != null) {
-            addFamilyName(names, (safe(app.getApplicantUser().getFirstName()) + " "
-                    + safe(app.getApplicantUser().getLastName())).trim());
-        }
-        return String.join(" y ", names);
-    }
-
-    private static void addFamilyName(java.util.List<String> names, String rawName) {
-        String name = personNameForEmail(rawName);
-        if (name == null) return;
-        boolean duplicate = names.stream().anyMatch(existing -> existing.equalsIgnoreCase(name));
-        if (!duplicate) names.add(name);
-    }
-
-    private static String personNameForEmail(String rawName) {
-        if (rawName == null) return null;
-        String cleaned = rawName.trim().replaceAll("\\s+", " ");
-        String normalized = cleaned.toUpperCase(java.util.Locale.ROOT)
-                .replace(".", "")
-                .replace("/", "")
-                .trim();
-        if (cleaned.length() < 2
-                || normalized.equals("A")
-                || normalized.equals("NA")
-                || normalized.equals("N A")
-                || normalized.equals("NO APLICA")
-                || normalized.equals("SIN INFORMACION")
-                || normalized.equals("SIN REGISTRO")) {
-            return null;
-        }
-
-        java.util.Set<String> connectors = java.util.Set.of("de", "del", "la", "las", "los", "y");
-        String[] words = cleaned.toLowerCase(java.util.Locale.forLanguageTag("es-CL")).split(" ");
-        for (int i = 0; i < words.length; i++) {
-            if (i > 0 && connectors.contains(words[i])) continue;
-            words[i] = Character.toUpperCase(words[i].charAt(0)) + words[i].substring(1);
-        }
-        return String.join(" ", words);
-    }
-
-    /** Prioriza la cuenta que creó la postulación y usa los contactos familiares como respaldo. */
-    private static String resolveApplicationRecipientEmail(ApplicationEntity app) {
-        String[] candidates = {
-            app.getApplicantUser() == null ? null : app.getApplicantUser().getEmail(),
-            app.getGuardian() == null ? null : app.getGuardian().getEmail(),
-            app.getFather() == null ? null : app.getFather().getEmail(),
-            app.getMother() == null ? null : app.getMother().getEmail()
-        };
-        for (String candidate : candidates) {
-            if (candidate != null && !candidate.isBlank()) return candidate.trim();
-        }
-        return null;
-    }
-
-    private static String applicationStatusLabel(ApplicationStatus status) {
-        if (status == null) return "Sin estado";
-        return switch (status) {
-            case PENDING -> "Pendiente";
-            case UNDER_REVIEW -> "En revisión";
-            case DOCUMENTS_REQUESTED, PENDING_DOCUMENTS -> "Documentos pendientes";
-            case INCOMPLETE -> "Incompleta";
-            case INTERVIEW_SCHEDULED -> "Entrevista agendada";
-            case EXAM_SCHEDULED -> "Evaluación agendada";
-            case APPROVED -> "Aprobada";
-            case REJECTED -> "Rechazada";
-            case WAITLIST -> "Lista de espera";
-            case ARCHIVED -> "Archivada";
-        };
-    }
-
-    private static String defaultDecisionMessage(ApplicationStatus status) {
-        return switch (status) {
-            case APPROVED -> "La postulación ha sido aprobada. Pronto recibirán información sobre los siguientes pasos.";
-            case WAITLIST -> "La postulación ha sido incorporada a la lista de espera. Les contactaremos cuando exista una novedad sobre el cupo.";
-            case REJECTED -> "El proceso de postulación ha finalizado. Agradecemos sinceramente el interés y la confianza en nuestro colegio.";
-            default -> "El estado de la postulación ha sido actualizado.";
-        };
-    }
-
-    private static String decisionEmailSubject(ApplicationStatus status) {
-        return switch (status) {
-            case APPROVED -> "Resultado de admisión: postulación aprobada";
-            case WAITLIST -> "Resultado de admisión: lista de espera";
-            case REJECTED -> "Resultado del proceso de admisión";
-            default -> EmailTemplate.ADMISSION_RESULT.getDefaultSubject();
-        };
-    }
-
-    private static String decisionResultBackground(ApplicationStatus status) {
-        return switch (status) {
-            case APPROVED -> "#ecfdf5";
-            case WAITLIST -> "#fffbeb";
-            case REJECTED -> "#fef2f2";
-            default -> "#f8fafc";
-        };
-    }
-
-    private static String decisionResultColor(ApplicationStatus status) {
-        return switch (status) {
-            case APPROVED -> "#047857";
-            case WAITLIST -> "#92400e";
-            case REJECTED -> "#b91c1c";
-            default -> "#273b7a";
-        };
-    }
-
-    private static String decisionResultBorder(ApplicationStatus status) {
-        return switch (status) {
-            case APPROVED -> "#10b981";
-            case WAITLIST -> "#f59e0b";
-            case REJECTED -> "#ef4444";
-            default -> "#cbd5e1";
-        };
-    }
-
-    private static String formatEmailMessage(String value) {
-        return escapeHtml(value).replace("\r\n", "<br/>").replace("\n", "<br/>");
-    }
-
-    private static String escapeHtml(String value) {
-        if (value == null) return "";
-        return value
-                .replace("&", "&amp;")
-                .replace("<", "&lt;")
-                .replace(">", "&gt;")
-                .replace("\"", "&quot;")
-                .replace("'", "&#39;");
-    }
-
-    private static String nestedString(Map<String, Object> source, String parentKey, String childKey) {
-        if (source == null || !(source.get(parentKey) instanceof Map<?, ?> nested)) return null;
-        Object value = nested.get(childKey);
-        return value == null ? null : String.valueOf(value);
-    }
 }

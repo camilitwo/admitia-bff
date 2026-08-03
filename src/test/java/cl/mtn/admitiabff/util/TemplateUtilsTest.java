@@ -58,18 +58,22 @@ class TemplateUtilsTest {
 
     @Test
     void admissionResultUsesFamilyGreetingAndSpanishDecision() {
-        String html = TemplateUtils.generateTemplate("admission_result", Map.of(
-                "familyNames", "Camilo González y María Pérez",
-                "studentName", "Roberto González Saavedra",
-                "gradeApplied", "5 Básico",
-                "applicationId", 42,
-                "result", "Aprobada",
-                "resultBackground", "#ecfdf5",
-                "resultColor", "#047857",
-                "resultBorder", "#10b981",
-                "message", "La postulación ha sido aprobada."));
+        String html = TemplateUtils.generateTemplate("admission_result", Map.ofEntries(
+                Map.entry("guardianName", "María Pérez"),
+                Map.entry("familyNames", "Camilo González y María Pérez"),
+                Map.entry("parentsSummary", "Camilo González y María Pérez"),
+                Map.entry("studentName", "Roberto González Saavedra"),
+                Map.entry("gradeApplied", "5 Básico"),
+                Map.entry("applicationId", 42),
+                Map.entry("result", "Aprobada"),
+                Map.entry("resultBackground", "#ecfdf5"),
+                Map.entry("resultColor", "#047857"),
+                Map.entry("resultBorder", "#10b981"),
+                Map.entry("message", "La postulación ha sido aprobada.")));
 
-        assertTrue(html.contains("Estimada familia <strong>Camilo González y María Pérez</strong>"));
+        assertTrue(html.contains("Estimado/a <strong>María Pérez</strong>"));
+        assertTrue(html.contains("Padre y madre"));
+        assertTrue(html.contains("Camilo González y María Pérez"));
         assertTrue(html.contains("<strong>Roberto González Saavedra</strong>"));
         assertTrue(html.contains("Decisión final"));
         assertTrue(html.contains("Aprobada"));

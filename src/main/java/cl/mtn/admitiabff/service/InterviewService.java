@@ -39,8 +39,9 @@ public class InterviewService {
     private final cl.mtn.admitiabff.service.notification.EmailComposerService emailComposerService;
     private final InterviewConfirmationService confirmationService;
     private final InterviewerPairService interviewerPairService;
+    private final AdmissionCycleGuard admissionCycleGuard;
 
-    public InterviewService(InterviewRepository interviewRepository, InterviewerScheduleRepository scheduleRepository, ApplicationRepository applicationRepository, UserRepository userRepository, EvaluationRepository evaluationRepository, cl.mtn.admitiabff.service.notification.EmailComposerService emailComposerService, InterviewConfirmationService confirmationService, InterviewerPairService interviewerPairService) {
+    public InterviewService(InterviewRepository interviewRepository, InterviewerScheduleRepository scheduleRepository, ApplicationRepository applicationRepository, UserRepository userRepository, EvaluationRepository evaluationRepository, cl.mtn.admitiabff.service.notification.EmailComposerService emailComposerService, InterviewConfirmationService confirmationService, InterviewerPairService interviewerPairService, AdmissionCycleGuard admissionCycleGuard) {
         this.interviewRepository = interviewRepository;
         this.scheduleRepository = scheduleRepository;
         this.applicationRepository = applicationRepository;
@@ -49,6 +50,7 @@ public class InterviewService {
         this.emailComposerService = emailComposerService;
         this.confirmationService = confirmationService;
         this.interviewerPairService = interviewerPairService;
+        this.admissionCycleGuard = admissionCycleGuard;
     }
 
     public List<Map<String, Object>> publicInterviewers() {
@@ -281,6 +283,7 @@ public class InterviewService {
     public Map<String, Object> create(Map<String, Object> payload) {
         InterviewEntity entity = new InterviewEntity();
         merge(entity, payload);
+        guardMutation(entity);
         boolean pairApplied = applyInterviewerPair(entity, payload, null);
         validateInterviewerComposition(entity);
 
@@ -303,7 +306,9 @@ public class InterviewService {
     @Transactional
     public Map<String, Object> update(Long id, Map<String, Object> payload) {
         InterviewEntity entity = load(id);
+        guardMutation(entity);
         merge(entity, payload);
+        guardMutation(entity);
         boolean pairApplied = applyInterviewerPair(entity, payload, id);
         validateInterviewerComposition(entity);
         if (!pairApplied) ensureInterviewersAvailable(entity);
@@ -312,13 +317,16 @@ public class InterviewService {
 
     @Transactional
     public Map<String, Object> delete(Long id) {
-        interviewRepository.deleteById(id);
+        InterviewEntity entity = load(id);
+        guardMutation(entity);
+        interviewRepository.delete(entity);
         return Map.of("success", true, "message", "Entrevista eliminada correctamente");
     }
 
     @Transactional
     public Map<String, Object> cancel(Long id, Map<String, Object> payload) {
         InterviewEntity entity = load(id);
+        guardMutation(entity);
         entity.setStatus(InterviewStatus.CANCELLED);
         if (payload != null && payload.get("reason") != null) entity.setNotes(String.valueOf(payload.get("reason")));
         return Map.of("success", true, "message", "Entrevista cancelada", "data", toResponse(interviewRepository.save(entity)));
@@ -327,6 +335,7 @@ public class InterviewService {
     @Transactional
     public Map<String, Object> reschedule(Long id, Map<String, Object> payload) {
         InterviewEntity entity = load(id);
+        guardMutation(entity);
         entity.setScheduledDate(LocalDate.parse(String.valueOf(payload.get("scheduledDate"))));
         entity.setScheduledTime(LocalTime.parse(String.valueOf(payload.get("scheduledTime"))));
         entity.setStatus(InterviewStatus.RESCHEDULED);
@@ -340,6 +349,7 @@ public class InterviewService {
     @Transactional
     public Map<String, Object> release(Long id, Map<String, Object> payload) {
         InterviewEntity entity = load(id);
+        guardMutation(entity);
         // Solo se pueden liberar entrevistas rechazadas por la familia
         if (entity.getStatus() != InterviewStatus.REJECTED_BY_FAMILY) {
             throw new IllegalStateException("Solo se pueden liberar entrevistas rechazadas por la familia");
@@ -354,15 +364,16 @@ public class InterviewService {
 
     @Transactional
     public Map<String, Object> sendSummary(Long applicationId) {
+        var application = applicationRepository.findActiveById(applicationId)
+                .orElseThrow(() -> new IllegalStateException(
+                        "No se puede enviar el resumen: la postulación " + applicationId + " no existe."));
+        admissionCycleGuard.assertOpen(application);
         List<InterviewEntity> interviews = interviewRepository.findByApplicationIdOrderByScheduledDateDesc(applicationId);
         interviews.forEach(interview -> interview.setSummarySent(true));
         interviewRepository.saveAll(interviews);
 
         // Destinatario: SIEMPRE desde la base de datos (applicantUser de la postulación).
         // Si no hay correo válido se aborta el envío con error explícito (nunca hardcodear).
-        var application = applicationRepository.findActiveById(applicationId)
-                .orElseThrow(() -> new IllegalStateException(
-                        "No se puede enviar el resumen: la postulación " + applicationId + " no existe."));
         String to = application.getApplicantUser() != null ? application.getApplicantUser().getEmail() : null;
         if (to == null || to.isBlank()) {
             throw new IllegalStateException(
@@ -421,6 +432,7 @@ public class InterviewService {
     @Transactional
     public Map<String, Object> sendInterviewInvitation(Long interviewId, String bffBaseUrl) {
         InterviewEntity interview = load(interviewId);
+        guardMutation(interview);
         var application = interview.getApplication();
 
         // Obtener email del apoderado
@@ -486,6 +498,13 @@ public class InterviewService {
         entity.setMode(payload.get("mode") == null ? entity.getMode() : String.valueOf(payload.get("mode")));
         if (payload.get("status") != null) entity.setStatus(InterviewStatus.valueOf(String.valueOf(payload.get("status")).toUpperCase()));
         entity.setNotes(payload.get("notes") == null ? entity.getNotes() : String.valueOf(payload.get("notes")));
+    }
+
+    private void guardMutation(InterviewEntity interview) {
+        if (interview.getApplication() == null) {
+            throw new IllegalArgumentException("La entrevista no tiene una postulación asociada");
+        }
+        admissionCycleGuard.assertOpen(interview.getApplication());
     }
 
     private boolean applyInterviewerPair(InterviewEntity entity, Map<String, Object> payload, Long excludedInterviewId) {

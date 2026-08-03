@@ -39,8 +39,9 @@ public class EvaluationService {
     private final cl.mtn.admitiabff.service.notification.EmailComposerService emailComposerService;
     private final AuthService authService;
     private final JsonSupport jsonSupport;
+    private final AdmissionCycleGuard admissionCycleGuard;
 
-    public EvaluationService(EvaluationRepository evaluationRepository, ApplicationRepository applicationRepository, InterviewRepository interviewRepository, UserRepository userRepository, cl.mtn.admitiabff.service.notification.EmailComposerService emailComposerService, AuthService authService, JsonSupport jsonSupport) {
+    public EvaluationService(EvaluationRepository evaluationRepository, ApplicationRepository applicationRepository, InterviewRepository interviewRepository, UserRepository userRepository, cl.mtn.admitiabff.service.notification.EmailComposerService emailComposerService, AuthService authService, JsonSupport jsonSupport, AdmissionCycleGuard admissionCycleGuard) {
         this.evaluationRepository = evaluationRepository;
         this.applicationRepository = applicationRepository;
         this.interviewRepository = interviewRepository;
@@ -48,6 +49,7 @@ public class EvaluationService {
         this.emailComposerService = emailComposerService;
         this.authService = authService;
         this.jsonSupport = jsonSupport;
+        this.admissionCycleGuard = admissionCycleGuard;
     }
 
     public Map<String, Object> all() {
@@ -167,19 +169,24 @@ public class EvaluationService {
     public Map<String, Object> create(Map<String, Object> payload) {
         EvaluationEntity entity = new EvaluationEntity();
         merge(entity, payload);
+        guardMutation(entity);
         return Map.of("success", true, "message", "Evaluación creada correctamente", "data", toResponse(evaluationRepository.save(entity)));
     }
 
     @Transactional
     public Map<String, Object> update(Long id, Map<String, Object> payload) {
         EvaluationEntity entity = load(id);
+        guardMutation(entity);
         merge(entity, payload);
+        guardMutation(entity);
         return Map.of("success", true, "message", "Evaluación actualizada", "data", toResponse(evaluationRepository.save(entity)));
     }
 
     @Transactional
     public Map<String, Object> delete(Long id) {
-        evaluationRepository.deleteById(id);
+        EvaluationEntity entity = load(id);
+        guardMutation(entity);
+        evaluationRepository.delete(entity);
         return Map.of("success", true, "message", "Evaluación eliminada correctamente");
     }
 
@@ -187,6 +194,7 @@ public class EvaluationService {
     @Transactional
     public Map<String, Object> complete(Long id, Map<String, Object> payload) {
         EvaluationEntity entity = load(id);
+        guardMutation(entity);
         entity.setStatus(EvaluationStatus.COMPLETED);
         entity.setScore(decimalValue(payload.get("score")));
         entity.setMaxScore(decimalValue(payload.get("maxScore")));
@@ -200,6 +208,7 @@ public class EvaluationService {
     @Transactional
     public Map<String, Object> assign(Long id, Map<String, Object> payload) {
         EvaluationEntity entity = load(id);
+        guardMutation(entity);
         var evaluator = userRepository.findById(((Number) payload.get("evaluatorId")).longValue())
             .orElseThrow(() -> new IllegalArgumentException("Evaluador no encontrado"));
 
@@ -248,6 +257,7 @@ public class EvaluationService {
     @Transactional
     public Map<String, Object> reschedule(Long id, Map<String, Object> payload) {
         EvaluationEntity entity = load(id);
+        guardMutation(entity);
         entity.setEvaluationDate(parseDateTime(payload.getOrDefault("evaluationDate", payload.get("scheduledDate"))));
         entity.setStatus(EvaluationStatus.IN_PROGRESS);
         return Map.of("success", true, "message", "Evaluación reprogramada", "data", toResponse(evaluationRepository.save(entity)));
@@ -256,6 +266,7 @@ public class EvaluationService {
     @Transactional
     public Map<String, Object> cancel(Long id, Map<String, Object> payload) {
         EvaluationEntity entity = load(id);
+        guardMutation(entity);
         entity.setStatus(EvaluationStatus.CANCELLED);
         entity.setCancellationReason(stringValue(payload.get("reason")));
         return Map.of("success", true, "message", "Evaluación cancelada", "data", toResponse(evaluationRepository.save(entity)));
@@ -264,6 +275,7 @@ public class EvaluationService {
     @Transactional
     public Map<String, Object> saveFamilyInterviewData(Long evaluationId, Map<String, Object> payload) {
         EvaluationEntity entity = load(evaluationId);
+        guardMutation(entity);
         Map<String, Object> interviewData = payload.get("interviewData") instanceof Map<?, ?> map ? (Map<String, Object>) map : payload;
         BigDecimal score = calculateInterviewScore(interviewData);
         entity.setInterviewData(jsonSupport.write(interviewData));
@@ -286,6 +298,7 @@ public class EvaluationService {
     public Map<String, Object> migrateInterviews() {
         long created = 0;
         for (var interview : applicationRepository.findAll()) {
+            admissionCycleGuard.assertOpen(interview);
             boolean hasFamilyInterviewEvaluation = !evaluationRepository.findFamilyInterviewByApplicationId(interview.getId()).isEmpty();
             if (!hasFamilyInterviewEvaluation && !interviewRepository.findByApplicationIdOrderByScheduledDateDesc(interview.getId()).isEmpty()) {
                 EvaluationEntity entity = new EvaluationEntity();
@@ -310,6 +323,13 @@ public class EvaluationService {
                     evaluationSubject, evaluatorSubject)
             );
         }
+    }
+
+    private void guardMutation(EvaluationEntity evaluation) {
+        if (evaluation.getApplication() == null) {
+            throw new IllegalArgumentException("La evaluación no tiene una postulación asociada");
+        }
+        admissionCycleGuard.assertOpen(evaluation.getApplication());
     }
 
     private void merge(EvaluationEntity entity, Map<String, Object> payload) {
