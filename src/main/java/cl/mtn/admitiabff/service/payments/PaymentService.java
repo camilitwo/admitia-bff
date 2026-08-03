@@ -14,7 +14,6 @@ import cl.mtn.admitiabff.repository.ApplicationSchoolSyncRepository;
 import cl.mtn.admitiabff.repository.PaymentEventRepository;
 import cl.mtn.admitiabff.repository.PaymentRepository;
 import cl.mtn.admitiabff.repository.UserRepository;
-import cl.mtn.admitiabff.service.AdmissionCycleGuard;
 import cl.mtn.admitiabff.service.payments.MtnAdmissionDtos.AdmissionRequest;
 import cl.mtn.admitiabff.service.payments.MtnAdmissionDtos.AdmissionResponse;
 import cl.mtn.admitiabff.service.payments.MtnAdmissionDtos.ChargeRequest;
@@ -59,7 +58,6 @@ public class PaymentService {
     private final MtnAdmissionGateway admissionClient;
     private final MtnAdmissionProperties properties;
     private final JsonSupport jsonSupport;
-    private final AdmissionCycleGuard admissionCycleGuard;
     private final ZoneId providerZone;
 
     public PaymentService(ApplicationRepository applicationRepository,
@@ -69,8 +67,7 @@ public class PaymentService {
                           ApplicationSchoolSyncRepository schoolSyncRepository,
                           MtnAdmissionGateway admissionClient,
                           MtnAdmissionProperties properties,
-                          JsonSupport jsonSupport,
-                          AdmissionCycleGuard admissionCycleGuard) {
+                          JsonSupport jsonSupport) {
         this.applicationRepository = applicationRepository;
         this.userRepository = userRepository;
         this.paymentRepository = paymentRepository;
@@ -79,7 +76,6 @@ public class PaymentService {
         this.admissionClient = admissionClient;
         this.properties = properties;
         this.jsonSupport = jsonSupport;
-        this.admissionCycleGuard = admissionCycleGuard;
         this.providerZone = ZoneId.of(blank(properties.providerZone()) ? "America/Santiago" : properties.providerZone());
     }
 
@@ -87,7 +83,6 @@ public class PaymentService {
     public Map<String, Object> checkout(Long applicationId, Long userId) {
         properties.validateForUse();
         ApplicationEntity application = loadOwnedApplicationForUpdate(applicationId, userId);
-        admissionCycleGuard.assertOpen(application);
         PaymentEntity latest = paymentRepository.findFirstByApplicationIdOrderByCreatedAtDesc(applicationId).orElse(null);
         if (!application.isPaymentRequired() || application.getPaymentStatus() == PaymentStatus.PAID) {
             return wrap(statusResponse(application, latest));
@@ -150,7 +145,6 @@ public class PaymentService {
         ApplicationEntity application = loadOwnedApplication(applicationId, userId);
         PaymentEntity payment = paymentRepository.findFirstByApplicationIdOrderByCreatedAtDesc(applicationId).orElse(null);
         if (payment != null && payment.getStatus() == PaymentStatus.PAYMENT_PENDING && payment.getInstitutionalChargeId() != null) {
-            admissionCycleGuard.assertOpen(application);
             reconcile(payment);
         }
         return wrap(statusResponse(application, payment));
@@ -163,10 +157,7 @@ public class PaymentService {
             .findByGuardianUserIdAndStatusAndInstitutionalChargeIdIsNotNull(userId, PaymentStatus.PAYMENT_PENDING);
         for (PaymentEntity payment : pending) {
             try {
-                admissionCycleGuard.assertOpen(payment.getApplication());
                 reconcile(payment);
-            } catch (ResponseStatusException ex) {
-                if (ex.getStatusCode().value() != HttpStatus.CONFLICT.value()) throw ex;
             } catch (RuntimeException ex) {
                 log.warn("[payments] No se pudo conciliar paymentId={} applicationId={}: {}",
                     payment.getId(), payment.getApplication().getId(), ex.getMessage());

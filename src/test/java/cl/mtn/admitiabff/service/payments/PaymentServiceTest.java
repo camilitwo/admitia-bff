@@ -25,7 +25,6 @@ import cl.mtn.admitiabff.repository.ApplicationSchoolSyncRepository;
 import cl.mtn.admitiabff.repository.PaymentEventRepository;
 import cl.mtn.admitiabff.repository.PaymentRepository;
 import cl.mtn.admitiabff.repository.UserRepository;
-import cl.mtn.admitiabff.service.AdmissionCycleGuard;
 import cl.mtn.admitiabff.service.payments.MtnAdmissionDtos.AdmissionResponse;
 import cl.mtn.admitiabff.service.payments.MtnAdmissionDtos.AdmissionRequest;
 import cl.mtn.admitiabff.service.payments.MtnAdmissionDtos.ChargeRequest;
@@ -65,9 +64,8 @@ class PaymentServiceTest {
         events = mock(PaymentEventRepository.class);
         syncs = mock(ApplicationSchoolSyncRepository.class);
         client = mock(MtnAdmissionGateway.class);
-        AdmissionCycleGuard admissionCycleGuard = mock(AdmissionCycleGuard.class);
         service = new PaymentService(applications, users, payments, events, syncs, client, properties(),
-            new JsonSupport(new ObjectMapper()), admissionCycleGuard);
+            new JsonSupport(new ObjectMapper()));
 
         user = new UserEntity();
         user.setId(7L);
