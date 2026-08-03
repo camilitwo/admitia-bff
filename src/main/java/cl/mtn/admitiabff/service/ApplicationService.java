@@ -580,6 +580,9 @@ public class ApplicationService {
         Map<String, Object> response = new LinkedHashMap<>();
         response.put("id", entity.getId());
         response.put("status", entity.getStatus().name());
+        response.put("paymentStatus", entity.getPaymentStatus().name());
+        response.put("paymentRequired", entity.isPaymentRequired());
+        response.put("paidAt", entity.getPaidAt());
         response.put("submissionDate", entity.getSubmissionDate());
 
         // Student data - completo

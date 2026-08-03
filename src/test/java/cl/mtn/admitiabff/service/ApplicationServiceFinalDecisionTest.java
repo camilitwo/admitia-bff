@@ -4,12 +4,14 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import cl.mtn.admitiabff.domain.application.ApplicationEntity;
 import cl.mtn.admitiabff.domain.common.ApplicationStatus;
+import cl.mtn.admitiabff.domain.common.PaymentStatus;
 import cl.mtn.admitiabff.domain.common.Role;
 import cl.mtn.admitiabff.domain.email.EmailRequestDTO;
 import cl.mtn.admitiabff.domain.person.ParentEntity;
@@ -34,6 +36,8 @@ import java.util.Optional;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.Pageable;
 
 class ApplicationServiceFinalDecisionTest {
 
@@ -184,5 +188,23 @@ class ApplicationServiceFinalDecisionTest {
         assertFalse(template.contains("APPROVED"));
         assertFalse(template.contains("Estado anterior"));
         assertFalse(template.contains("Estado actual"));
+    }
+
+    @Test
+    void adminListIncludesAdmissionPaymentStatus() {
+        LocalDateTime paidAt = LocalDateTime.of(2026, 8, 3, 14, 30);
+        application.setPaymentStatus(PaymentStatus.PAID);
+        application.setPaymentRequired(true);
+        application.setPaidAt(paidAt);
+        when(applicationRepository.search(isNull(), isNull(), isNull(), any(Pageable.class)))
+                .thenReturn(new PageImpl<>(List.of(application)));
+
+        Map<String, Object> response = service.list(0, 15, null, null, null);
+
+        List<?> data = (List<?>) response.get("data");
+        Map<?, ?> row = (Map<?, ?>) data.getFirst();
+        assertEquals("PAID", row.get("paymentStatus"));
+        assertEquals(true, row.get("paymentRequired"));
+        assertEquals(paidAt, row.get("paidAt"));
     }
 }
