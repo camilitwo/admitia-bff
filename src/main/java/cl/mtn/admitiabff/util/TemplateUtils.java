@@ -133,7 +133,7 @@ public final class TemplateUtils {
                 <p style="margin:18px 0 8px 0;">
                   Si alguna fecha u horario presenta inconvenientes, o requieren
                   reagendar alguna entrevista, no duden en escribirnos a
-                  <a href="mailto:admision@mtn.cl" style="color:#273b7a;">admision@mtn.cl</a>
+                  <a href="mailto:admisiones@mtn.cl" style="color:#273b7a;">admisiones@mtn.cl</a>
                   o responder directamente este correo. Estaremos atentos para
                   ayudarles en lo que necesiten.
                 </p>
@@ -170,7 +170,7 @@ public final class TemplateUtils {
                 </p>
                 <p style="margin:18px 0 0 0;">
                   Cualquier consulta, no duden en escribirnos a
-                  <a href="mailto:admision@mtn.cl" style="color:#273b7a;">admision@mtn.cl</a>.
+                  <a href="mailto:admisiones@mtn.cl" style="color:#273b7a;">admisiones@mtn.cl</a>.
                 </p>
                 <p style="margin:24px 0 0 0;">
                   Un cordial saludo,<br/>
@@ -281,7 +281,7 @@ public final class TemplateUtils {
                 <p style="margin:0 0 14px 0;">
                   Si usted no realizó este cambio, le pedimos contactarnos
                   cuanto antes a
-                  <a href="mailto:admision@mtn.cl" style="color:#273b7a;">admision@mtn.cl</a>
+                  <a href="mailto:admisiones@mtn.cl" style="color:#273b7a;">admisiones@mtn.cl</a>
                   para resguardar su cuenta.
                 </p>
                 <p style="margin:24px 0 0 0;">
@@ -374,7 +374,7 @@ public final class TemplateUtils {
                 </p>
                 <p style="margin:18px 0 0 0;">
                   Cualquier duda, no duden en escribirnos a
-                  <a href="mailto:admision@mtn.cl" style="color:#273b7a;">admision@mtn.cl</a>.
+                  <a href="mailto:admisiones@mtn.cl" style="color:#273b7a;">admisiones@mtn.cl</a>.
                   Estaremos atentos para acompañarles.
                 </p>
                 <p style="margin:24px 0 0 0;">
@@ -554,7 +554,7 @@ public final class TemplateUtils {
                 <p style="margin:18px 0 0 0;">
                   Pueden revisar el detalle completo en su panel. Cualquier
                   consulta, escríbannos a
-                  <a href="mailto:admision@mtn.cl" style="color:#273b7a;">admision@mtn.cl</a>.
+                  <a href="mailto:admisiones@mtn.cl" style="color:#273b7a;">admisiones@mtn.cl</a>.
                 </p>
                 <p style="margin:24px 0 0 0;">
                   Un cordial saludo,<br/>
@@ -609,7 +609,7 @@ public final class TemplateUtils {
                 <p style="margin:0 0 14px 0;">
                   Pueden revisar el detalle en su panel de postulación. Si tienen
                   alguna consulta, pueden escribirnos a
-                  <a href="mailto:admision@mtn.cl" style="color:#273b7a;">admision@mtn.cl</a>.
+                  <a href="mailto:admisiones@mtn.cl" style="color:#273b7a;">admisiones@mtn.cl</a>.
                 </p>
                 <p style="margin:26px 0 0 0;">
                   Un cordial saludo,<br/>
@@ -653,7 +653,7 @@ public final class TemplateUtils {
                 </div>
                 <p style="margin:0 0 14px 0;">
                   Si la fecha u horario presenta inconvenientes, escríbannos
-                  a <a href="mailto:admision@mtn.cl" style="color:#273b7a;">admision@mtn.cl</a>
+                  a <a href="mailto:admisiones@mtn.cl" style="color:#273b7a;">admisiones@mtn.cl</a>
                   o respondan este correo y coordinaremos una nueva instancia.
                 </p>
                 <p style="margin:24px 0 0 0;">
@@ -708,7 +708,7 @@ public final class TemplateUtils {
                 <p style="margin:0 0 14px 0;">
                   En los próximos días les contactaremos para coordinar una
                   nueva fecha. Si necesitan agilizar este paso, escríbannos a
-                  <a href="mailto:admision@mtn.cl" style="color:#273b7a;">admision@mtn.cl</a>.
+                  <a href="mailto:admisiones@mtn.cl" style="color:#273b7a;">admisiones@mtn.cl</a>.
                 </p>
                 <p style="margin:24px 0 0 0;">
                   Un cordial saludo,<br/>
@@ -774,7 +774,7 @@ public final class TemplateUtils {
                 <p style="margin:0 0 14px 0;">
                   La familia asistirá según lo programado. Si necesita
                   coordinar algo adicional, puede escribir a
-                  <a href="mailto:admision@mtn.cl" style="color:#273b7a;">admision@mtn.cl</a>.
+                  <a href="mailto:admisiones@mtn.cl" style="color:#273b7a;">admisiones@mtn.cl</a>.
                 </p>
                 <p style="margin:24px 0 0 0;">
                   Un cordial saludo,<br/>
@@ -801,7 +801,7 @@ public final class TemplateUtils {
                 <p style="margin:0 0 14px 0;">
                   Puede acceder al detalle y registrar el resultado desde su
                   panel de evaluador. Cualquier consulta operativa, escríbanos
-                  a <a href="mailto:admision@mtn.cl" style="color:#273b7a;">admision@mtn.cl</a>.
+                  a <a href="mailto:admisiones@mtn.cl" style="color:#273b7a;">admisiones@mtn.cl</a>.
                 </p>
                 <p style="margin:24px 0 0 0;">
                   Un cordial saludo,<br/>

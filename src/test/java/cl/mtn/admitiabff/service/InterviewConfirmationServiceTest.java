@@ -38,7 +38,7 @@ class InterviewConfirmationServiceTest {
                 "https://admisiones.cmtn.cl",
                 "/interview/confirmation-result",
                 168,
-                "admision@mtn.cl");
+                "admisiones@mtn.cl");
 
         StudentEntity student = new StudentEntity();
         student.setFirstName("ALONSO");

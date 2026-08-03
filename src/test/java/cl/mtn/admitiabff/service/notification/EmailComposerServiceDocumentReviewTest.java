@@ -47,6 +47,8 @@ class EmailComposerServiceDocumentReviewTest {
         assertThat(html).contains("Estado de la revisión:</strong> Requiere correcciones");
         assertThat(html).contains("Documentos aprobados: Certificado de nacimiento.");
         assertThat(html).contains("Documentos que requieren corrección: Informe de notas.");
+        assertThat(html).contains("mailto:admisiones@mtn.cl", ">admisiones@mtn.cl</a>");
+        assertThat(html).doesNotContain("admision@mtn.cl");
         assertThat(html).doesNotContain("Estado de la revisión:</strong> —");
         assertThat(html).doesNotContain("Comentarios:</strong> —");
     }
