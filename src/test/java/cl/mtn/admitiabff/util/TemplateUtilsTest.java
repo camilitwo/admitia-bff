@@ -55,4 +55,25 @@ class TemplateUtilsTest {
         assertFalse(html.contains("CYCLE_DIRECTOR"));
         assertFalse(html.contains("IN_PERSON"));
     }
+
+    @Test
+    void admissionResultUsesFamilyGreetingAndSpanishDecision() {
+        String html = TemplateUtils.generateTemplate("admission_result", Map.of(
+                "familyNames", "Camilo González y María Pérez",
+                "studentName", "Roberto González Saavedra",
+                "gradeApplied", "5 Básico",
+                "applicationId", 42,
+                "result", "Aprobada",
+                "resultBackground", "#ecfdf5",
+                "resultColor", "#047857",
+                "resultBorder", "#10b981",
+                "message", "La postulación ha sido aprobada."));
+
+        assertTrue(html.contains("Estimada familia <strong>Camilo González y María Pérez</strong>"));
+        assertTrue(html.contains("<strong>Roberto González Saavedra</strong>"));
+        assertTrue(html.contains("Decisión final"));
+        assertTrue(html.contains("Aprobada"));
+        assertFalse(html.contains("APPROVED"));
+        assertFalse(html.contains("{{"));
+    }
 }

@@ -567,26 +567,51 @@ public final class TemplateUtils {
 
     private static final String ADMISSION_RESULT_BODY = """
             <tr>
-              <td class="content" style="padding:40px 30px;color:#333;line-height:1.7;font-family:'Segoe UI',Arial,sans-serif;font-size:15px;">
-                <h2 style="color:#273b7a;margin:0 0 16px 0;font-size:22px;">Estimados {{parentNames}}</h2>
+              <td class="content" style="padding:40px 30px;color:#1f2937;line-height:1.7;font-family:'Segoe UI',Arial,sans-serif;font-size:15px;">
+                <h2 style="color:#273b7a;margin:0 0 22px 0;font-size:24px;line-height:1.25;">
+                  Resultado del proceso de admisión
+                </h2>
                 <p style="margin:0 0 14px 0;">
-                  Junto con saludarles, queremos comunicarles el resultado
-                  del proceso de admisión de
-                  <strong>{{studentName}}</strong> al curso
-                  <strong>{{gradeApplied}}</strong>.
+                  Estimada familia <strong>{{familyNames}}</strong>:
                 </p>
-                <div class="info-box" style="background:#f8f9fa;padding:18px 20px;border-radius:6px;margin:0 0 18px 0;border-left:4px solid #ff9e18;">
-                  <strong>N° de postulación:</strong> {{applicationId}}<br/>
-                  <strong>Resultado:</strong> {{result}}
+                <p style="margin:0 0 22px 0;">
+                  Junto con saludarles, les comunicamos el resultado del proceso
+                  de admisión de <strong>{{studentName}}</strong>.
+                </p>
+
+                <table width="100%" cellpadding="0" cellspacing="0" border="0"
+                       style="border-collapse:separate;border-spacing:0;background:#f8fafc;border:1px solid #e5e7eb;border-radius:10px;margin:0 0 16px 0;">
+                  <tr>
+                    <td style="padding:16px 18px;border-bottom:1px solid #e5e7eb;color:#6b7280;width:42%;">Postulante</td>
+                    <td style="padding:16px 18px;border-bottom:1px solid #e5e7eb;font-weight:600;color:#111827;">{{studentName}}</td>
+                  </tr>
+                  <tr>
+                    <td style="padding:16px 18px;border-bottom:1px solid #e5e7eb;color:#6b7280;">Curso</td>
+                    <td style="padding:16px 18px;border-bottom:1px solid #e5e7eb;font-weight:600;color:#111827;">{{gradeApplied}}</td>
+                  </tr>
+                  <tr>
+                    <td style="padding:16px 18px;color:#6b7280;">N° de postulación</td>
+                    <td style="padding:16px 18px;font-weight:600;color:#111827;">{{applicationId}}</td>
+                  </tr>
+                </table>
+
+                <div style="background:{{resultBackground}};border:1px solid {{resultBorder}};border-radius:10px;padding:20px;margin:0 0 22px 0;text-align:center;">
+                  <div style="color:{{resultColor}};font-size:12px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;margin:0 0 5px 0;">
+                    Decisión final
+                  </div>
+                  <div style="color:{{resultColor}};font-size:23px;font-weight:700;line-height:1.3;">
+                    {{result}}
+                  </div>
                 </div>
-                <p style="margin:0 0 14px 0;">{{message}}</p>
-                <p style="margin:18px 0 0 0;">
-                  Para conocer los pasos a seguir, pueden ingresar a su panel
-                  o escribirnos directamente a
+
+                <div style="margin:0 0 22px 0;color:#374151;">{{message}}</div>
+
+                <p style="margin:0 0 14px 0;">
+                  Pueden revisar el detalle en su panel de postulación. Si tienen
+                  alguna consulta, pueden escribirnos a
                   <a href="mailto:admision@mtn.cl" style="color:#273b7a;">admision@mtn.cl</a>.
-                  Quedamos atentos a sus consultas.
                 </p>
-                <p style="margin:24px 0 0 0;">
+                <p style="margin:26px 0 0 0;">
                   Un cordial saludo,<br/>
                   <strong>Equipo de Admisión</strong><br/>
                   Colegio Monte Tabor y Nazaret
