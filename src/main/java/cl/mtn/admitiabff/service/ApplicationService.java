@@ -26,6 +26,7 @@ import cl.mtn.admitiabff.repository.StudentRepository;
 import cl.mtn.admitiabff.repository.SupporterRepository;
 import cl.mtn.admitiabff.repository.UserRepository;
 import cl.mtn.admitiabff.util.CsvUtils;
+import cl.mtn.admitiabff.util.EmailDisplayFormatter;
 import cl.mtn.admitiabff.util.JsonSupport;
 import cl.mtn.admitiabff.util.TemplateUtils;
 import java.time.LocalDate;
@@ -246,7 +247,9 @@ public class ApplicationService {
     /**
      * Compatibilidad con el front ({@code POST .../final-decision} con {@code decision}, {@code note}).
      * Paridad funcional con Node: {@code PATCH /api/applications/:id/status} + roles ADMIN/COORDINATOR
-     * y notificación {@code STATUS_UPDATE} (best-effort, no bloquea si falla el correo).
+     * y notificación {@code ADMISSION_RESULT}. La decisión no se revierte si el correo falla,
+     * pero la respuesta informa el resultado real del intento para que el front no muestre
+     * una confirmación engañosa.
      */
     @Transactional
     public Map<String, Object> recordFinalDecision(Long id, Map<String, Object> payload) {
@@ -259,66 +262,107 @@ public class ApplicationService {
         }
         String decisionRaw = firstNonNull(payload.get("decision"), payload.get("status"));
         if (decisionRaw == null || decisionRaw.isBlank()) {
-            throw new IllegalArgumentException("Se requiere decision (APPROVED o REJECTED)");
+            throw new IllegalArgumentException("Se requiere decision (APPROVED, WAITLIST o REJECTED)");
         }
         ApplicationStatus newStatus;
         try {
             newStatus = ApplicationStatus.valueOf(decisionRaw.trim().toUpperCase());
         } catch (IllegalArgumentException ex) {
-            throw new IllegalArgumentException("decision debe ser APPROVED o REJECTED");
+            throw new IllegalArgumentException("decision debe ser APPROVED, WAITLIST o REJECTED");
         }
-        if (newStatus != ApplicationStatus.APPROVED && newStatus != ApplicationStatus.REJECTED) {
-            throw new IllegalArgumentException("decision debe ser APPROVED o REJECTED");
+        if (newStatus != ApplicationStatus.APPROVED
+                && newStatus != ApplicationStatus.WAITLIST
+                && newStatus != ApplicationStatus.REJECTED) {
+            throw new IllegalArgumentException("decision debe ser APPROVED, WAITLIST o REJECTED");
         }
         String note = firstNonNull(payload.get("note"), payload.get("notes"));
         String noteOrEmpty = note == null || note.isBlank() ? null : note.trim();
 
         ApplicationEntity entity = load(id);
+        ApplicationStatus previousStatus = entity.getStatus();
         entity.setStatus(newStatus);
         if (noteOrEmpty != null) {
             entity.setNotes(noteOrEmpty);
         }
         ApplicationEntity saved = applicationRepository.save(entity);
 
-        try {
-            String to = saved.getApplicantUser() != null && saved.getApplicantUser().getEmail() != null
-                    ? saved.getApplicantUser().getEmail()
-                    : null;
-            if (to != null && !to.isBlank()) {
+        Map<String, Object> notification = new LinkedHashMap<>();
+        notification.put("attempted", false);
+        notification.put("sent", false);
+        notification.put("recipient", null);
+        notification.put("status", "NOT_ATTEMPTED");
+        notification.put("message", "No se encontró un email de contacto para la postulación");
+
+        String to = resolveApplicationRecipientEmail(saved);
+        if (to != null) {
+            notification.put("attempted", true);
+            notification.put("recipient", to);
+            try {
                 String studentName = saved.getStudent() != null
                         ? (safe(saved.getStudent().getFirstName()) + " "
-                                + safe(saved.getStudent().getPaternalLastName())).trim()
+                                + safe(saved.getStudent().getPaternalLastName()) + " "
+                                + safe(saved.getStudent().getMaternalLastName())).trim()
                         : "";
-                String parentNames = resolveParentNamesForEmail(saved);
-                String prevStatus = entity.getStatus() != null ? entity.getStatus().name() : "";
+                String displayStudentName = personNameForEmail(studentName);
+                if (displayStudentName == null) displayStudentName = "el o la postulante";
+                String familyNames = resolveFamilyNamesForEmail(saved);
                 Map<String, Object> data = new LinkedHashMap<>();
                 data.put("applicationId", id);
-                data.put("studentName", studentName);
-                data.put("parentNames", parentNames.isBlank() ? "apoderado/a" : parentNames);
-                data.put("previousStatus", prevStatus);
-                data.put("currentStatus", newStatus.name());
-                data.put("message", noteOrEmpty == null ? "" : noteOrEmpty);
+                data.put("studentName", escapeHtml(displayStudentName));
+                String gradeApplied = saved.getStudent() == null
+                        ? ""
+                        : EmailDisplayFormatter.grade(saved.getStudent().getGradeApplied());
+                data.put("gradeApplied", escapeHtml(gradeApplied.isBlank() ? "Curso no informado" : gradeApplied));
+                data.put("familyNames", escapeHtml(familyNames.isBlank()
+                        ? "de " + displayStudentName
+                        : familyNames));
+                data.put("parentNames", escapeHtml(familyNames.isBlank() ? "apoderado/a" : familyNames));
+                data.put("previousStatus", applicationStatusLabel(previousStatus));
+                data.put("currentStatus", applicationStatusLabel(newStatus));
+                data.put("result", applicationStatusLabel(newStatus));
+                data.put("resultBackground", decisionResultBackground(newStatus));
+                data.put("resultColor", decisionResultColor(newStatus));
+                data.put("resultBorder", decisionResultBorder(newStatus));
+                data.put("message", formatEmailMessage(
+                        noteOrEmpty == null ? defaultDecisionMessage(newStatus) : noteOrEmpty));
 
-                emailComposerService.send(EmailRequestDTO.builder()
-                        .template(TemplateUtils.generateTemplate(EmailTemplate.STATUS_UPDATE.name(), data))
+                Map<String, Object> emailResult = emailComposerService.send(EmailRequestDTO.builder()
+                        .template(TemplateUtils.generateTemplate(EmailTemplate.ADMISSION_RESULT.name(), data))
                         .to(to)
-                        .subject(EmailTemplate.STATUS_UPDATE.getDefaultSubject())
+                        .subject(decisionEmailSubject(newStatus))
                         .recipientType("APPLICATION")
                         .recipientId(id)
                         .data(data)
+                        .templateName(EmailTemplate.ADMISSION_RESULT.name())
                         .build());
-            } else {
-                log.warn("[final-decision] sin email destinatario para applicationId={}", id);
+
+                String notificationStatus = nestedString(emailResult, "data", "status");
+                boolean sent = "SENT".equalsIgnoreCase(notificationStatus);
+                notification.put("sent", sent);
+                notification.put("status", notificationStatus == null ? "UNKNOWN" : notificationStatus);
+                notification.put("message", sent
+                        ? "Correo enviado correctamente"
+                        : "El servicio de notificaciones no confirmó el envío del correo");
+            } catch (Exception e) {
+                notification.put("status", "FAILED");
+                notification.put("message", "No fue posible enviar el correo de notificación");
+                log.warn("[final-decision] Notificación ADMISSION_RESULT no enviada para applicationId={}: {}", id, e.getMessage());
             }
-        } catch (Exception e) {
-            log.warn("[final-decision] Notificación STATUS_UPDATE no enviada para applicationId={}: {}", id, e.getMessage());
+        } else {
+            log.warn("[final-decision] sin email destinatario para applicationId={}", id);
         }
 
-        return Map.of(
-            "success", true,
-            "message", newStatus == ApplicationStatus.APPROVED ? "Postulación aprobada" : "Postulación rechazada",
-            "data", toFullResponse(saved)
-        );
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("success", true);
+        response.put("message", switch (newStatus) {
+            case APPROVED -> "Postulación aprobada";
+            case WAITLIST -> "Postulación agregada a la lista de espera";
+            case REJECTED -> "Postulación rechazada";
+            default -> "Decisión registrada";
+        });
+        response.put("data", toFullResponse(saved));
+        response.put("notification", notification);
+        return response;
     }
 
     @Transactional
@@ -799,12 +843,154 @@ public class ApplicationService {
 
     private static String safe(String value) { return value == null ? "" : value; }
 
-    /** "JUAN PEREZ / PRUEBA MAMA" desde Father/Mother/Guardian. Retorna "" si no hay datos. */
-    private static String resolveParentNamesForEmail(ApplicationEntity app) {
+    /**
+     * Arma un saludo familiar legible. Si un registro de padre/madre está incompleto
+     * (por ejemplo, contiene sólo "A"), intenta recuperar el nombre desde el apoderado
+     * o desde la cuenta que creó la postulación.
+     */
+    private static String resolveFamilyNamesForEmail(ApplicationEntity app) {
         java.util.List<String> names = new java.util.ArrayList<>();
-        if (app.getFather() != null && app.getFather().getFullName() != null) names.add(app.getFather().getFullName());
-        if (app.getMother() != null && app.getMother().getFullName() != null) names.add(app.getMother().getFullName());
-        if (names.isEmpty() && app.getGuardian() != null && app.getGuardian().getFullName() != null) names.add(app.getGuardian().getFullName());
-        return names.isEmpty() ? "" : String.join(" / ", names);
+        addFamilyName(names, app.getFather() == null ? null : app.getFather().getFullName());
+        addFamilyName(names, app.getMother() == null ? null : app.getMother().getFullName());
+        if (names.size() < 2) {
+            addFamilyName(names, app.getGuardian() == null ? null : app.getGuardian().getFullName());
+        }
+        if (names.size() < 2 && app.getGuardian() != null && app.getGuardian().getUser() != null) {
+            addFamilyName(names, (safe(app.getGuardian().getUser().getFirstName()) + " "
+                    + safe(app.getGuardian().getUser().getLastName())).trim());
+        }
+        if (names.size() < 2 && app.getApplicantUser() != null) {
+            addFamilyName(names, (safe(app.getApplicantUser().getFirstName()) + " "
+                    + safe(app.getApplicantUser().getLastName())).trim());
+        }
+        return String.join(" y ", names);
+    }
+
+    private static void addFamilyName(java.util.List<String> names, String rawName) {
+        String name = personNameForEmail(rawName);
+        if (name == null) return;
+        boolean duplicate = names.stream().anyMatch(existing -> existing.equalsIgnoreCase(name));
+        if (!duplicate) names.add(name);
+    }
+
+    private static String personNameForEmail(String rawName) {
+        if (rawName == null) return null;
+        String cleaned = rawName.trim().replaceAll("\\s+", " ");
+        String normalized = cleaned.toUpperCase(java.util.Locale.ROOT)
+                .replace(".", "")
+                .replace("/", "")
+                .trim();
+        if (cleaned.length() < 2
+                || normalized.equals("A")
+                || normalized.equals("NA")
+                || normalized.equals("N A")
+                || normalized.equals("NO APLICA")
+                || normalized.equals("SIN INFORMACION")
+                || normalized.equals("SIN REGISTRO")) {
+            return null;
+        }
+
+        java.util.Set<String> connectors = java.util.Set.of("de", "del", "la", "las", "los", "y");
+        String[] words = cleaned.toLowerCase(java.util.Locale.forLanguageTag("es-CL")).split(" ");
+        for (int i = 0; i < words.length; i++) {
+            if (i > 0 && connectors.contains(words[i])) continue;
+            words[i] = Character.toUpperCase(words[i].charAt(0)) + words[i].substring(1);
+        }
+        return String.join(" ", words);
+    }
+
+    /** Prioriza la cuenta que creó la postulación y usa los contactos familiares como respaldo. */
+    private static String resolveApplicationRecipientEmail(ApplicationEntity app) {
+        String[] candidates = {
+            app.getApplicantUser() == null ? null : app.getApplicantUser().getEmail(),
+            app.getGuardian() == null ? null : app.getGuardian().getEmail(),
+            app.getFather() == null ? null : app.getFather().getEmail(),
+            app.getMother() == null ? null : app.getMother().getEmail()
+        };
+        for (String candidate : candidates) {
+            if (candidate != null && !candidate.isBlank()) return candidate.trim();
+        }
+        return null;
+    }
+
+    private static String applicationStatusLabel(ApplicationStatus status) {
+        if (status == null) return "Sin estado";
+        return switch (status) {
+            case PENDING -> "Pendiente";
+            case UNDER_REVIEW -> "En revisión";
+            case DOCUMENTS_REQUESTED, PENDING_DOCUMENTS -> "Documentos pendientes";
+            case INCOMPLETE -> "Incompleta";
+            case INTERVIEW_SCHEDULED -> "Entrevista agendada";
+            case EXAM_SCHEDULED -> "Evaluación agendada";
+            case APPROVED -> "Aprobada";
+            case REJECTED -> "Rechazada";
+            case WAITLIST -> "Lista de espera";
+            case ARCHIVED -> "Archivada";
+        };
+    }
+
+    private static String defaultDecisionMessage(ApplicationStatus status) {
+        return switch (status) {
+            case APPROVED -> "La postulación ha sido aprobada. Pronto recibirán información sobre los siguientes pasos.";
+            case WAITLIST -> "La postulación ha sido incorporada a la lista de espera. Les contactaremos cuando exista una novedad sobre el cupo.";
+            case REJECTED -> "El proceso de postulación ha finalizado. Agradecemos sinceramente el interés y la confianza en nuestro colegio.";
+            default -> "El estado de la postulación ha sido actualizado.";
+        };
+    }
+
+    private static String decisionEmailSubject(ApplicationStatus status) {
+        return switch (status) {
+            case APPROVED -> "Resultado de admisión: postulación aprobada";
+            case WAITLIST -> "Resultado de admisión: lista de espera";
+            case REJECTED -> "Resultado del proceso de admisión";
+            default -> EmailTemplate.ADMISSION_RESULT.getDefaultSubject();
+        };
+    }
+
+    private static String decisionResultBackground(ApplicationStatus status) {
+        return switch (status) {
+            case APPROVED -> "#ecfdf5";
+            case WAITLIST -> "#fffbeb";
+            case REJECTED -> "#fef2f2";
+            default -> "#f8fafc";
+        };
+    }
+
+    private static String decisionResultColor(ApplicationStatus status) {
+        return switch (status) {
+            case APPROVED -> "#047857";
+            case WAITLIST -> "#92400e";
+            case REJECTED -> "#b91c1c";
+            default -> "#273b7a";
+        };
+    }
+
+    private static String decisionResultBorder(ApplicationStatus status) {
+        return switch (status) {
+            case APPROVED -> "#10b981";
+            case WAITLIST -> "#f59e0b";
+            case REJECTED -> "#ef4444";
+            default -> "#cbd5e1";
+        };
+    }
+
+    private static String formatEmailMessage(String value) {
+        return escapeHtml(value).replace("\r\n", "<br/>").replace("\n", "<br/>");
+    }
+
+    private static String escapeHtml(String value) {
+        if (value == null) return "";
+        return value
+                .replace("&", "&amp;")
+                .replace("<", "&lt;")
+                .replace(">", "&gt;")
+                .replace("\"", "&quot;")
+                .replace("'", "&#39;");
+    }
+
+    private static String nestedString(Map<String, Object> source, String parentKey, String childKey) {
+        if (source == null || !(source.get(parentKey) instanceof Map<?, ?> nested)) return null;
+        Object value = nested.get(childKey);
+        return value == null ? null : String.valueOf(value);
     }
 }
