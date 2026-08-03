@@ -25,6 +25,7 @@ import cl.mtn.admitiabff.repository.ApplicationSchoolSyncRepository;
 import cl.mtn.admitiabff.repository.PaymentEventRepository;
 import cl.mtn.admitiabff.repository.PaymentRepository;
 import cl.mtn.admitiabff.repository.UserRepository;
+import cl.mtn.admitiabff.service.AdmissionCycleGuard;
 import cl.mtn.admitiabff.service.payments.MtnAdmissionDtos.AdmissionResponse;
 import cl.mtn.admitiabff.service.payments.MtnAdmissionDtos.AdmissionRequest;
 import cl.mtn.admitiabff.service.payments.MtnAdmissionDtos.ChargeRequest;
@@ -64,8 +65,9 @@ class PaymentServiceTest {
         events = mock(PaymentEventRepository.class);
         syncs = mock(ApplicationSchoolSyncRepository.class);
         client = mock(MtnAdmissionGateway.class);
+        AdmissionCycleGuard admissionCycleGuard = mock(AdmissionCycleGuard.class);
         service = new PaymentService(applications, users, payments, events, syncs, client, properties(),
-            new JsonSupport(new ObjectMapper()));
+            new JsonSupport(new ObjectMapper()), admissionCycleGuard);
 
         user = new UserEntity();
         user.setId(7L);
@@ -140,7 +142,7 @@ class PaymentServiceTest {
         assertEquals("juan@example.invalid", admissionRequest.getValue().email());
         assertEquals("Calle QA 123", admissionRequest.getValue().address1());
         assertEquals("1_BASICO", chargeRequest.getValue().studentCourse());
-        assertEquals("Matricula 2027", chargeRequest.getValue().concept());
+        assertEquals("Glosa configurada desde Railway", chargeRequest.getValue().concept());
         verify(client, times(1)).chargeStatus(301L);
     }
 
@@ -272,7 +274,7 @@ class PaymentServiceTest {
     private MtnAdmissionProperties properties() {
         return new MtnAdmissionProperties(true, "https://school.example/api", "/auth/token", "/admision/apoderados", "/admision/cobros",
             "ADMISION", "secret", MtnAdmissionProperties.ClientAuthMethod.BASIC, false, Duration.ofSeconds(2), Duration.ofSeconds(2),
-            new BigDecimal("50000"), "CLP", 3, "ADMITIA", "Santiago", "America/Santiago");
+            new BigDecimal("50000"), "Glosa configurada desde Railway", "CLP", 3, "ADMITIA", "Santiago", "America/Santiago");
     }
 
     @SuppressWarnings("unchecked")

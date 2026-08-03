@@ -18,6 +18,7 @@ public record MtnAdmissionProperties(
     Duration connectTimeout,
     Duration readTimeout,
     BigDecimal applicationFee,
+    String paymentGlosa,
     String currency,
     int dueDays,
     String referencePrefix,
@@ -39,6 +40,9 @@ public record MtnAdmissionProperties(
         }
         if (applicationFee == null || applicationFee.signum() <= 0) {
             throw PaymentIntegrationException.invalidData("El monto configurado para la postulación debe ser mayor a cero");
+        }
+        if (isBlank(paymentGlosa)) {
+            throw PaymentIntegrationException.invalidData("MTN_ADMISSION_PAYMENT_GLOSA debe estar configurada");
         }
         if (!("CLP".equalsIgnoreCase(currency) || "CLF".equalsIgnoreCase(currency))) {
             throw PaymentIntegrationException.invalidData("La moneda configurada debe ser CLP o CLF");

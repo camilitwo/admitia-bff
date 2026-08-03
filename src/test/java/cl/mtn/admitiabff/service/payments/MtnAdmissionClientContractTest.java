@@ -122,7 +122,7 @@ class MtnAdmissionClientContractTest {
     private MtnAdmissionProperties properties() {
         return new MtnAdmissionProperties(true, "http://localhost:" + server.getAddress().getPort(), "/auth/token",
             "/admision/apoderados", "/admision/cobros", "ADMISION", "secret", MtnAdmissionProperties.ClientAuthMethod.BASIC, true,
-            Duration.ofSeconds(2), Duration.ofSeconds(2), new BigDecimal("50000"), "CLP", 3,
+            Duration.ofSeconds(2), Duration.ofSeconds(2), new BigDecimal("50000"), "Matricula 2027", "CLP", 3,
             "ADMITIA", "Santiago", "America/Santiago");
     }
 

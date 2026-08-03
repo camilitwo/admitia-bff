@@ -77,6 +77,14 @@ app:
     resend:
       api-key: ${RESEND_API_KEY}
       base-url: ${RESEND_BASE_URL}
+  admission-cycle:
+    # Ambos interruptores deben estar activos para permitir un cierre real.
+    close-enabled: ${APP_ADMISSION_CLOSE_ENABLED:false}
+    dispatch-enabled: ${APP_ADMISSION_RESULT_DISPATCH_ENABLED:false}
+    batch-size: ${APP_ADMISSION_RESULT_BATCH_SIZE:50}
+    worker-delay-ms: ${APP_ADMISSION_RESULT_WORKER_DELAY_MS:3000}
+    lease-minutes: ${APP_ADMISSION_RESULT_LEASE_MINUTES:10}
+    max-attempts: ${APP_ADMISSION_RESULT_MAX_ATTEMPTS:5}
   cors:
     allowed-origins: ${APP_CORS_ALLOWED_ORIGINS:http://localhost:5173,http://127.0.0.1:5173}
   # URL base para redirecciones (debe ser la URL pública del frontend)
@@ -122,6 +130,8 @@ app:
       connect-timeout: ${MTN_ADMISSION_CONNECT_TIMEOUT:3s}
       read-timeout: ${MTN_ADMISSION_READ_TIMEOUT:10s}
       application-fee: ${MTN_ADMISSION_APPLICATION_FEE:0}
+      # Glosa enviada como "concepto" al crear el cobro. Configurar en Railway.
+      payment-glosa: ${MTN_ADMISSION_PAYMENT_GLOSA:Proceso de admisión 2027}
       currency: ${MTN_ADMISSION_CURRENCY:CLP}
       due-days: ${MTN_ADMISSION_DUE_DAYS:3}
       reference-prefix: ${MTN_ADMISSION_REFERENCE_PREFIX:ADMITIA}

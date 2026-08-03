@@ -32,7 +32,7 @@ class MtnAdmissionTokenProviderTest {
         MtnAdmissionProperties springProperties = new MtnAdmissionProperties(
             false, "http://localhost", "/auth/token", "/admision/apoderados", "/admision/cobros",
             "ADMISION", "secret", MtnAdmissionProperties.ClientAuthMethod.BASIC, true,
-            Duration.ofSeconds(2), Duration.ofSeconds(2), new java.math.BigDecimal("50000"), "CLP", 3,
+            Duration.ofSeconds(2), Duration.ofSeconds(2), new java.math.BigDecimal("50000"), "Glosa QA", "CLP", 3,
             "POSTMAN-QA", "Santiago", "America/Santiago");
         try (AnnotationConfigApplicationContext context = new AnnotationConfigApplicationContext()) {
             context.registerBean(RestClient.Builder.class, () -> RestClient.builder());
@@ -104,7 +104,7 @@ class MtnAdmissionTokenProviderTest {
     private MtnAdmissionProperties properties(MtnAdmissionProperties.ClientAuthMethod method) {
         return new MtnAdmissionProperties(true, "http://localhost:" + server.getAddress().getPort(), "/auth/token",
             "/admision/apoderados", "/admision/cobros", "ADMISION", "secret", method, true,
-            Duration.ofSeconds(2), Duration.ofSeconds(2), new java.math.BigDecimal("50000"), "CLP", 3,
+            Duration.ofSeconds(2), Duration.ofSeconds(2), new java.math.BigDecimal("50000"), "Glosa QA", "CLP", 3,
             "POSTMAN-QA", "Santiago", "America/Santiago");
     }
 
