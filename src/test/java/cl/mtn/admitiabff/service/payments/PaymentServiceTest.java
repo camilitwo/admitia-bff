@@ -192,6 +192,22 @@ class PaymentServiceTest {
     }
 
     @Test
+    void adminStatusReconcilesWithoutRequiringApplicantOwnership() {
+        PaymentEntity payment = pendingPayment();
+        storedPayment.set(payment);
+        application.setPaymentStatus(PaymentStatus.PAYMENT_PENDING);
+        when(client.chargeStatus(301L)).thenReturn(new ChargeStatusResponse(true, 301L, "inv_301", true, "PAGADO",
+            new BigDecimal("50000"), "CLP", "2026-08-15", "2026-08-10 14:32", new BigDecimal("50000"),
+            "trx_1", "voucher_1", "transfer", null));
+
+        Map<String, Object> response = service.statusForAdmin(20L);
+
+        assertEquals(PaymentStatus.PAID, application.getPaymentStatus());
+        assertEquals("PAGADO", data(response).get("providerStatus"));
+        assertNotNull(data(response).get("lastStatusCheckedAt"));
+    }
+
+    @Test
     void rejectsSuccessfulChargeWithoutPaymentLink() {
         when(client.synchronizeAdmission(any())).thenReturn(successfulAdmission());
         when(client.createCharge(any())).thenReturn(successfulCharge(""));

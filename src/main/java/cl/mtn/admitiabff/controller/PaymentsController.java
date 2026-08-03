@@ -27,7 +27,11 @@ public class PaymentsController {
 
     @GetMapping("/applications/{applicationId}/status")
     public Map<String, Object> status(@PathVariable Long applicationId) {
-        return paymentService.status(applicationId, authService.requireAuth().id());
+        AuthService.AuthContextHolder auth = authService.requireAuth();
+        if (authService.isAdminContext(auth)) {
+            return paymentService.statusForAdmin(applicationId);
+        }
+        return paymentService.status(applicationId, auth.id());
     }
 
 }

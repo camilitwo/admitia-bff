@@ -143,6 +143,16 @@ public class PaymentService {
     @Transactional(noRollbackFor = PaymentIntegrationException.class)
     public Map<String, Object> status(Long applicationId, Long userId) {
         ApplicationEntity application = loadOwnedApplication(applicationId, userId);
+        return reconcileStatus(applicationId, application);
+    }
+
+    @Transactional(noRollbackFor = PaymentIntegrationException.class)
+    public Map<String, Object> statusForAdmin(Long applicationId) {
+        ApplicationEntity application = loadApplication(applicationId);
+        return reconcileStatus(applicationId, application);
+    }
+
+    private Map<String, Object> reconcileStatus(Long applicationId, ApplicationEntity application) {
         PaymentEntity payment = paymentRepository.findFirstByApplicationIdOrderByCreatedAtDesc(applicationId).orElse(null);
         if (payment != null && payment.getStatus() == PaymentStatus.PAYMENT_PENDING && payment.getInstitutionalChargeId() != null) {
             reconcile(payment);
@@ -399,10 +409,14 @@ public class PaymentService {
     }
 
     private ApplicationEntity loadOwnedApplication(Long applicationId, Long userId) {
-        ApplicationEntity application = applicationRepository.findActiveById(applicationId)
-            .orElseThrow(() -> PaymentIntegrationException.invalidData("Postulación no encontrada"));
+        ApplicationEntity application = loadApplication(applicationId);
         assertOwnership(application, userId);
         return application;
+    }
+
+    private ApplicationEntity loadApplication(Long applicationId) {
+        return applicationRepository.findActiveById(applicationId)
+            .orElseThrow(() -> PaymentIntegrationException.invalidData("Postulación no encontrada"));
     }
 
     private ApplicationEntity loadOwnedApplicationForUpdate(Long applicationId, Long userId) {
@@ -456,6 +470,8 @@ public class PaymentService {
             data.put("currency", payment.getCurrency());
             data.put("expiresAt", payment.getExpiresAt());
             data.put("providerInvoiceId", payment.getProviderInvoiceId());
+            data.put("providerStatus", payment.getExternalStatus());
+            data.put("lastStatusCheckedAt", payment.getLastStatusCheckedAt());
         }
         return data;
     }
