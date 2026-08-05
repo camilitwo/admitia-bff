@@ -36,6 +36,8 @@ import org.springframework.web.server.ResponseStatusException;
 @Service
 @Transactional(readOnly = true)
 public class AuthService {
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private org.springframework.context.ApplicationEventPublisher applicationEventPublisher;
 
     private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(AuthService.class);
 
@@ -746,7 +748,14 @@ public class AuthService {
                 java.time.Instant exp = claims.getExpiration().toInstant();
                 if (jti != null && userId != null) {
                     tokenService.blacklistJti(jti, userId, exp, "LOGOUT");
-                    activeSessionRepository.findByTokenHash(sha256(accessToken)).ifPresent(activeSessionRepository::delete);
+                    activeSessionRepository.findByTokenHash(sha256(accessToken)).ifPresent(session -> {
+                        activeSessionRepository.delete(session);
+                        if (applicationEventPublisher != null) {
+                            applicationEventPublisher.publishEvent(
+                                new cl.mtn.admitiabff.prekinder.realtime.SessionRevokedEvent(session.getId().toString())
+                            );
+                        }
+                    });
                 }
             }
         } catch (Exception ex) {

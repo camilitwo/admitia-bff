@@ -159,7 +159,7 @@ public class FirebaseAuthenticationFilter extends OncePerRequestFilter {
                 log.warn("[Auth/Firebase] Usuario inactivo id={} uid={}", user.getId(), firebaseUid);
                 return false;
             }
-            setAuthentication(user);
+            setAuthentication(user, "firebase:" + firebaseUid);
             return true;
         } catch (Exception ex) {
             log.warn("[Auth/Firebase] Auth fallida para path={}: {}", request.getRequestURI(), ex.getMessage());
@@ -227,7 +227,7 @@ public class FirebaseAuthenticationFilter extends OncePerRequestFilter {
                 List.of(new SimpleGrantedAuthority("ROLE_" + role))
             );
             SecurityContextHolder.getContext().setAuthentication(auth);
-            AuthContext.set(new AuthUser(userId, email, role));
+            AuthContext.set(new AuthUser(userId, email, role, session.getId().toString()));
             return true;
         } catch (Exception ex) {
             log.debug("[Auth/Local] JWT no válido: {}", ex.getMessage());
@@ -236,14 +236,14 @@ public class FirebaseAuthenticationFilter extends OncePerRequestFilter {
         }
     }
 
-    private void setAuthentication(UserEntity user) {
+    private void setAuthentication(UserEntity user, String sessionId) {
         String role = user.getRole().name();
         var auth = new UsernamePasswordAuthenticationToken(
             user.getEmail(), null,
             List.of(new SimpleGrantedAuthority("ROLE_" + role))
         );
         SecurityContextHolder.getContext().setAuthentication(auth);
-        AuthContext.set(new AuthUser(user.getId(), user.getEmail(), role));
+        AuthContext.set(new AuthUser(user.getId(), user.getEmail(), role, sessionId));
     }
 
     private boolean isLikelyLocalJwt(String token) {
