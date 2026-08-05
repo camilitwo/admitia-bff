@@ -27,6 +27,9 @@ public class SecurityConfig {
     @Value("${app.cors.allowed-origins}")
     private String allowedOrigins;
 
+    @Value("${app.prekinder.realtime.allowed-origins:http://localhost:5173}")
+    private String prekinderAllowedOrigins;
+
     public SecurityConfig(FirebaseAuthenticationFilter firebaseAuthenticationFilter,
                           TemporaryPasswordEnforcementFilter temporaryPasswordEnforcementFilter) {
         this.firebaseAuthenticationFilter = firebaseAuthenticationFilter;
@@ -47,6 +50,8 @@ public class SecurityConfig {
             )
             .authorizeHttpRequests(auth -> auth
                 .requestMatchers("/health", "/ready", "/gateway/status").permitAll()
+                // El upgrade no lleva Bearer: se autentica una vez con ticket en el frame STOMP CONNECT.
+                .requestMatchers("/api/prekinder/realtime").permitAll()
                 // Endpoints de auth abiertos (login/logout/refresh deben ser accesibles sin Bearer válido)
                 .requestMatchers("/api/auth/**", "/api/email/**", "/api/institutional-emails/**", "/api/public/**").permitAll()
                 .requestMatchers(HttpMethod.GET, "/api/users/roles", "/api/users/public/**", "/api/applications/stats", "/api/applications/statistics",
@@ -74,6 +79,13 @@ public class SecurityConfig {
         configuration.setMaxAge(3600L);
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
         source.registerCorsConfiguration("/**", configuration);
+        CorsConfiguration prekinder = new CorsConfiguration();
+        prekinder.setAllowedOrigins(Arrays.stream(prekinderAllowedOrigins.split(",")).map(String::trim).toList());
+        prekinder.setAllowedMethods(List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
+        prekinder.setAllowedHeaders(List.of("Authorization", "Content-Type", "Accept", "Origin", "X-Request-ID"));
+        prekinder.setAllowCredentials(true);
+        prekinder.setMaxAge(3600L);
+        source.registerCorsConfiguration("/api/prekinder/**", prekinder);
         return source;
     }
 

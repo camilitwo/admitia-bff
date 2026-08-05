@@ -25,6 +25,10 @@ mvn spring-boot:run
 - `APP_EMAIL_MOCK_MODE`
 - `PORT`
 
+La configuración y el orden de despliegue del módulo aislado están documentados en
+[`PREKINDER_DEPLOYMENT.md`](PREKINDER_DEPLOYMENT.md). El módulo permanece apagado por
+defecto y no modifica ni reutiliza migraciones legacy.
+
 ## Notas
 - El servicio escucha en `8080` por defecto para mantener compatibilidad con el frontend.
 - Las rutas expuestas conservan los prefijos `/api/auth`, `/api/users`, `/api/applications`, `/api/students`, `/api/documents`, `/api/evaluations`, `/api/interviews`, `/api/interviewer-schedules`, `/api/notifications`, `/api/email`, `/api/institutional-emails`, `/api/guardians`, `/api/dashboard` y `/api/analytics`.

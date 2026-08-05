@@ -61,6 +61,7 @@ class DashboardServiceTest {
         app.setId(1L);
         app.setStatus(ApplicationStatus.PENDING);
         app.setSubmissionDate(LocalDateTime.of(2026, 5, 10, 10, 0));
+        app.setAcademicYear(2026);
         app.setDeletedAt(null);
         app.setArchived(false);
 

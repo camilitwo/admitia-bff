@@ -32,8 +32,47 @@ spring:
     mode: HTML
     encoding: UTF-8
     cache: false
+  data:
+    redis:
+      url: ${PREKINDER_REDIS_URL:redis://localhost:6380}
 
 app:
+  prekinder:
+    enabled: ${PREKINDER_ENABLED:false}
+    datasource:
+      url: ${PREKINDER_DATASOURCE_URL:jdbc:postgresql://localhost:5433/prekinder}
+      username: ${PREKINDER_DATASOURCE_USERNAME:prekinder_app}
+      password: ${PREKINDER_DATASOURCE_PASSWORD:}
+      driver-class-name: org.postgresql.Driver
+      hikari:
+        pool-name: prekinder-hikari
+        maximum-pool-size: ${PREKINDER_DB_POOL_MAX_SIZE:10}
+        minimum-idle: ${PREKINDER_DB_POOL_MIN_IDLE:2}
+        connection-timeout: 3000
+        validation-timeout: 2000
+        leak-detection-threshold: 15000
+    flyway:
+      enabled: ${PREKINDER_FLYWAY_ENABLED:false}
+    encryption:
+      active-version: ${PREKINDER_ENCRYPTION_ACTIVE_VERSION:}
+      key-v1: ${PREKINDER_ENCRYPTION_KEY_V1:}
+    realtime:
+      allowed-origins: ${PREKINDER_ALLOWED_ORIGINS:http://localhost:5173}
+      ticket-ttl: 30s
+      heartbeat: 20s
+      max-connections-per-user: 3
+      max-frame-bytes: 16384
+      operations-per-window: 30
+      rate-window: 10s
+    mtls:
+      enforced: ${PREKINDER_MTLS_ENFORCED:false}
+      port: ${PREKINDER_MTLS_PORT:8443}
+      key-store: ${PREKINDER_MTLS_KEY_STORE:}
+      key-store-base64: ${PREKINDER_MTLS_KEY_STORE_B64:}
+      key-store-password: ${PREKINDER_MTLS_KEY_STORE_PASSWORD:}
+      trust-store: ${PREKINDER_MTLS_TRUST_STORE:}
+      trust-store-base64: ${PREKINDER_MTLS_TRUST_STORE_B64:}
+      trust-store-password: ${PREKINDER_MTLS_TRUST_STORE_PASSWORD:}
   jwt:
     secret: ${APP_JWT_SECRET}
     expiration-minutes: ${APP_JWT_EXPIRATION_MINUTES}
