@@ -110,10 +110,9 @@ public class StudentService {
         entity.setSpecialNeeds(booleanValue(payload.getOrDefault("specialNeeds", entity.isSpecialNeeds())));
         entity.setSpecialNeedsDescription(stringValue(payload.getOrDefault("specialNeedsDescription", entity.getSpecialNeedsDescription())));
         entity.setAdditionalNotes(stringValue(payload.getOrDefault("additionalNotes", entity.getAdditionalNotes())));
-        entity.setEmployeeChild(booleanValue(payload.getOrDefault("isEmployeeChild", entity.isEmployeeChild())));
-        entity.setEmployeeParentName(stringValue(payload.getOrDefault("employeeParentName", entity.getEmployeeParentName())));
-        entity.setAlumniChild(booleanValue(payload.getOrDefault("isAlumniChild", entity.isAlumniChild())));
-        entity.setAlumniParentYear(integerValue(payload.getOrDefault("alumniParentYear", entity.getAlumniParentYear())));
+        if (ApplicationService.containsAdmissionCategory(payload)) {
+            ApplicationService.applyAdmissionCategory(entity, payload, payload);
+        }
         entity.setInclusionStudent(booleanValue(payload.getOrDefault("isInclusionStudent", entity.isInclusionStudent())));
         entity.setInclusionType(stringValue(payload.getOrDefault("inclusionType", entity.getInclusionType())));
         entity.setInclusionNotes(stringValue(payload.getOrDefault("inclusionNotes", entity.getInclusionNotes())));
@@ -156,12 +155,6 @@ public class StudentService {
     private boolean booleanValue(Object value) {
         if (value instanceof Boolean bool) return bool;
         return Boolean.parseBoolean(String.valueOf(value));
-    }
-
-    private Integer integerValue(Object value) {
-        if (value == null || String.valueOf(value).isBlank()) return null;
-        if (value instanceof Number number) return number.intValue();
-        return Integer.parseInt(String.valueOf(value));
     }
 
     private String stringValue(Object value) { return value == null ? null : String.valueOf(value); }

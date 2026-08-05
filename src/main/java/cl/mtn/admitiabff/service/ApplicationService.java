@@ -229,6 +229,15 @@ public class ApplicationService {
         ApplicationEntity entity = load(id);
         if (payload.containsKey("status")) entity.setStatus(parseStatus(value(payload.get("status"))));
         if (payload.containsKey("notes")) entity.setNotes(value(payload.get("notes")));
+        Object nestedStudent = payload.get("student");
+        if (nestedStudent instanceof Map<?, ?> nested) {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> studentPayload = (Map<String, Object>) nested;
+            if (containsAdmissionCategory(studentPayload)) {
+                applyAdmissionCategory(entity.getStudent(), studentPayload, studentPayload);
+                studentRepository.save(entity.getStudent());
+            }
+        }
         if (payload.containsKey("studentGender")) {
             StudentEntity student = entity.getStudent();
             student.setGender(value(payload.get("studentGender")));
@@ -480,15 +489,12 @@ public class ApplicationService {
         student.setEmail(firstNonNull(source.get("email"), payload.get("studentEmail")));
         student.setAddress(firstNonNull(source.get("address"), payload.get("studentAddress")));
         student.setGradeApplied(firstNonNull(source.get("gradeApplied"), payload.get("grade"), payload.get("gradeApplied"), payload.get("gradeAppliedFor")));
-        student.setGender(mapTargetSchoolToGender(firstNonNull(source.get("targetSchool"), payload.get("schoolApplied"), payload.get("targetSchool"), payload.get("studentAdmissionPreference"))));
+        student.setGender(resolveStudentGender(source, payload));
         student.setCurrentSchool(firstNonNull(source.get("currentSchool"), payload.get("currentSchool"), payload.get("studentCurrentSchool")));
         student.setSpecialNeeds(booleanValue(source.getOrDefault("specialNeeds", false)));
         student.setSpecialNeedsDescription(value(source.get("specialNeedsDescription")));
         student.setAdditionalNotes(value(source.getOrDefault("additionalNotes", payload.get("additionalNotes"))));
-        student.setEmployeeChild(booleanValue(source.getOrDefault("isEmployeeChild", false)));
-        student.setEmployeeParentName(value(source.get("employeeParentName")));
-        student.setAlumniChild(booleanValue(source.getOrDefault("isAlumniChild", false)));
-        student.setAlumniParentYear(integerValue(source.get("alumniParentYear")));
+        applyAdmissionCategory(student, source, payload);
         student.setInclusionStudent(booleanValue(source.getOrDefault("isInclusionStudent", false)));
         student.setInclusionType(value(source.get("inclusionType")));
         student.setInclusionNotes(value(source.get("inclusionNotes")));
@@ -842,6 +848,66 @@ public class ApplicationService {
             case "NAZARET" -> "FEMALE";
             default -> null;
         };
+    }
+
+    private String resolveStudentGender(Map<String, Object> source, Map<String, Object> payload) {
+        String explicit = firstNonNull(source.get("gender"), payload.get("studentGender"));
+        if ("MALE".equals(explicit) || "FEMALE".equals(explicit)) return explicit;
+        return mapTargetSchoolToGender(firstNonNull(
+            source.get("targetSchool"), payload.get("schoolApplied"), payload.get("targetSchool")));
+    }
+
+    static boolean containsAdmissionCategory(Map<String, Object> payload) {
+        return payload.containsKey("admissionPreference")
+            || payload.containsKey("studentAdmissionPreference")
+            || payload.containsKey("isAlumniChild")
+            || payload.containsKey("isEmployeeChild")
+            || payload.containsKey("alumniParentYear")
+            || payload.containsKey("employeeParentName");
+    }
+
+    static void applyAdmissionCategory(StudentEntity student, Map<String, Object> source, Map<String, Object> payload) {
+        Object rawPreference = firstPresent(source, payload, "admissionPreference", "studentAdmissionPreference");
+        String preference = rawPreference == null ? null : String.valueOf(rawPreference).trim().toUpperCase(java.util.Locale.ROOT);
+
+        if (preference == null || preference.isBlank()) {
+            boolean alumni = booleanValueStatic(firstPresent(source, payload, "isAlumniChild"));
+            boolean employee = booleanValueStatic(firstPresent(source, payload, "isEmployeeChild"));
+            preference = alumni ? "HIJO_EX_ALUMNO" : employee ? "HIJO_FUNCIONARIO" : "NINGUNA";
+        }
+        if (!java.util.Set.of("NINGUNA", "NUEVA", "HIJO_EX_ALUMNO", "HIJO_FUNCIONARIO").contains(preference)) {
+            throw new IllegalArgumentException("Preferencia de admisión inválida");
+        }
+        if ("NUEVA".equals(preference)) preference = "NINGUNA";
+
+        boolean alumni = "HIJO_EX_ALUMNO".equals(preference);
+        boolean employee = "HIJO_FUNCIONARIO".equals(preference);
+        student.setAdmissionPreference(preference);
+        student.setAlumniChild(alumni);
+        student.setEmployeeChild(employee);
+
+        Object alumniYear = firstPresent(source, payload, "alumniParentYear");
+        if (!alumni) student.setAlumniParentYear(null);
+        else if (alumniYear != null && !String.valueOf(alumniYear).isBlank()) {
+            student.setAlumniParentYear(alumniYear instanceof Number number
+                ? number.intValue() : Integer.valueOf(String.valueOf(alumniYear)));
+        }
+
+        Object employeeName = firstPresent(source, payload, "employeeParentName");
+        if (!employee) student.setEmployeeParentName(null);
+        else if (employeeName != null) student.setEmployeeParentName(String.valueOf(employeeName));
+    }
+
+    private static Object firstPresent(Map<String, Object> source, Map<String, Object> payload, String... keys) {
+        for (String key : keys) {
+            if (source.containsKey(key)) return source.get(key);
+            if (payload != source && payload.containsKey(key)) return payload.get(key);
+        }
+        return null;
+    }
+
+    private static boolean booleanValueStatic(Object value) {
+        return value instanceof Boolean bool ? bool : value != null && Boolean.parseBoolean(String.valueOf(value));
     }
 
     private static String safe(String value) { return value == null ? "" : value; }
