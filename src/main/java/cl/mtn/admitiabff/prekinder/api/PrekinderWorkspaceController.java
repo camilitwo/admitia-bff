@@ -47,14 +47,14 @@ public class PrekinderWorkspaceController {
         return Map.of("success", true, "data", workspace.publishProcess(processId, request.startsAt(), request.endsAt()));
     }
 
-    @PostMapping("/applications")
+    @PostMapping("/legacy/applications")
     public Map<String, Object> application(@Valid @RequestBody CreateApplication request) {
         return Map.of("success", true, "data", workspace.createApplication(request.processId(),
             new PrekinderWorkspaceService.Identity(request.rut(), request.firstName().trim(), request.paternalLastName().trim(),
                 request.maternalLastName() == null ? "" : request.maternalLastName().trim())));
     }
 
-    @GetMapping("/applications")
+    @GetMapping("/legacy/applications")
     public Map<String, Object> applications(@RequestParam UUID processId) {
         return Map.of("success", true, "data", workspace.listApplications(processId));
     }

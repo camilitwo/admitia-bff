@@ -14,6 +14,8 @@ import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
+import org.springframework.beans.factory.ObjectProvider;
+import cl.mtn.admitiabff.prekinder.security.PrekinderAuthenticationFilter;
 import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
@@ -23,6 +25,7 @@ import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 public class SecurityConfig {
     private final FirebaseAuthenticationFilter firebaseAuthenticationFilter;
     private final TemporaryPasswordEnforcementFilter temporaryPasswordEnforcementFilter;
+    private final PrekinderAuthenticationFilter prekinderAuthenticationFilter;
 
     @Value("${app.cors.allowed-origins}")
     private String allowedOrigins;
@@ -31,14 +34,16 @@ public class SecurityConfig {
     private String prekinderAllowedOrigins;
 
     public SecurityConfig(FirebaseAuthenticationFilter firebaseAuthenticationFilter,
-                          TemporaryPasswordEnforcementFilter temporaryPasswordEnforcementFilter) {
+                          TemporaryPasswordEnforcementFilter temporaryPasswordEnforcementFilter,
+                          ObjectProvider<PrekinderAuthenticationFilter> prekinderAuthenticationFilter) {
         this.firebaseAuthenticationFilter = firebaseAuthenticationFilter;
         this.temporaryPasswordEnforcementFilter = temporaryPasswordEnforcementFilter;
+        this.prekinderAuthenticationFilter = prekinderAuthenticationFilter.getIfAvailable();
     }
 
     @Bean
     SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
-        return http
+        HttpSecurity configured = http
             .cors(cors -> cors.configurationSource(corsConfigurationSource()))
             .csrf(csrf -> csrf.disable())
             .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
@@ -52,8 +57,9 @@ public class SecurityConfig {
                 .requestMatchers("/health", "/ready", "/gateway/status").permitAll()
                 // El upgrade no lleva Bearer: se autentica una vez con ticket en el frame STOMP CONNECT.
                 .requestMatchers("/api/prekinder/realtime").permitAll()
-                // La superficie REST, incluida la emisión de tickets, queda restringida a ADMIN.
-                .requestMatchers("/api/prekinder/**").hasRole("ADMIN")
+                // Cada recurso Prekínder aplica autorización por actor/asignación dentro del
+                // datasource aislado. Aquí sólo exigimos una identidad autenticada.
+                .requestMatchers("/api/prekinder/**").authenticated()
                 // Endpoints de auth abiertos (login/logout/refresh deben ser accesibles sin Bearer válido)
                 .requestMatchers("/api/auth/**", "/api/email/**", "/api/institutional-emails/**", "/api/public/**").permitAll()
                 .requestMatchers(HttpMethod.GET, "/api/users/roles", "/api/users/public/**", "/api/applications/stats", "/api/applications/statistics",
@@ -63,7 +69,11 @@ public class SecurityConfig {
             )
             .addFilterBefore(firebaseAuthenticationFilter, UsernamePasswordAuthenticationFilter.class)
             .addFilterAfter(temporaryPasswordEnforcementFilter, FirebaseAuthenticationFilter.class)
-            .build();
+            ;
+        if (prekinderAuthenticationFilter != null) {
+            configured.addFilterBefore(prekinderAuthenticationFilter, FirebaseAuthenticationFilter.class);
+        }
+        return configured.build();
     }
 
     @Bean

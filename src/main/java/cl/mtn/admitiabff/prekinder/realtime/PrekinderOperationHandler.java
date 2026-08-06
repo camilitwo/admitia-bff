@@ -1,7 +1,7 @@
 package cl.mtn.admitiabff.prekinder.realtime;
 
-import cl.mtn.admitiabff.config.AuthContext;
-import cl.mtn.admitiabff.config.AuthUser;
+import cl.mtn.admitiabff.prekinder.domain.PrekinderActor;
+import cl.mtn.admitiabff.prekinder.security.PrekinderAuthContext;
 import cl.mtn.admitiabff.prekinder.service.PrekinderCommentService;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
@@ -38,7 +38,9 @@ public class PrekinderOperationHandler {
         if (binding == null || principal == null || !principal.getName().equals(binding.actorId())) {
             throw new SecurityException("Sesión de socket inválida");
         }
-        AuthContext.set(new AuthUser(Long.parseLong(binding.legacyUserId()), null, binding.role(), binding.sessionId()));
+        PrekinderAuthContext.set(new PrekinderAuthContext.Principal(
+            new PrekinderActor(UUID.fromString(binding.actorId()), 0L, binding.role()),
+            binding.subject(), null, binding.sessionId()));
         try {
             if (operation.type() == OperationType.WATCH_EVALUATION) {
                 presence.watch(require(operation.evaluationId(), "evaluationId"), binding.actorId());
@@ -66,7 +68,7 @@ public class PrekinderOperationHandler {
             }
             ack(principal.getName(), operation.operationId(), ackStatus, result.comment(), result.duplicate());
         } finally {
-            AuthContext.clear();
+            PrekinderAuthContext.clear();
         }
     }
 

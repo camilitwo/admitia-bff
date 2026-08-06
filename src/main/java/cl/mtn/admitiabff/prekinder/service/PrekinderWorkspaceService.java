@@ -41,16 +41,20 @@ public class PrekinderWorkspaceService {
     public ProcessView createProcess(int academicYear, String name) {
         PrekinderActor actor = access.requireSensitiveAccess();
         UUID id = UUID.randomUUID();
-        try {
-            jdbc.update("""
-                INSERT INTO admission_processes(process_id, academic_year, name, status)
-                VALUES (:id, :year, :name, 'DRAFT')
-                """, Map.of("id", id, "year", academicYear, "name", name));
-        } catch (DuplicateKeyException exception) {
-            throw new IllegalStateException("Ya existe un proceso Prekínder con ese año y nombre", exception);
-        }
-        audit(actor.id(), "PROCESS_CREATED", id);
-        return process(id);
+        return transactions.execute(status -> {
+            try {
+                jdbc.update("""
+                    INSERT INTO admission_processes(process_id, academic_year, name, status)
+                    VALUES (:id, :year, :name, 'DRAFT')
+                    """, Map.of("id", id, "year", academicYear, "name", name));
+            } catch (DuplicateKeyException exception) {
+                throw new IllegalStateException("Ya existe un proceso Prekínder con ese año y nombre", exception);
+            }
+            seedWaves(id);
+            seedProvisionalRubrics(id);
+            audit(actor.id(), "PROCESS_CREATED", id);
+            return process(id);
+        });
     }
 
     public List<ProcessView> listProcesses() {
@@ -177,6 +181,60 @@ public class PrekinderWorkspaceService {
             INSERT INTO audit_events(audit_id, actor_id, action, aggregate_type, aggregate_id, result)
             VALUES (:id, :actor, :action, 'PREKINDER', :aggregate, 'SUCCESS')
             """, Map.of("id", UUID.randomUUID(), "actor", actorId, "action", action, "aggregate", aggregateId));
+    }
+
+    private void seedWaves(UUID processId) {
+        List<String> types = List.of("SIBLINGS", "STAFF_OR_ALUMNI", "NEW_FAMILIES");
+        for (int index = 0; index < types.size(); index++) {
+            jdbc.update("""
+                INSERT INTO process_waves(wave_id, process_id, wave_type, position, status)
+                VALUES (:id, :processId, :type, :position, 'DRAFT')
+                """, Map.of("id", UUID.randomUUID(), "processId", processId,
+                    "type", types.get(index), "position", index + 1));
+        }
+    }
+
+    private void seedProvisionalRubrics(UUID processId) {
+        seedRubric(processId, "GROUP_3", "Pauta provisoria · Grupo de 3", List.of(
+            "Comunicación", "Lenguaje", "Adaptación y regulación", "Psicomotricidad",
+            "Seguimiento de instrucciones", "Autonomía"));
+        seedRubric(processId, "GROUP_9", "Pauta provisoria · Grupo de 9", List.of(
+            "Interacción con pares", "Participación", "Cooperación", "Regulación",
+            "Respuesta a transiciones", "Comunicación grupal"));
+    }
+
+    private void seedRubric(UUID processId, String code, String name, List<String> criteria) {
+        UUID templateId = UUID.randomUUID();
+        UUID versionId = UUID.randomUUID();
+        jdbc.update("""
+            INSERT INTO evaluation_templates(evaluation_template_id, process_id, type_code, name)
+            VALUES (:id, :processId, :code, :name)
+            """, Map.of("id", templateId, "processId", processId, "code", code, "name", name));
+        jdbc.update("""
+            INSERT INTO evaluation_template_versions(evaluation_template_version_id, evaluation_template_id,
+                version, status, maximum_score, published_at)
+            VALUES (:id, :templateId, 1, 'PUBLISHED', 18, now())
+            """, Map.of("id", versionId, "templateId", templateId));
+        for (int index = 0; index < criteria.size(); index++) {
+            UUID criterionId = UUID.randomUUID();
+            String criterionName = criteria.get(index);
+            jdbc.update("""
+                INSERT INTO evaluation_criteria(criterion_id, evaluation_template_version_id, code, name,
+                    descriptor, position, required)
+                VALUES (:id, :versionId, :code, :name, :descriptor, :position, true)
+                """, Map.of("id", criterionId, "versionId", versionId,
+                    "code", "C" + (index + 1), "name", criterionName,
+                    "descriptor", "Observación provisoria: " + criterionName, "position", index));
+            List<String> labels = List.of("No evidenciado", "Requiere apoyo constante", "En desarrollo", "Logrado en la instancia");
+            for (int value = 0; value <= 3; value++) {
+                jdbc.update("""
+                    INSERT INTO evaluation_options(option_id, criterion_id, value, label, descriptor,
+                        professionally_validated, position)
+                    VALUES (:id, :criterionId, :value, :label, :descriptor, false, :position)
+                    """, Map.of("id", UUID.randomUUID(), "criterionId", criterionId, "value", value,
+                        "label", labels.get(value), "descriptor", labels.get(value), "position", value));
+            }
+        }
     }
 
     private ProcessView process(UUID processId) {

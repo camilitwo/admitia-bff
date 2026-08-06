@@ -10,6 +10,7 @@ import cl.mtn.admitiabff.config.AuthContext;
 import cl.mtn.admitiabff.config.AuthUser;
 import cl.mtn.admitiabff.prekinder.domain.PrekinderActor;
 import cl.mtn.admitiabff.prekinder.repository.PrekinderActorRepository;
+import cl.mtn.admitiabff.prekinder.security.PrekinderAuthContext;
 import java.util.UUID;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -22,6 +23,7 @@ class PrekinderAccessServiceTest {
     @AfterEach
     void clearAuthentication() {
         AuthContext.clear();
+        PrekinderAuthContext.clear();
     }
 
     @Test
@@ -36,12 +38,15 @@ class PrekinderAccessServiceTest {
     }
 
     @Test
-    void rejectsAuthenticatedNonAdmin() {
+    void allowsEvaluatorIntoModuleButRejectsSensitiveAdministration() {
+        PrekinderActor actor = new PrekinderActor(UUID.randomUUID(), 7L, "TEACHER");
         AuthContext.set(new AuthUser(7L, "teacher@mtn.cl", "TEACHER", "session-2"));
+        when(actors.upsert(7L, "TEACHER")).thenReturn(actor);
 
-        assertThatThrownBy(access::requireActor)
+        assertThat(access.requireActor()).isSameAs(actor);
+        assertThatThrownBy(access::requireSensitiveAccess)
             .isInstanceOf(AccessDeniedException.class)
-            .hasMessage("Sin acceso al módulo Prekínder");
+            .hasMessage("Permiso administrativo requerido");
     }
 
     @Test

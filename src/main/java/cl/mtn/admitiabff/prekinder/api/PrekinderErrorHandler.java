@@ -1,6 +1,7 @@
 package cl.mtn.admitiabff.prekinder.api;
 
 import cl.mtn.admitiabff.prekinder.service.VersionConflictException;
+import cl.mtn.admitiabff.prekinder.service.PrekinderDomainException;
 import java.util.Map;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.HttpStatus;
@@ -20,6 +21,12 @@ public class PrekinderErrorHandler {
     @ExceptionHandler(VersionConflictException.class)
     @ResponseStatus(HttpStatus.CONFLICT)
     Map<String, Object> conflict(Exception ignored) { return error("VERSION_CONFLICT", "El dato cambió; resincroniza antes de continuar"); }
+
+    @ExceptionHandler(PrekinderDomainException.class)
+    org.springframework.http.ResponseEntity<Map<String, Object>> domain(PrekinderDomainException exception) {
+        return org.springframework.http.ResponseEntity.status(exception.status())
+            .body(error(exception.code(), exception.getMessage()));
+    }
 
     @ExceptionHandler({AccessDeniedException.class, SecurityException.class})
     @ResponseStatus(HttpStatus.FORBIDDEN)

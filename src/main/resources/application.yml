@@ -39,6 +39,9 @@ spring:
 app:
   prekinder:
     enabled: ${PREKINDER_ENABLED:false}
+    bootstrap-admin-subjects: ${PREKINDER_BOOTSTRAP_ADMIN_SUBJECTS:}
+    publication:
+      worker-delay-ms: ${PREKINDER_PUBLICATION_WORKER_DELAY_MS:3000}
     datasource:
       url: ${PREKINDER_DATASOURCE_URL:jdbc:postgresql://localhost:5433/prekinder}
       username: ${PREKINDER_DATASOURCE_USERNAME:prekinder_app}

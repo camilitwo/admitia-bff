@@ -4,6 +4,7 @@ import cl.mtn.admitiabff.config.AuthContext;
 import cl.mtn.admitiabff.prekinder.config.PrekinderProperties;
 import cl.mtn.admitiabff.prekinder.domain.PrekinderActor;
 import cl.mtn.admitiabff.prekinder.service.PrekinderAccessService;
+import cl.mtn.admitiabff.prekinder.security.PrekinderAuthContext;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.nio.charset.StandardCharsets;
@@ -37,11 +38,14 @@ public class RealtimeTicketService {
         assertAllowedOrigin(origin);
         PrekinderActor actor = access.requireActor();
         var auth = AuthContext.get();
+        var isolated = PrekinderAuthContext.get();
         byte[] value = new byte[32];
         random.nextBytes(value);
         String ticket = Base64.getUrlEncoder().withoutPadding().encodeToString(value);
-        TicketBinding binding = new TicketBinding(actor.id().toString(), String.valueOf(actor.legacyUserId()), actor.role(),
-            auth.sessionId(), origin, "prekinder-realtime", Instant.now().plus(properties.realtime().ticketTtl()).getEpochSecond());
+        String subject = isolated == null ? String.valueOf(actor.legacyUserId()) : isolated.subject();
+        String sessionId = isolated == null ? (auth == null ? "" : auth.sessionId()) : isolated.sessionId();
+        TicketBinding binding = new TicketBinding(actor.id().toString(), subject, actor.role(),
+            sessionId, origin, "prekinder-realtime", Instant.now().plus(properties.realtime().ticketTtl()).getEpochSecond());
         try {
             redis.opsForValue().set(PREFIX + hash(ticket), objectMapper.writeValueAsString(binding), properties.realtime().ticketTtl());
         } catch (JsonProcessingException exception) {
@@ -78,6 +82,6 @@ public class RealtimeTicketService {
     }
 
     public record IssuedTicket(String ticket, long expiresInSeconds) {}
-    public record TicketBinding(String actorId, String legacyUserId, String role, String sessionId,
+    public record TicketBinding(String actorId, String subject, String role, String sessionId,
                                 String origin, String audience, long expiresAt) {}
 }
