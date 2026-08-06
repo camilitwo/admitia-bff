@@ -53,4 +53,28 @@ class ApplicationServiceAdmissionCategoryTest {
             .isInstanceOf(IllegalArgumentException.class)
             .hasMessage("Preferencia de admisión inválida");
     }
+
+    @Test
+    void mapsSiblingInformationToStudent() {
+        StudentEntity student = new StudentEntity();
+
+        ApplicationService.applySiblingInformation(student, Map.of(
+            "hasSiblingsInSchool", true,
+            "siblingsInSchoolDetails", "  María Pérez, 2 Básico  "));
+
+        assertThat(student.isHasSiblingsInSchool()).isTrue();
+        assertThat(student.getSiblingsInSchoolDetails()).isEqualTo("María Pérez, 2 Básico");
+    }
+
+    @Test
+    void selectingNoClearsPreviousSiblingDetails() {
+        StudentEntity student = new StudentEntity();
+        student.setHasSiblingsInSchool(true);
+        student.setSiblingsInSchoolDetails("María Pérez, 2 Básico");
+
+        ApplicationService.applySiblingInformation(student, Map.of("hasSiblingsInSchool", false));
+
+        assertThat(student.isHasSiblingsInSchool()).isFalse();
+        assertThat(student.getSiblingsInSchoolDetails()).isNull();
+    }
 }

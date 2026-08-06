@@ -233,10 +233,16 @@ public class ApplicationService {
         if (nestedStudent instanceof Map<?, ?> nested) {
             @SuppressWarnings("unchecked")
             Map<String, Object> studentPayload = (Map<String, Object>) nested;
+            boolean studentChanged = false;
             if (containsAdmissionCategory(studentPayload)) {
                 applyAdmissionCategory(entity.getStudent(), studentPayload, studentPayload);
-                studentRepository.save(entity.getStudent());
+                studentChanged = true;
             }
+            if (containsSiblingInformation(studentPayload)) {
+                applySiblingInformation(entity.getStudent(), studentPayload);
+                studentChanged = true;
+            }
+            if (studentChanged) studentRepository.save(entity.getStudent());
         }
         if (payload.containsKey("studentGender")) {
             StudentEntity student = entity.getStudent();
@@ -498,8 +504,7 @@ public class ApplicationService {
         student.setInclusionStudent(booleanValue(source.getOrDefault("isInclusionStudent", false)));
         student.setInclusionType(value(source.get("inclusionType")));
         student.setInclusionNotes(value(source.get("inclusionNotes")));
-        student.setHasSiblingsInSchool(booleanValue(source.getOrDefault("hasSiblingsInSchool", false)));
-        student.setSiblingsInSchoolDetails(value(source.get("siblingsInSchoolDetails")));
+        applySiblingInformation(student, source);
         return studentRepository.save(student);
     }
 
@@ -896,6 +901,28 @@ public class ApplicationService {
         Object employeeName = firstPresent(source, payload, "employeeParentName");
         if (!employee) student.setEmployeeParentName(null);
         else if (employeeName != null) student.setEmployeeParentName(String.valueOf(employeeName));
+    }
+
+    static boolean containsSiblingInformation(Map<String, Object> payload) {
+        return payload.containsKey("hasSiblingsInSchool")
+            || payload.containsKey("siblingsInSchoolDetails");
+    }
+
+    static void applySiblingInformation(StudentEntity student, Map<String, Object> source) {
+        if (source.containsKey("hasSiblingsInSchool")) {
+            student.setHasSiblingsInSchool(booleanValueStatic(source.get("hasSiblingsInSchool")));
+        }
+
+        if (!student.isHasSiblingsInSchool()) {
+            student.setSiblingsInSchoolDetails(null);
+            return;
+        }
+
+        if (source.containsKey("siblingsInSchoolDetails")) {
+            Object rawDetails = source.get("siblingsInSchoolDetails");
+            String details = rawDetails == null ? null : String.valueOf(rawDetails).trim();
+            student.setSiblingsInSchoolDetails(details == null || details.isBlank() ? null : details);
+        }
     }
 
     private static Object firstPresent(Map<String, Object> source, Map<String, Object> payload, String... keys) {
