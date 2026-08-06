@@ -1,12 +1,19 @@
 package cl.mtn.admitiabff.prekinder.service;
 
 import cl.mtn.admitiabff.prekinder.crypto.EnvelopeEncryptionService;
+import cl.mtn.admitiabff.prekinder.crypto.EncryptedPayload;
 import cl.mtn.admitiabff.prekinder.domain.PrekinderActor;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
@@ -32,22 +39,74 @@ public class PrekinderWorkspaceService {
     }
 
     public ProcessView createProcess(int academicYear, String name) {
-        access.requireSensitiveAccess();
+        PrekinderActor actor = access.requireSensitiveAccess();
         UUID id = UUID.randomUUID();
-        jdbc.update("""
-            INSERT INTO admission_processes(process_id, academic_year, name, status)
-            VALUES (:id, :year, :name, 'DRAFT')
-            """, Map.of("id", id, "year", academicYear, "name", name));
-        return new ProcessView(id, academicYear, name, "DRAFT");
+        try {
+            jdbc.update("""
+                INSERT INTO admission_processes(process_id, academic_year, name, status)
+                VALUES (:id, :year, :name, 'DRAFT')
+                """, Map.of("id", id, "year", academicYear, "name", name));
+        } catch (DuplicateKeyException exception) {
+            throw new IllegalStateException("Ya existe un proceso Prekínder con ese año y nombre", exception);
+        }
+        audit(actor.id(), "PROCESS_CREATED", id);
+        return process(id);
+    }
+
+    public List<ProcessView> listProcesses() {
+        access.requireSensitiveAccess();
+        return jdbc.query("""
+            SELECT p.process_id, p.academic_year, p.name, p.status, p.starts_at, p.ends_at, p.version,
+                   count(a.application_id) AS application_count,
+                   (p.status = 'PUBLISHED'
+                     AND (p.starts_at IS NULL OR p.starts_at <= now())
+                     AND (p.ends_at IS NULL OR p.ends_at >= now())) AS accepting_applications
+              FROM admission_processes p
+              LEFT JOIN applications a ON a.process_id = p.process_id
+             GROUP BY p.process_id
+             ORDER BY p.academic_year DESC, p.created_at DESC
+            """, Map.of(), (rs, row) -> new ProcessView(
+                rs.getObject("process_id", UUID.class), rs.getInt("academic_year"), rs.getString("name"),
+                rs.getString("status"), instant(rs.getTimestamp("starts_at")), instant(rs.getTimestamp("ends_at")),
+                rs.getLong("version"), rs.getLong("application_count"), rs.getBoolean("accepting_applications")));
+    }
+
+    public ProcessView publishProcess(UUID processId, Instant startsAt, Instant endsAt) {
+        PrekinderActor actor = access.requireSensitiveAccess();
+        if (startsAt == null || endsAt == null || !endsAt.isAfter(startsAt)) {
+            throw new IllegalArgumentException("La fecha de cierre debe ser posterior a la fecha de apertura");
+        }
+        return transactions.execute(status -> {
+            int updated = jdbc.update("""
+                UPDATE admission_processes
+                   SET status = 'PUBLISHED', starts_at = :startsAt, ends_at = :endsAt,
+                       version = version + 1, updated_at = now()
+                 WHERE process_id = :id AND status = 'DRAFT'
+                """, new MapSqlParameterSource().addValue("id", processId)
+                    .addValue("startsAt", java.sql.Timestamp.from(startsAt))
+                    .addValue("endsAt", java.sql.Timestamp.from(endsAt)));
+            if (updated != 1) {
+                throw new IllegalStateException("El proceso no existe o ya fue habilitado");
+            }
+            audit(actor.id(), "PROCESS_PUBLISHED", processId);
+            return process(processId);
+        });
     }
 
     public ApplicationView createApplication(UUID processId, Identity identity) {
         PrekinderActor actor = access.requireSensitiveAccess();
         return transactions.execute(status -> {
+            requireOpenProcess(processId);
+            Identity normalizedIdentity = normalize(identity);
+            jdbc.queryForObject("SELECT pg_advisory_xact_lock(:key)", Map.of("key", lockKey(normalizedIdentity.rut())),
+                (rs, row) -> Boolean.TRUE);
+            if (rutAlreadyRegistered(processId, normalizedIdentity.rut())) {
+                throw new IllegalStateException("Ya existe una postulación para este RUT en el proceso seleccionado");
+            }
             UUID familyId = UUID.randomUUID();
             UUID applicantId = UUID.randomUUID();
             UUID applicationId = UUID.randomUUID();
-            var encrypted = encryption.encrypt(json(identity),
+            var encrypted = encryption.encrypt(json(normalizedIdentity),
                 "prekinder|applicants|" + applicantId + "|application:" + applicationId + "|identity");
             jdbc.update("INSERT INTO families(family_id) VALUES (:id)", Map.of("id", familyId));
             var values = new MapSqlParameterSource()
@@ -65,8 +124,31 @@ public class PrekinderWorkspaceService {
                 VALUES (:id, :applicantId, :processId, 'DRAFT')
                 """, Map.of("id", applicationId, "applicantId", applicantId, "processId", processId));
             audit(actor.id(), "APPLICATION_CREATED", applicationId);
-            return new ApplicationView(applicationId, applicantId, processId, "DRAFT", identity);
+            return new ApplicationView(applicationId, applicantId, processId, "DRAFT", normalizedIdentity, Instant.now());
         });
+    }
+
+    public List<ApplicationView> listApplications(UUID processId) {
+        access.requireSensitiveAccess();
+        process(processId);
+        return jdbc.query("""
+            SELECT a.application_id, a.applicant_id, a.process_id, a.status, a.created_at,
+                   ap.identity_ciphertext, ap.identity_iv, ap.identity_wrapped_dek,
+                   ap.identity_wrapped_dek_iv, ap.identity_key_version
+              FROM applications a
+              JOIN applicants ap ON ap.applicant_id = a.applicant_id
+             WHERE a.process_id = :processId
+             ORDER BY a.created_at DESC
+             LIMIT 1000
+            """, Map.of("processId", processId), (rs, row) -> {
+                UUID applicationId = rs.getObject("application_id", UUID.class);
+                UUID applicantId = rs.getObject("applicant_id", UUID.class);
+                return new ApplicationView(applicationId, applicantId, processId, rs.getString("status"),
+                    decryptIdentity(applicationId, applicantId, rs.getString("identity_ciphertext"),
+                        rs.getString("identity_iv"), rs.getString("identity_wrapped_dek"),
+                        rs.getString("identity_wrapped_dek_iv"), rs.getString("identity_key_version")),
+                    rs.getTimestamp("created_at").toInstant());
+            });
     }
 
     public EvaluationView createEvaluation(UUID applicationId, String typeCode) {
@@ -97,14 +179,86 @@ public class PrekinderWorkspaceService {
             """, Map.of("id", UUID.randomUUID(), "actor", actorId, "action", action, "aggregate", aggregateId));
     }
 
+    private ProcessView process(UUID processId) {
+        List<ProcessView> result = jdbc.query("""
+            SELECT p.process_id, p.academic_year, p.name, p.status, p.starts_at, p.ends_at, p.version,
+                   count(a.application_id) AS application_count,
+                   (p.status = 'PUBLISHED'
+                     AND (p.starts_at IS NULL OR p.starts_at <= now())
+                     AND (p.ends_at IS NULL OR p.ends_at >= now())) AS accepting_applications
+              FROM admission_processes p
+              LEFT JOIN applications a ON a.process_id = p.process_id
+             WHERE p.process_id = :id
+             GROUP BY p.process_id
+            """, Map.of("id", processId), (rs, row) -> new ProcessView(
+                rs.getObject("process_id", UUID.class), rs.getInt("academic_year"), rs.getString("name"),
+                rs.getString("status"), instant(rs.getTimestamp("starts_at")), instant(rs.getTimestamp("ends_at")),
+                rs.getLong("version"), rs.getLong("application_count"), rs.getBoolean("accepting_applications")));
+        if (result.isEmpty()) throw new IllegalArgumentException("Proceso Prekínder no encontrado");
+        return result.getFirst();
+    }
+
+    private void requireOpenProcess(UUID processId) {
+        ProcessView process = process(processId);
+        if (!process.acceptingApplications()) {
+            throw new IllegalStateException("El proceso debe estar publicado y dentro de su periodo de postulación");
+        }
+    }
+
+    private boolean rutAlreadyRegistered(UUID processId, String rut) {
+        return jdbc.query("""
+            SELECT a.application_id, a.applicant_id, ap.identity_ciphertext, ap.identity_iv,
+                   ap.identity_wrapped_dek, ap.identity_wrapped_dek_iv, ap.identity_key_version
+              FROM applications a
+              JOIN applicants ap ON ap.applicant_id = a.applicant_id
+             WHERE a.process_id = :processId
+            """, Map.of("processId", processId), (rs, row) -> decryptIdentity(
+                rs.getObject("application_id", UUID.class), rs.getObject("applicant_id", UUID.class),
+                rs.getString("identity_ciphertext"), rs.getString("identity_iv"), rs.getString("identity_wrapped_dek"),
+                rs.getString("identity_wrapped_dek_iv"), rs.getString("identity_key_version")))
+            .stream().anyMatch(existing -> existing.rut().equals(rut));
+    }
+
+    private Identity decryptIdentity(UUID applicationId, UUID applicantId, String ciphertext, String iv,
+                                     String wrappedDek, String wrappedDekIv, String keyVersion) {
+        String aad = "prekinder|applicants|" + applicantId + "|application:" + applicationId + "|identity";
+        String plaintext = encryption.decrypt(new EncryptedPayload(
+            ciphertext, iv, wrappedDek, wrappedDekIv, keyVersion), aad);
+        try {
+            return mapper.readValue(plaintext, Identity.class);
+        } catch (JsonProcessingException exception) {
+            throw new IllegalStateException("La identidad cifrada no tiene un formato válido", exception);
+        }
+    }
+
+    private static Identity normalize(Identity identity) {
+        if (identity == null) throw new IllegalArgumentException("La identidad del postulante es obligatoria");
+        return new Identity(PrekinderRut.normalize(identity.rut()), identity.firstName().trim(), identity.paternalLastName().trim(),
+            identity.maternalLastName() == null ? "" : identity.maternalLastName().trim());
+    }
+
+    private static long lockKey(String rut) {
+        try {
+            byte[] digest = MessageDigest.getInstance("SHA-256").digest(
+                ("prekinder-application|" + rut).getBytes(StandardCharsets.UTF_8));
+            return ByteBuffer.wrap(digest).getLong();
+        } catch (NoSuchAlgorithmException exception) {
+            throw new IllegalStateException("SHA-256 no está disponible", exception);
+        }
+    }
+
+    private static Instant instant(java.sql.Timestamp value) { return value == null ? null : value.toInstant(); }
+
     private String json(Object value) {
         try { return mapper.writeValueAsString(value); }
         catch (JsonProcessingException exception) { throw new IllegalArgumentException("Identidad inválida"); }
     }
 
-    public record Identity(String firstName, String paternalLastName, String maternalLastName) {}
-    public record ProcessView(UUID processId, int academicYear, String name, String status) {}
-    public record ApplicationView(UUID applicationId, UUID applicantId, UUID processId, String status, Identity identity) {}
+    public record Identity(String rut, String firstName, String paternalLastName, String maternalLastName) {}
+    public record ProcessView(UUID processId, int academicYear, String name, String status, Instant startsAt,
+                              Instant endsAt, long version, long applicationCount, boolean acceptingApplications) {}
+    public record ApplicationView(UUID applicationId, UUID applicantId, UUID processId, String status,
+                                  Identity identity, Instant createdAt) {}
     public record EvaluationView(UUID evaluationId, UUID applicationId, String typeCode, String status,
                                  long serverSequence, long version) {}
 }

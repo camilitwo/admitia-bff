@@ -52,6 +52,8 @@ public class SecurityConfig {
                 .requestMatchers("/health", "/ready", "/gateway/status").permitAll()
                 // El upgrade no lleva Bearer: se autentica una vez con ticket en el frame STOMP CONNECT.
                 .requestMatchers("/api/prekinder/realtime").permitAll()
+                // La superficie REST, incluida la emisión de tickets, queda restringida a ADMIN.
+                .requestMatchers("/api/prekinder/**").hasRole("ADMIN")
                 // Endpoints de auth abiertos (login/logout/refresh deben ser accesibles sin Bearer válido)
                 .requestMatchers("/api/auth/**", "/api/email/**", "/api/institutional-emails/**", "/api/public/**").permitAll()
                 .requestMatchers(HttpMethod.GET, "/api/users/roles", "/api/users/public/**", "/api/applications/stats", "/api/applications/statistics",

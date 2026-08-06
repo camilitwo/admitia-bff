@@ -40,7 +40,7 @@ class RealtimeTicketServiceTest {
 
         PrekinderAccessService access = mock(PrekinderAccessService.class);
         UUID actorId = UUID.randomUUID();
-        when(access.requireActor()).thenReturn(new PrekinderActor(actorId, 42L, "COORDINATOR"));
+        when(access.requireActor()).thenReturn(new PrekinderActor(actorId, 42L, "ADMIN"));
         var properties = new PrekinderProperties(true, null, null,
             new PrekinderProperties.Realtime(List.of("https://admitia.cl"), Duration.ofSeconds(30),
                 Duration.ofSeconds(20), 3, 16_384, 30, Duration.ofSeconds(10)), null);
