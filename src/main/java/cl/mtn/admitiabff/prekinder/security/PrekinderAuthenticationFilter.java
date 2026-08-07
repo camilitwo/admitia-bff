@@ -14,6 +14,7 @@ import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Set;
@@ -54,19 +55,25 @@ public class PrekinderAuthenticationFilter extends OncePerRequestFilter {
         if (header == null || !header.startsWith("Bearer ")) {
             writeUnauthorized(response); return;
         }
+        TokenIdentity identity;
         try {
-            TokenIdentity identity = resolve(header.substring(7));
-            String proposedRole = bootstrapAdmins.contains(identity.subject()) || bootstrapAdmins.contains(identity.email())
-                ? "ADMIN" : identity.role();
-            PrekinderActor actor = actors.upsertSubject(identity.subject(), sha256(identity.email()), proposedRole);
-            var authentication = new UsernamePasswordAuthenticationToken(identity.email(), null,
-                List.of(new SimpleGrantedAuthority("ROLE_" + actor.role())));
-            SecurityContextHolder.getContext().setAuthentication(authentication);
-            PrekinderAuthContext.set(new PrekinderAuthContext.Principal(actor, identity.subject(), identity.email(), identity.sessionId()));
-            try { chain.doFilter(request, response); }
-            finally { PrekinderAuthContext.clear(); }
+            identity = resolve(header.substring(7));
         } catch (Exception exception) {
             writeUnauthorized(response);
+            return;
+        }
+
+        String proposedRole = bootstrapAdmins.contains(identity.subject()) || bootstrapAdmins.contains(identity.email())
+            ? "ADMIN" : identity.role();
+        PrekinderActor actor = actors.upsertSubject(identity.subject(), sha256(identity.email()), proposedRole);
+        var authentication = new UsernamePasswordAuthenticationToken(identity.email(), null,
+            List.of(new SimpleGrantedAuthority("ROLE_" + actor.role())));
+        SecurityContextHolder.getContext().setAuthentication(authentication);
+        PrekinderAuthContext.set(new PrekinderAuthContext.Principal(actor, identity.subject(), identity.email(), identity.sessionId()));
+        try {
+            chain.doFilter(request, response);
+        } finally {
+            PrekinderAuthContext.clear();
         }
     }
 
@@ -92,9 +99,13 @@ public class PrekinderAuthenticationFilter extends OncePerRequestFilter {
         };
     }
 
-    private static String sha256(String value) throws Exception {
-        return java.util.HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
-            .digest((value == null ? "" : value.toLowerCase()).getBytes(StandardCharsets.UTF_8)));
+    private static String sha256(String value) {
+        try {
+            return java.util.HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
+                .digest((value == null ? "" : value.toLowerCase()).getBytes(StandardCharsets.UTF_8)));
+        } catch (NoSuchAlgorithmException exception) {
+            throw new IllegalStateException("SHA-256 no disponible", exception);
+        }
     }
 
     private static void writeUnauthorized(HttpServletResponse response) throws IOException {
