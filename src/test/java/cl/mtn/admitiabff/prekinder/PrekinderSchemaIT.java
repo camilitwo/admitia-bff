@@ -43,6 +43,22 @@ class PrekinderSchemaIT {
         try (var connection = DriverManager.getConnection(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword());
              var statement = connection.createStatement()) {
             statement.executeUpdate("""
+                INSERT INTO actors(actor_id, external_subject, role_code)
+                VALUES ('00000000-0000-0000-0000-000000000010', 'legacy:42', 'APODERADO')
+                ON CONFLICT (external_subject) DO UPDATE SET updated_at = now()
+                """);
+            statement.executeUpdate("""
+                INSERT INTO actors(actor_id, external_subject, role_code)
+                VALUES ('00000000-0000-0000-0000-000000000011', 'legacy:42', 'APODERADO')
+                ON CONFLICT (external_subject) DO UPDATE SET updated_at = now()
+                """);
+            try (var actorCount = statement.executeQuery(
+                    "SELECT count(*) FROM actors WHERE external_subject = 'legacy:42'")) {
+                actorCount.next();
+                assertEquals(1, actorCount.getInt(1));
+            }
+
+            statement.executeUpdate("""
                 INSERT INTO audit_events(audit_id, action, result)
                 VALUES ('00000000-0000-0000-0000-000000000001', 'SCHEMA_TEST', 'SUCCESS')
                 """);
