@@ -42,6 +42,11 @@ public class PrekinderWorkspaceController {
         return Map.of("success", true, "data", workspace.listProcesses());
     }
 
+    @GetMapping("/application-options")
+    public Map<String, Object> applicationOptions() {
+        return Map.of("success", true, "data", workspace.applicationOptions());
+    }
+
     @PutMapping("/processes/{processId}/publication")
     public Map<String, Object> publish(@PathVariable UUID processId, @Valid @RequestBody PublishProcess request) {
         return Map.of("success", true, "data", workspace.publishProcess(processId, request.startsAt(), request.endsAt()));

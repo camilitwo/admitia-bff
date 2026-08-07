@@ -32,6 +32,20 @@ class PrekinderWorkspaceControllerTest {
     }
 
     @Test
+    void exposesOnlyTheActiveApplicationOptionsToTheGuardianFlow() {
+        var option = new PrekinderWorkspaceService.ApplicationOption(
+            UUID.randomUUID(), 2027, "Prekínder 2027", UUID.randomUUID(), "NEW_FAMILIES",
+            Instant.parse("2026-08-05T12:00:00Z"), Instant.parse("2026-08-31T23:59:00Z"));
+        when(workspace.applicationOptions()).thenReturn(List.of(option));
+
+        Map<String, Object> response = controller.applicationOptions();
+
+        verify(workspace).applicationOptions();
+        assertThat(response.get("success")).isEqualTo(true);
+        assertThat(response.get("data")).isEqualTo(List.of(option));
+    }
+
+    @Test
     void publishesAnExplicitApplicationWindow() {
         UUID processId = UUID.randomUUID();
         Instant startsAt = Instant.parse("2026-08-05T12:00:00Z");

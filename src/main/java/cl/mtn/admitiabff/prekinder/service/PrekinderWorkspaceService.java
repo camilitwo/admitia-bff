@@ -75,6 +75,36 @@ public class PrekinderWorkspaceService {
                 rs.getLong("version"), rs.getLong("application_count"), rs.getBoolean("accepting_applications")));
     }
 
+    /**
+     * Exposes only the minimum scheduling data a guardian needs to choose the
+     * Prekinder flow. Administrative counters and unpublished processes stay
+     * behind {@link #listProcesses()}.
+     */
+    public List<ApplicationOption> applicationOptions() {
+        access.requireActor();
+        return jdbc.query("""
+            WITH active_waves AS (
+                SELECT w.*,
+                       count(*) OVER (PARTITION BY w.process_id) AS active_count
+                  FROM process_waves w
+                 WHERE w.status = 'PUBLISHED'
+                   AND w.opens_at <= now()
+                   AND w.closes_at >= now()
+            )
+            SELECT p.process_id, p.academic_year, p.name,
+                   w.wave_id, w.wave_type, w.opens_at, w.closes_at
+              FROM admission_processes p
+              JOIN active_waves w ON w.process_id = p.process_id AND w.active_count = 1
+             WHERE p.status = 'PUBLISHED'
+               AND (p.starts_at IS NULL OR p.starts_at <= now())
+               AND (p.ends_at IS NULL OR p.ends_at >= now())
+             ORDER BY p.academic_year DESC, p.created_at DESC, w.position
+            """, Map.of(), (rs, row) -> new ApplicationOption(
+                rs.getObject("process_id", UUID.class), rs.getInt("academic_year"), rs.getString("name"),
+                rs.getObject("wave_id", UUID.class), rs.getString("wave_type"),
+                instant(rs.getTimestamp("opens_at")), instant(rs.getTimestamp("closes_at"))));
+    }
+
     public ProcessView publishProcess(UUID processId, Instant startsAt, Instant endsAt) {
         PrekinderActor actor = access.requireSensitiveAccess();
         if (startsAt == null || endsAt == null || !endsAt.isAfter(startsAt)) {
@@ -315,6 +345,8 @@ public class PrekinderWorkspaceService {
     public record Identity(String rut, String firstName, String paternalLastName, String maternalLastName) {}
     public record ProcessView(UUID processId, int academicYear, String name, String status, Instant startsAt,
                               Instant endsAt, long version, long applicationCount, boolean acceptingApplications) {}
+    public record ApplicationOption(UUID processId, int academicYear, String name, UUID waveId, String waveType,
+                                    Instant opensAt, Instant closesAt) {}
     public record ApplicationView(UUID applicationId, UUID applicantId, UUID processId, String status,
                                   Identity identity, Instant createdAt) {}
     public record EvaluationView(UUID evaluationId, UUID applicationId, String typeCode, String status,
