@@ -68,7 +68,7 @@ public class PrekinderFlowService {
             throw new IllegalArgumentException("La fecha de cierre debe ser posterior a la apertura");
         }
         if (!List.of("DRAFT", "PUBLISHED", "CLOSED", "CANCELLED").contains(status)) {
-            throw new IllegalArgumentException("Estado de oleada inválido");
+            throw new IllegalArgumentException("Estado de etapa inválido");
         }
         int updated = jdbc.update("""
             UPDATE process_waves SET opens_at = :opensAt, closes_at = :closesAt, status = :status,
@@ -77,7 +77,7 @@ public class PrekinderFlowService {
             """, new MapSqlParameterSource().addValue("waveId", waveId)
                 .addValue("opensAt", Timestamp.from(opensAt)).addValue("closesAt", Timestamp.from(closesAt))
                 .addValue("status", status).addValue("expectedVersion", expectedVersion));
-        if (updated != 1) throw new VersionConflictException("La oleada cambió");
+        if (updated != 1) throw new VersionConflictException("La etapa cambió");
         audit(actor.id(), "WAVE_CONFIGURED", "WAVE", waveId, Map.of("status", status));
         return wave(waveId);
     }
@@ -90,7 +90,7 @@ public class PrekinderFlowService {
         WaveView wave = activeWave(command.processId());
         if (!wave.waveType().equals(category)) {
             throw PrekinderDomainException.forbidden("WAVE_RESTRICTION",
-                "La oleada vigente corresponde a " + waveLabel(wave.waveType()) + " y la declaración no cumple sus requisitos");
+                "La etapa vigente corresponde a " + waveLabel(wave.waveType()) + " y la declaración no cumple sus requisitos");
         }
         return transactions.execute(status -> {
             jdbc.queryForObject("SELECT pg_advisory_xact_lock(:key)", Map.of("key", identityLock(rut)),
@@ -980,8 +980,8 @@ public class PrekinderFlowService {
 
     private WaveView activeWave(UUID processId) {
         List<WaveView> active = waves(processId).stream().filter(WaveView::active).toList();
-        if (active.isEmpty()) throw PrekinderDomainException.forbidden("NO_ACTIVE_WAVE", "No existe una oleada abierta en este momento");
-        if (active.size() > 1) throw PrekinderDomainException.conflict("WAVE_CONFIGURATION", "Existe más de una oleada activa");
+        if (active.isEmpty()) throw PrekinderDomainException.forbidden("NO_ACTIVE_WAVE", "No existe una etapa abierta en este momento");
+        if (active.size() > 1) throw PrekinderDomainException.conflict("WAVE_CONFIGURATION", "Existe más de una etapa activa");
         return active.getFirst();
     }
 
