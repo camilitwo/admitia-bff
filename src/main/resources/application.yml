@@ -39,6 +39,13 @@ spring:
 app:
   prekinder:
     enabled: ${PREKINDER_ENABLED:false}
+    payment:
+      enabled: ${PREKINDER_PAYMENT_ENABLED:false}
+      application-fee: ${PREKINDER_PAYMENT_APPLICATION_FEE:0}
+      payment-glosa: ${PREKINDER_PAYMENT_GLOSA:Postulación Prekínder}
+      currency: ${PREKINDER_PAYMENT_CURRENCY:CLP}
+      due-days: ${PREKINDER_PAYMENT_DUE_DAYS:3}
+      reference-prefix: ${PREKINDER_PAYMENT_REFERENCE_PREFIX:ADMITIA-PK}
     bootstrap-admin-subjects: ${PREKINDER_BOOTSTRAP_ADMIN_SUBJECTS:}
     publication:
       worker-delay-ms: ${PREKINDER_PUBLICATION_WORKER_DELAY_MS:3000}

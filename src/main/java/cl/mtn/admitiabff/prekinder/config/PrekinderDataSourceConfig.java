@@ -14,7 +14,7 @@ import org.springframework.transaction.PlatformTransactionManager;
 
 @Configuration
 @ConditionalOnProperty(prefix = "app.prekinder", name = "enabled", havingValue = "true")
-@EnableConfigurationProperties(PrekinderProperties.class)
+@EnableConfigurationProperties({PrekinderProperties.class, PrekinderPaymentProperties.class})
 public class PrekinderDataSourceConfig {
 
     @Bean(name = "prekinderDataSource", destroyMethod = "close")

@@ -32,11 +32,13 @@ class PrekinderSchemaIT {
                     'schedule_slots','schedule_assignment_history','evaluation_assignments','evaluation_status_history',
                     'comments','comment_revisions','support_record_revisions','referral_revisions',
                     'committee_dossiers','committee_decisions','offer_status_history',
-                    'restricted_case_access_grants','audit_events','outbox_events'
+                    'restricted_case_access_grants','audit_events','outbox_events',
+                    'prekinder_payments','prekinder_payment_events',
+                    'prekinder_application_school_syncs','prekinder_complementary_forms'
                   )
                  """)) {
-            try (var result = countStatement.executeQuery()) { result.next(); assertEquals(58, result.getInt(1)); }
-            try (var result = statement.executeQuery()) { result.next(); assertEquals(18, result.getInt(1)); }
+            try (var result = countStatement.executeQuery()) { result.next(); assertEquals(62, result.getInt(1)); }
+            try (var result = statement.executeQuery()) { result.next(); assertEquals(22, result.getInt(1)); }
         }
 
 

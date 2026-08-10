@@ -28,16 +28,7 @@ public record MtnAdmissionProperties(
     public enum ClientAuthMethod { BASIC, FORM }
 
     public void validateForUse() {
-        if (!enabled) throw PaymentIntegrationException.unavailable("La integración de pagos MTN no está habilitada");
-        if (isBlank(baseUrl) || isBlank(clientCode) || isBlank(clientSecret)) {
-            throw PaymentIntegrationException.auth("La integración MTN no tiene URL o credenciales configuradas");
-        }
-        if (baseUrl.startsWith("http://") && !allowInsecureHttp) {
-            throw PaymentIntegrationException.auth("La API MTN debe utilizar HTTPS fuera de QA");
-        }
-        if (!baseUrl.startsWith("https://") && !baseUrl.startsWith("http://")) {
-            throw PaymentIntegrationException.auth("MTN_ADMISSION_BASE_URL no es una URL HTTP(S) válida");
-        }
+        validateConnectionForUse();
         if (applicationFee == null || applicationFee.signum() <= 0) {
             throw PaymentIntegrationException.invalidData("El monto configurado para la postulación debe ser mayor a cero");
         }
@@ -48,6 +39,19 @@ public record MtnAdmissionProperties(
             throw PaymentIntegrationException.invalidData("La moneda configurada debe ser CLP o CLF");
         }
         if (dueDays < 0) throw PaymentIntegrationException.invalidData("Los días de vencimiento no pueden ser negativos");
+    }
+
+    public void validateConnectionForUse() {
+        if (!enabled) throw PaymentIntegrationException.unavailable("La integración de pagos MTN no está habilitada");
+        if (isBlank(baseUrl) || isBlank(clientCode) || isBlank(clientSecret)) {
+            throw PaymentIntegrationException.auth("La integración MTN no tiene URL o credenciales configuradas");
+        }
+        if (baseUrl.startsWith("http://") && !allowInsecureHttp) {
+            throw PaymentIntegrationException.auth("La API MTN debe utilizar HTTPS fuera de QA");
+        }
+        if (!baseUrl.startsWith("https://") && !baseUrl.startsWith("http://")) {
+            throw PaymentIntegrationException.auth("MTN_ADMISSION_BASE_URL no es una URL HTTP(S) válida");
+        }
     }
 
     private static boolean isBlank(String value) {
