@@ -3,6 +3,7 @@ package cl.mtn.admitiabff.prekinder.service;
 import cl.mtn.admitiabff.prekinder.crypto.EncryptedPayload;
 import cl.mtn.admitiabff.prekinder.crypto.EnvelopeEncryptionService;
 import cl.mtn.admitiabff.prekinder.domain.PrekinderActor;
+import cl.mtn.admitiabff.prekinder.realtime.PrekinderRealtimeNotifier;
 import java.math.BigDecimal;
 import java.sql.Timestamp;
 import java.time.Duration;
@@ -27,14 +28,17 @@ public class PrekinderReportService {
     private final TransactionTemplate transactions;
     private final PrekinderAccessService access;
     private final EnvelopeEncryptionService encryption;
+    private final PrekinderRealtimeNotifier realtime;
 
     public PrekinderReportService(@Qualifier("prekinderJdbc") NamedParameterJdbcTemplate jdbc,
                                   @Qualifier("prekinderTransactionManager") PlatformTransactionManager manager,
-                                  PrekinderAccessService access, EnvelopeEncryptionService encryption) {
+                                  PrekinderAccessService access, EnvelopeEncryptionService encryption,
+                                  PrekinderRealtimeNotifier realtime) {
         this.jdbc = jdbc;
         this.transactions = new TransactionTemplate(manager);
         this.access = access;
         this.encryption = encryption;
+        this.realtime = realtime;
     }
 
     public ReportView report(UUID reportId) {
@@ -115,6 +119,7 @@ public class PrekinderReportService {
                     version = version + 1, updated_at = now() WHERE report_id = :id
                 """, Map.of("id", reportId));
             audit(actor.id(), "REPORT_RESPONSE_SAVED", reportId, Map.of("criterionId", criterionId));
+            realtime.notifyAfterCommit(actor.id(), processId(header.groupId()), "EVALUATOR_REPORT_UPDATED");
             return report(reportId);
         });
     }
@@ -154,6 +159,7 @@ public class PrekinderReportService {
             jdbc.update("UPDATE evaluator_reports SET version = version + 1, updated_at = now() WHERE report_id = :id",
                 Map.of("id", reportId));
             audit(actor.id(), "REPORT_NOTE_SAVED", reportId, Map.of());
+            realtime.notifyAfterCommit(actor.id(), processId(header.groupId()), "EVALUATOR_REPORT_UPDATED");
             return report(reportId);
         });
     }
@@ -187,6 +193,7 @@ public class PrekinderReportService {
                 .addValue("score", score).addValue("maximum", maximum));
             if (updated != 1) throw new VersionConflictException("El informe cambió");
             audit(actor.id(), "REPORT_COMPLETED", reportId, Map.of());
+            realtime.notifyAfterCommit(actor.id(), processId(header.groupId()), "EVALUATOR_REPORT_COMPLETED");
             return report(reportId);
         });
     }
@@ -208,6 +215,9 @@ public class PrekinderReportService {
                 version = version + 1, updated_at = now() WHERE report_id = :id
             """, Map.of("id", reportId));
         audit(actor.id(), "REPORT_EXTENDED", reportId, Map.of("validUntil", validUntil.toString()));
+        UUID evaluatorId = header(reportId).evaluatorId();
+        ReportHeader reopened = header(reportId);
+        realtime.notifyAfterCommit(evaluatorId, processId(reopened.groupId()), "EVALUATOR_REPORT_REOPENED");
         return reportForAdmin(reportId);
     }
 
@@ -245,6 +255,11 @@ public class PrekinderReportService {
                 rs.getLong("version"), rs.getString("stage"), rs.getString("group_code"),
                 instant(rs.getTimestamp("starts_at")), instant(rs.getTimestamp("ends_at")), rs.getString("room_name"));
             });
+    }
+
+    private UUID processId(UUID groupId) {
+        return jdbc.queryForObject("SELECT process_id FROM evaluation_groups WHERE group_id = :groupId",
+            Map.of("groupId", groupId), UUID.class);
     }
 
     private String applicantName(UUID applicationId) {

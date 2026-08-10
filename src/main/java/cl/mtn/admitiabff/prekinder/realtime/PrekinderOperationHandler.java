@@ -47,6 +47,25 @@ public class PrekinderOperationHandler {
                 ack(principal.getName(), operation.operationId(), "WATCHING", null, false);
                 return;
             }
+            if (operation.type() == OperationType.WATCH_ACTOR) {
+                UUID actorId = require(operation.actorId(), "actorId");
+                if (!actorId.toString().equals(binding.actorId())) {
+                    throw new SecurityException("Sólo puedes observar tu propia jornada");
+                }
+                presence.watch(actorId, binding.actorId());
+                ack(principal.getName(), operation.operationId(), "WATCHING", null, false);
+                return;
+            }
+            if (operation.type() == OperationType.WATCH_PROCESS) {
+                UUID processId = require(operation.processId(), "processId");
+                if (!java.util.Set.of("ADMIN", "COORDINATOR", "CYCLE_DIRECTOR", "PK_ADMIN", "PK_COORDINATOR", "PK_REVIEWER")
+                    .contains(binding.role())) {
+                    throw new SecurityException("Permiso operativo requerido para observar el proceso");
+                }
+                presence.watch(processId, binding.actorId());
+                ack(principal.getName(), operation.operationId(), "WATCHING", null, false);
+                return;
+            }
             PrekinderCommentService.MutationResult result = switch (operation.type()) {
                 case COMMENT_CREATE -> comments.create(require(operation.evaluationId(), "evaluationId"), operation.operationId(),
                     content(operation.content()), operation.operationId().toString());
@@ -109,10 +128,12 @@ public class PrekinderOperationHandler {
         @NotNull UUID operationId,
         @NotNull OperationType type,
         UUID evaluationId,
+        UUID actorId,
+        UUID processId,
         UUID commentId,
         @Min(1) Integer baseRevision,
         @Size(max = 8000) String content,
         @Min(0) @Max(Long.MAX_VALUE) Long clientSequence
     ) {}
-    public enum OperationType { WATCH_EVALUATION, COMMENT_CREATE, COMMENT_REVISE, COMMENT_TOMBSTONE }
+    public enum OperationType { WATCH_EVALUATION, WATCH_ACTOR, WATCH_PROCESS, COMMENT_CREATE, COMMENT_REVISE, COMMENT_TOMBSTONE }
 }

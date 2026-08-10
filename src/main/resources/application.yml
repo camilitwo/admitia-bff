@@ -74,6 +74,7 @@ app:
       max-frame-bytes: 16384
       operations-per-window: 30
       rate-window: 10s
+      relay-delay-ms: ${PREKINDER_REALTIME_RELAY_DELAY_MS:2000}
     mtls:
       enforced: ${PREKINDER_MTLS_ENFORCED:false}
       port: ${PREKINDER_MTLS_PORT:8443}

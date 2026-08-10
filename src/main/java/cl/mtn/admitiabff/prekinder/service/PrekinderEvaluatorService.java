@@ -3,6 +3,7 @@ package cl.mtn.admitiabff.prekinder.service;
 import cl.mtn.admitiabff.prekinder.crypto.EncryptedPayload;
 import cl.mtn.admitiabff.prekinder.crypto.EnvelopeEncryptionService;
 import cl.mtn.admitiabff.prekinder.domain.PrekinderActor;
+import cl.mtn.admitiabff.prekinder.realtime.PrekinderRealtimeNotifier;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.sql.Timestamp;
 import java.time.Instant;
@@ -31,17 +32,19 @@ public class PrekinderEvaluatorService {
     private final PrekinderReportService reports;
     private final EnvelopeEncryptionService encryption;
     private final ObjectMapper mapper;
+    private final PrekinderRealtimeNotifier realtime;
 
     public PrekinderEvaluatorService(@Qualifier("prekinderJdbc") NamedParameterJdbcTemplate jdbc,
         @Qualifier("prekinderTransactionManager") PlatformTransactionManager manager,
         PrekinderAccessService access, PrekinderReportService reports,
-        EnvelopeEncryptionService encryption, ObjectMapper mapper) {
+        EnvelopeEncryptionService encryption, ObjectMapper mapper, PrekinderRealtimeNotifier realtime) {
         this.jdbc = jdbc;
         this.transactions = new TransactionTemplate(manager);
         this.access = access;
         this.reports = reports;
         this.encryption = encryption;
         this.mapper = mapper;
+        this.realtime = realtime;
     }
 
     public List<InstrumentView> instruments() {
@@ -88,6 +91,51 @@ public class PrekinderEvaluatorService {
             });
         InstrumentView profile = instrument(instrument);
         return new EvaluatorAgenda(new Profile(actor.id(), profile.instrumentCode(), profile.displayName()), assignments);
+    }
+
+    public EvaluatorWorkspace workspace(UUID processId, LocalDate date) {
+        PrekinderActor actor = access.requireEvaluator();
+        LocalDate effectiveDate = date == null ? LocalDate.now(SANTIAGO) : date;
+        List<InstrumentAgenda> instruments = jdbc.query("""
+            SELECT DISTINCT i.instrument_code, i.display_name, i.capture_mode, i.sensitive, i.active, i.position
+              FROM evaluation_instruments i
+             WHERE i.active = true
+               AND (
+                    EXISTS (
+                        SELECT 1
+                          FROM professional_instrument_authorizations authorization
+                         WHERE authorization.professional_id = :actorId
+                           AND authorization.instrument_code = i.instrument_code
+                           AND authorization.active = true
+                           AND authorization.valid_from <= now()
+                           AND (authorization.valid_until IS NULL OR authorization.valid_until > now())
+                           AND (:processId IS NULL OR authorization.process_id = :processId)
+                    )
+                    OR EXISTS (
+                        SELECT 1
+                          FROM group_instrument_assignments assignment
+                          JOIN evaluation_groups assigned_group ON assigned_group.group_id = assignment.group_id
+                         WHERE assignment.evaluator_id = :actorId
+                           AND assignment.instrument_code = i.instrument_code
+                           AND assignment.status NOT IN ('REPLACED','CANCELLED')
+                           AND (:processId IS NULL OR assigned_group.process_id = :processId)
+                    )
+               )
+             ORDER BY i.position
+            """, new MapSqlParameterSource().addValue("actorId", actor.id()).addValue("processId", processId),
+            (rs, row) -> new InstrumentView(rs.getString("instrument_code"), rs.getString("display_name"),
+                rs.getString("capture_mode"), rs.getBoolean("sensitive"), rs.getBoolean("active"),
+                rs.getInt("position")))
+            .stream()
+            .filter(instrument -> roleAllowsInstrument(actor, instrument.instrumentCode()))
+            .map(instrument -> new InstrumentAgenda(instrument,
+                agenda(processId, effectiveDate, instrument.instrumentCode()).assignments()))
+            .toList();
+        Long sequence = jdbc.queryForObject("""
+            SELECT coalesce(max(sequence), 0) FROM outbox_events
+             WHERE aggregate_type = 'EVALUATOR_WORKSPACE' AND aggregate_id = :actorId
+            """, Map.of("actorId", actor.id()), Long.class);
+        return new EvaluatorWorkspace(actor.id(), effectiveDate, sequence == null ? 0 : sequence, instruments);
     }
 
     public AssignmentView assign(UUID groupId, String requestedInstrument, UUID evaluatorId, UUID templateVersionId,
@@ -150,6 +198,7 @@ public class PrekinderEvaluatorService {
                 """, Map.of("operationId", operationId, "actorId", actor.id(), "assignmentId", assignmentId));
             audit(actor.id(), "INSTRUMENT_ASSIGNED", assignmentId,
                 Map.of("groupId", groupId.toString(), "instrumentCode", instrument, "reason", safeReason(reason)));
+            realtime.notifyAfterCommit(evaluatorId, context.processId(), "EVALUATOR_ASSIGNMENT_CREATED");
             return assignment(assignmentId);
         });
     }
@@ -171,6 +220,7 @@ public class PrekinderEvaluatorService {
                 VALUES (:operationId, :actorId, 'INSTRUMENT_AUTHORIZED', :professionalId)
                 ON CONFLICT (operation_id) DO NOTHING
                 """, Map.of("operationId", operationId, "actorId", actor.id(), "professionalId", professionalId));
+            realtime.notifyAfterCommit(professionalId, processId, "EVALUATOR_AUTHORIZATION_CHANGED");
         });
     }
 
@@ -219,7 +269,9 @@ public class PrekinderEvaluatorService {
                 ON CONFLICT (operation_id) DO NOTHING
                 """, Map.of("operationId", operationId, "actorId", actor.id(), "operationType",
                 "EVALUATION_" + target, "assignmentId", assignmentId));
-            return assignment(assignmentId);
+            AssignmentView changed = assignment(assignmentId);
+            realtime.notifyAfterCommit(actor.id(), changed.group().processId(), "EVALUATOR_ASSIGNMENT_" + target);
+            return changed;
         });
     }
 
@@ -311,12 +363,15 @@ public class PrekinderEvaluatorService {
     }
 
     private static void assertRoleInstrument(PrekinderActor actor, String instrument) {
-        if (ADMIN_ROLES.contains(actor.role())
-            || Set.of("TEACHER", "PSYCHOLOGIST", "INTERVIEWER", "EVALUATOR").contains(actor.role())) return;
-        String roleInstrument = normalizeInstrument(actor.role());
-        if (!instrument.equals(roleInstrument)) {
+        if (!roleAllowsInstrument(actor, instrument)) {
             throw PrekinderDomainException.forbidden("INSTRUMENT_NOT_AUTHORIZED", "El instrumento no corresponde al perfil autenticado");
         }
+    }
+
+    private static boolean roleAllowsInstrument(PrekinderActor actor, String instrument) {
+        if (ADMIN_ROLES.contains(actor.role())
+            || Set.of("TEACHER", "PSYCHOLOGIST", "INTERVIEWER", "EVALUATOR").contains(actor.role())) return true;
+        return instrument.equals(normalizeInstrument(actor.role()));
     }
 
     private void audit(UUID actorId, String action, UUID aggregateId, Map<String, ?> metadata) {
@@ -335,6 +390,9 @@ public class PrekinderEvaluatorService {
                                      boolean professionalActive, String templateStatus, String templateInstrument) {}
     public record InstrumentView(String instrumentCode, String displayName, String captureMode,
                                  boolean sensitive, boolean active, int position) {}
+    public record InstrumentAgenda(InstrumentView instrument, List<AssignmentView> assignments) {}
+    public record EvaluatorWorkspace(UUID actorId, LocalDate date, long serverSequence,
+                                     List<InstrumentAgenda> instruments) {}
     public record Profile(UUID actorId, String instrumentCode, String instrumentName) {}
     public record EvaluatorAgenda(Profile profile, List<AssignmentView> assignments) {}
     public record AssignmentView(UUID assignmentId, String instrumentCode, String status, long version,

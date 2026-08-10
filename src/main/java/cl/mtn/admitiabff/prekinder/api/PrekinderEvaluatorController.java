@@ -38,6 +38,12 @@ public class PrekinderEvaluatorController {
         return ok(evaluators.agenda(processId, date, instrument));
     }
 
+    @GetMapping("/me/evaluator-workspace")
+    public Map<String, Object> workspace(@RequestParam(required = false) UUID processId,
+        @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate date) {
+        return ok(evaluators.workspace(processId, date));
+    }
+
     @PutMapping("/groups/{groupId}/instruments/{instrumentCode}/assignment")
     public Map<String, Object> assign(@PathVariable UUID groupId, @PathVariable String instrumentCode,
                                       @Valid @RequestBody AssignmentCommand command) {
