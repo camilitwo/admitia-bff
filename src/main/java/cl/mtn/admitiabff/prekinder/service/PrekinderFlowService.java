@@ -70,16 +70,25 @@ public class PrekinderFlowService {
         if (!List.of("DRAFT", "PUBLISHED", "CLOSED", "CANCELLED").contains(status)) {
             throw new IllegalArgumentException("Estado de etapa inválido");
         }
-        int updated = jdbc.update("""
-            UPDATE process_waves SET opens_at = :opensAt, closes_at = :closesAt, status = :status,
-                   version = version + 1, updated_at = now()
-             WHERE wave_id = :waveId AND version = :expectedVersion
-            """, new MapSqlParameterSource().addValue("waveId", waveId)
-                .addValue("opensAt", Timestamp.from(opensAt)).addValue("closesAt", Timestamp.from(closesAt))
-                .addValue("status", status).addValue("expectedVersion", expectedVersion));
-        if (updated != 1) throw new VersionConflictException("La etapa cambió");
-        audit(actor.id(), "WAVE_CONFIGURED", "WAVE", waveId, Map.of("status", status));
-        return wave(waveId);
+        return transactions.execute(transaction -> {
+            int updated;
+            try {
+                updated = jdbc.update("""
+                    UPDATE process_waves SET opens_at = :opensAt, closes_at = :closesAt, status = :status,
+                           version = version + 1, updated_at = now()
+                     WHERE wave_id = :waveId AND version = :expectedVersion
+                    """, new MapSqlParameterSource().addValue("waveId", waveId)
+                        .addValue("opensAt", Timestamp.from(opensAt)).addValue("closesAt", Timestamp.from(closesAt))
+                        .addValue("status", status).addValue("expectedVersion", expectedVersion));
+            } catch (DataIntegrityViolationException exception) {
+                throw PrekinderDomainException.conflict("STAGE_OVERLAP",
+                    "La etapa publicada se superpone con otra etapa del mismo proceso");
+            }
+            if (updated != 1) throw new VersionConflictException("La etapa cambió");
+            audit(actor.id(), "WAVE_CONFIGURED", "WAVE", waveId, Map.of(
+                "status", status, "opensAt", opensAt.toString(), "closesAt", closesAt.toString()));
+            return wave(waveId);
+        });
     }
 
     public ApplicationView submitApplication(SubmitApplication command) {

@@ -19,6 +19,10 @@ public class PrekinderDataSourceConfig {
 
     @Bean(name = "prekinderDataSource", destroyMethod = "close")
     DataSource prekinderDataSource(PrekinderProperties properties) {
+        return new HikariDataSource(hikariConfig(properties));
+    }
+
+    static HikariConfig hikariConfig(PrekinderProperties properties) {
         var source = properties.datasource();
         HikariConfig config = new HikariConfig();
         config.setJdbcUrl(source.url());
@@ -31,8 +35,12 @@ public class PrekinderDataSourceConfig {
         config.setConnectionTimeout(source.hikari().connectionTimeout());
         config.setValidationTimeout(source.hikari().validationTimeout());
         config.setLeakDetectionThreshold(source.hikari().leakDetectionThreshold());
-        config.setAutoCommit(false);
-        return new HikariDataSource(config);
+        // JdbcTransactionManager desactiva auto-commit mientras existe una transacción.
+        // Fuera de ella, JDBC debe confirmar las operaciones de una sola sentencia;
+        // dejar el pool permanentemente en false provoca rollbacks silenciosos al
+        // devolver la conexión a Hikari.
+        config.setAutoCommit(true);
+        return config;
     }
 
     @Bean(name = "prekinderJdbc")
