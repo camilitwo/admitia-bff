@@ -8,6 +8,7 @@ import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 import java.time.Instant;
 import java.time.LocalDate;
@@ -53,7 +54,7 @@ public class PrekinderFlowController {
             alumni(command.eligibility().motherAlumni()));
         return ok(flow.submitApplication(new PrekinderFlowService.SubmitApplication(command.processId(), command.rut(),
             command.firstName(), command.paternalLastName(), command.maternalLastName(), command.birthDate(),
-            command.familyEmail(), command.fatherEmail(), command.motherEmail(), eligibility)));
+            command.familyEmail(), command.fatherEmail(), command.motherEmail(), details(command.applicationDetails()), eligibility)));
     }
 
     @GetMapping("/applications")
@@ -67,9 +68,12 @@ public class PrekinderFlowController {
     @GetMapping("/professionals")
     public Map<String, Object> professionals() { return ok(flow.professionals()); }
 
+    @GetMapping("/professional-roles")
+    public Map<String, Object> professionalRoles() { return ok(flow.professionalRoles()); }
+
     @PostMapping("/professionals")
     public Map<String, Object> professional(@Valid @RequestBody ProfessionalCommand command) {
-        return ok(flow.saveProfessional(new PrekinderFlowService.ProfessionalCommand(command.professionalId(),
+        return ok(flow.saveProfessional(new PrekinderFlowService.ProfessionalCommand(command.processId(), command.professionalId(),
             command.legacyUserId(), command.displayName(), command.email(), command.specialty(), command.roleCode(),
             command.active(), command.expectedVersion())));
     }
@@ -188,6 +192,25 @@ public class PrekinderFlowController {
 
     private static Map<String, Object> ok(Object data) { return Map.of("success", true, "data", data); }
 
+    private static PrekinderFlowService.ApplicationDetails details(ApplicationDetails value) {
+        return new PrekinderFlowService.ApplicationDetails(value.gender(), value.studentEmail(),
+            new PrekinderFlowService.AddressDetails(value.address().street(), value.address().number(),
+                value.address().apartment(), value.address().country(), value.address().region(), value.address().commune()),
+            value.grade(), value.applicationYear(), value.currentSchool(), value.additionalNotes(),
+            value.admissionPreference(), value.hasSiblingsInSchool(), value.siblingsInSchoolDetails(),
+            adult(value.father()), adult(value.mother()), responsible(value.supporter()), responsible(value.guardian()));
+    }
+
+    private static PrekinderFlowService.FamilyAdultDetails adult(FamilyAdultDetails value) {
+        return new PrekinderFlowService.FamilyAdultDetails(value.fullName(), value.rut(), value.email(), value.phone(),
+            value.address(), value.profession());
+    }
+
+    private static PrekinderFlowService.ResponsibleAdultDetails responsible(ResponsibleAdultDetails value) {
+        return new PrekinderFlowService.ResponsibleAdultDetails(value.fullName(), value.rut(), value.email(), value.phone(),
+            value.relationship());
+    }
+
     public record WaveCommand(@NotNull Instant opensAt, @NotNull Instant closesAt, @NotBlank String status,
                               @Min(0) long expectedVersion) {}
     public record SiblingDeclaration(@NotBlank @Size(max = 160) String name, @NotBlank @Size(max = 16) String rut,
@@ -196,15 +219,35 @@ public class PrekinderFlowController {
                                     @Size(max = 1000) String withdrawalReason) {}
     public record EligibilityDeclaration(List<@Valid SiblingDeclaration> siblings, String employeeParent,
                                          @Valid AlumniDeclaration fatherAlumni, @Valid AlumniDeclaration motherAlumni) {}
+    public record AddressDetails(@NotBlank @Size(max = 160) String street, @NotBlank @Size(max = 24) String number,
+        @Size(max = 64) String apartment, @NotBlank @Size(max = 80) String country,
+        @Size(max = 120) String region, @NotBlank @Size(max = 120) String commune) {}
+    public record FamilyAdultDetails(@NotBlank @Size(max = 200) String fullName,
+        @NotBlank @Size(max = 16) String rut, @Email @NotBlank @Size(max = 254) String email,
+        @NotBlank @Size(max = 32) String phone, @NotBlank @Size(max = 300) String address,
+        @Size(max = 160) String profession) {}
+    public record ResponsibleAdultDetails(@NotBlank @Size(max = 200) String fullName,
+        @NotBlank @Size(max = 16) String rut, @Email @NotBlank @Size(max = 254) String email,
+        @NotBlank @Size(max = 32) String phone, @NotBlank @Size(max = 64) String relationship) {}
+    public record ApplicationDetails(@NotBlank @Pattern(regexp = "MALE|FEMALE") String gender,
+        @Email @Size(max = 254) String studentEmail, @NotNull @Valid AddressDetails address,
+        @NotBlank @Pattern(regexp = "PRE_KINDER") String grade, @Min(2026) @Max(2100) int applicationYear,
+        @Size(max = 200) String currentSchool, @Size(max = 4000) String additionalNotes,
+        @NotBlank @Pattern(regexp = "NINGUNA|HIJO_FUNCIONARIO|HIJO_EX_ALUMNO") String admissionPreference,
+        boolean hasSiblingsInSchool, @Size(max = 1000) String siblingsInSchoolDetails,
+        @NotNull @Valid FamilyAdultDetails father, @NotNull @Valid FamilyAdultDetails mother,
+        @NotNull @Valid ResponsibleAdultDetails supporter, @NotNull @Valid ResponsibleAdultDetails guardian) {}
     public record SubmitApplication(@NotNull UUID processId, @NotBlank @Size(max = 16) String rut,
         @NotBlank @Size(max = 100) String firstName, @NotBlank @Size(max = 100) String paternalLastName,
         @Size(max = 100) String maternalLastName, @NotNull LocalDate birthDate,
         @Email @Size(max = 254) String familyEmail,
         @Email @Size(max = 254) String fatherEmail, @Email @Size(max = 254) String motherEmail,
+        @NotNull @Valid ApplicationDetails applicationDetails,
         @NotNull @Valid EligibilityDeclaration eligibility) {}
     public record EligibilityReview(@NotBlank String decision, @Size(max = 2000) String reason,
                                     @Min(0) long expectedVersion) {}
-    public record ProfessionalCommand(UUID professionalId, Long legacyUserId, @NotBlank @Size(max = 160) String displayName,
+    public record ProfessionalCommand(@NotNull UUID processId, UUID professionalId, Long legacyUserId,
+        @NotBlank @Size(max = 160) String displayName,
         @Email @NotBlank @Size(max = 254) String email, @Size(max = 96) String specialty, @NotBlank String roleCode,
         boolean active, @Min(0) long expectedVersion) {}
     public record AvailabilityCommand(@NotNull Instant startsAt, @NotNull Instant endsAt, @NotBlank String status) {}

@@ -32,6 +32,23 @@ import org.springframework.transaction.support.TransactionTemplate;
 @ConditionalOnProperty(prefix = "app.prekinder", name = "enabled", havingValue = "true")
 public class PrekinderFlowService {
     private static final ZoneId SANTIAGO = ZoneId.of("America/Santiago");
+    private static final List<ProfessionalRoleDefinition> PROFESSIONAL_ROLES = List.of(
+        new ProfessionalRoleDefinition("PK_ADMIN", "Administrador/a del proceso", "ADMINISTRACION", null, 1),
+        new ProfessionalRoleDefinition("PK_COORDINATOR", "Coordinador/a Prekínder", "ADMINISTRACION", null, 2),
+        new ProfessionalRoleDefinition("PK_RECEPTION", "Recepción y asistencia", "OPERACION", null, 3),
+        new ProfessionalRoleDefinition("PK_DATA_ENTRY", "Registro y digitación", "OPERACION", null, 4),
+        new ProfessionalRoleDefinition("PK_EVALUATOR_ACADEMIC", "Evaluador/a académico", "EVALUACION", "ACADEMIC", 5),
+        new ProfessionalRoleDefinition("PK_EVALUATOR_PSYCHOMOTOR", "Evaluador/a de psicomotricidad", "EVALUACION", "PSYCHOMOTOR", 6),
+        new ProfessionalRoleDefinition("PK_EVALUATOR_PSYCHOLOGY", "Psicólogo/a evaluador/a", "EVALUACION", "PSYCHOLOGY", 7),
+        new ProfessionalRoleDefinition("PK_EVALUATOR_ENTRY_INDICATORS", "Evaluador/a de indicadores de ingreso", "EVALUACION", "ENTRY_INDICATORS", 8),
+        new ProfessionalRoleDefinition("PK_EVALUATOR_GROUP_OBSERVATION", "Observador/a grupal", "EVALUACION", "GROUP_OBSERVATION", 9),
+        new ProfessionalRoleDefinition("PK_EVALUATOR_LEARNING_SUPPORT", "Profesional de Apoyo al Aprendizaje", "EVALUACION", "LEARNING_SUPPORT", 10),
+        new ProfessionalRoleDefinition("PK_EVALUATOR_DAP", "Profesional DAP", "EVALUACION", "DAP", 11),
+        new ProfessionalRoleDefinition("PK_REVIEWER", "Revisor/a de informes", "DECISION_CONTROL", null, 12),
+        new ProfessionalRoleDefinition("PK_COMMITTEE", "Integrante de comisión", "DECISION_CONTROL", null, 13),
+        new ProfessionalRoleDefinition("PK_FINAL_APPROVER", "Responsable de decisión final", "DECISION_CONTROL", null, 14),
+        new ProfessionalRoleDefinition("PK_AUDITOR", "Auditor/a del proceso", "DECISION_CONTROL", null, 15)
+    );
     private final NamedParameterJdbcTemplate jdbc;
     private final TransactionTemplate transactions;
     private final PrekinderAccessService access;
@@ -101,6 +118,7 @@ public class PrekinderFlowService {
             throw PrekinderDomainException.forbidden("WAVE_RESTRICTION",
                 "La etapa vigente corresponde a " + waveLabel(wave.waveType()) + " y la declaración no cumple sus requisitos");
         }
+        validateApplicationDetails(command, category);
         return transactions.execute(status -> {
             jdbc.queryForObject("SELECT pg_advisory_xact_lock(:key)", Map.of("key", identityLock(rut)),
                 (rs, row) -> Boolean.TRUE);
@@ -146,6 +164,15 @@ public class PrekinderFlowService {
                 """, encryptedValues(encryptedDeclaration).addValue("id", declarationId)
                 .addValue("applicationId", applicationId).addValue("waveId", wave.waveId())
                 .addValue("category", category));
+            EncryptedPayload encryptedForm = encryption.encrypt(json(command.applicationDetails()),
+                "prekinder|application-form|application:" + applicationId + "|field:APPLICATION_FORM");
+            jdbc.update("""
+                INSERT INTO encrypted_field_values(field_value_id, aggregate_type, aggregate_id, field_code,
+                    ciphertext, iv, wrapped_dek, wrapped_dek_iv, key_version, updated_by)
+                VALUES (:id, 'APPLICATION', :applicationId, 'APPLICATION_FORM', :ciphertext, :iv,
+                    :wrappedDek, :wrappedDekIv, :keyVersion, :actorId)
+                """, encryptedValues(encryptedForm).addValue("id", UUID.randomUUID())
+                .addValue("applicationId", applicationId).addValue("actorId", actor.id()));
             audit(actor.id(), "APPLICATION_SUBMITTED", "APPLICATION", applicationId,
                 Map.of("waveType", category));
             return application(applicationId);
@@ -204,9 +231,14 @@ public class PrekinderFlowService {
                    a.legacy_user_id
               FROM professional_profiles p JOIN actors a ON a.actor_id = p.professional_id
              ORDER BY p.active DESC, p.display_name
-            """, Map.of(), (rs, row) -> new ProfessionalView(rs.getObject("professional_id", UUID.class),
+            """, Map.of(), (rs, row) -> professionalView(rs.getObject("professional_id", UUID.class),
                 (Long) rs.getObject("legacy_user_id"), rs.getString("display_name"), rs.getString("email"),
                 rs.getString("specialty"), rs.getString("role_code"), rs.getBoolean("active"), rs.getLong("version")));
+    }
+
+    public List<ProfessionalRoleDefinition> professionalRoles() {
+        access.requireAdmin();
+        return PROFESSIONAL_ROLES;
     }
 
     public List<AvailabilityView> availability(UUID professionalId, Instant from, Instant to) {
@@ -259,8 +291,9 @@ public class PrekinderFlowService {
 
     public ProfessionalView saveProfessional(ProfessionalCommand command) {
         PrekinderActor admin = access.requireAdmin();
-        String role = command.roleCode() == null ? "EVALUATOR" : command.roleCode();
-        if (!List.of("ADMIN", "COORDINATOR", "EVALUATOR").contains(role)) throw new IllegalArgumentException("Rol inválido");
+        if (command.processId() == null) throw new IllegalArgumentException("Selecciona el proceso Prekínder");
+        ProfessionalRoleDefinition definition = professionalRole(command.roleCode());
+        String role = definition.roleCode();
         String emailHash = sha256(clean(command.email()).toLowerCase());
         List<UUID> actorMatches = command.professionalId() == null
             ? jdbc.queryForList("SELECT actor_id FROM actors WHERE email_hash = :emailHash ORDER BY created_at LIMIT 1",
@@ -275,12 +308,11 @@ public class PrekinderFlowService {
                         INSERT INTO actors(actor_id, legacy_user_id, role_code, display_name, email_hash)
                         VALUES (:id, :legacyId, :actorRole, :displayName, :emailHash)
                         """, new MapSqlParameterSource().addValue("id", actorId).addValue("legacyId", command.legacyUserId())
-                        .addValue("actorRole", role.equals("EVALUATOR") ? "TEACHER" : role)
+                        .addValue("actorRole", role)
                         .addValue("displayName", clean(command.displayName())).addValue("emailHash", emailHash));
                 } else {
                     jdbc.update("UPDATE actors SET role_code = :role, display_name = :name, updated_at = now() WHERE actor_id = :id",
-                        Map.of("id", actorId, "role", role.equals("EVALUATOR") ? "TEACHER" : role,
-                            "name", clean(command.displayName())));
+                        Map.of("id", actorId, "role", role, "name", clean(command.displayName())));
                 }
                 jdbc.update("""
                     INSERT INTO professional_profiles(professional_id, display_name, email, specialty, role_code, active)
@@ -301,10 +333,40 @@ public class PrekinderFlowService {
                 jdbc.update("UPDATE actors SET display_name = :displayName, email_hash = :emailHash, updated_at = now() WHERE actor_id = :id",
                     Map.of("id", actorId, "displayName", clean(command.displayName()),
                         "emailHash", sha256(clean(command.email()).toLowerCase())));
+                jdbc.update("UPDATE actors SET role_code = :role WHERE actor_id = :id", Map.of("id", actorId, "role", role));
             }
+            syncProfessionalRole(command.processId(), actorId, definition, admin.id());
             audit(admin.id(), "PROFESSIONAL_SAVED", "PROFESSIONAL", actorId, Map.of("role", role));
             return professional(actorId);
         });
+    }
+
+    private void syncProfessionalRole(UUID processId, UUID professionalId,
+                                      ProfessionalRoleDefinition definition, UUID adminId) {
+        jdbc.update("""
+            UPDATE prekinder_actor_role_assignments
+               SET active = false, valid_until = now(), version = version + 1
+             WHERE process_id = :processId AND actor_id = :actorId AND active
+            """, Map.of("processId", processId, "actorId", professionalId));
+        jdbc.update("""
+            INSERT INTO prekinder_actor_role_assignments(assignment_id, process_id, actor_id, role_code, assigned_by)
+            VALUES (:id, :processId, :actorId, :role, :adminId)
+            """, Map.of("id", UUID.randomUUID(), "processId", processId, "actorId", professionalId,
+                "role", definition.roleCode(), "adminId", adminId));
+
+        jdbc.update("""
+            UPDATE professional_instrument_authorizations
+               SET active = false, valid_until = now(), version = version + 1
+             WHERE process_id = :processId AND professional_id = :professionalId AND active
+            """, Map.of("processId", processId, "professionalId", professionalId));
+        if (definition.instrumentCode() != null) {
+            jdbc.update("""
+                INSERT INTO professional_instrument_authorizations(authorization_id, process_id, professional_id,
+                    instrument_code, authorized_by)
+                VALUES (:id, :processId, :professionalId, :instrumentCode, :adminId)
+                """, Map.of("id", UUID.randomUUID(), "processId", processId, "professionalId", professionalId,
+                    "instrumentCode", definition.instrumentCode(), "adminId", adminId));
+        }
     }
 
     public List<RoomView> rooms(UUID processId) {
@@ -646,6 +708,18 @@ public class PrekinderFlowService {
         PrekinderActor actor = access.requireAdmin();
         return transactions.execute(status -> {
             GroupView group = group(groupId);
+            Long eligible = jdbc.queryForObject("""
+                SELECT count(*)
+                  FROM professional_profiles p
+                  JOIN prekinder_actor_role_assignments r
+                    ON r.actor_id = p.professional_id AND r.process_id = :processId AND r.active
+                 WHERE p.professional_id = :evaluatorId AND p.active
+                   AND p.role_code LIKE 'PK_EVALUATOR_%' AND r.role_code = p.role_code
+                """, Map.of("processId", group.processId(), "evaluatorId", evaluatorId), Long.class);
+            if (eligible == null || eligible == 0) {
+                throw PrekinderDomainException.forbidden("PROFESSIONAL_ROLE_MISMATCH",
+                    "El profesional no tiene un rol evaluador homologado para este proceso");
+            }
             if (group.evaluatorIds().size() >= group.requiredEvaluators()) {
                 throw PrekinderDomainException.conflict("EVALUATOR_CAPACITY", "El grupo ya tiene todos sus evaluadores");
             }
@@ -941,8 +1015,28 @@ public class PrekinderFlowService {
                 return new ApplicationView(id, applicantId, rs.getObject("process_id", UUID.class),
                     rs.getObject("wave_id", UUID.class), rs.getString("status"), rs.getString("eligibility_category"),
                     rs.getString("eligibility_status"), rs.getLong("version"), rs.getLong("declaration_version"),
-                    identity, instant(rs.getTimestamp("created_at")));
+                    identity, applicationDetails(id), instant(rs.getTimestamp("created_at")));
             });
+    }
+
+    private ApplicationDetails applicationDetails(UUID applicationId) {
+        List<ApplicationDetails> values = jdbc.query("""
+            SELECT ciphertext, iv, wrapped_dek, wrapped_dek_iv, key_version
+              FROM encrypted_field_values
+             WHERE aggregate_type = 'APPLICATION' AND aggregate_id = :applicationId
+               AND field_code = 'APPLICATION_FORM'
+            """, Map.of("applicationId", applicationId), (rs, row) -> {
+                EncryptedPayload payload = new EncryptedPayload(rs.getString("ciphertext"), rs.getString("iv"),
+                    rs.getString("wrapped_dek"), rs.getString("wrapped_dek_iv"), rs.getString("key_version"));
+                try {
+                    return mapper.readValue(encryption.decrypt(payload,
+                        "prekinder|application-form|application:" + applicationId + "|field:APPLICATION_FORM"),
+                        ApplicationDetails.class);
+                } catch (JsonProcessingException exception) {
+                    throw new IllegalStateException("El formulario cifrado no tiene un formato válido", exception);
+                }
+            });
+        return values.isEmpty() ? null : values.get(0);
     }
 
     private GroupView group(UUID id) {
@@ -1010,9 +1104,25 @@ public class PrekinderFlowService {
             SELECT p.professional_id, p.display_name, p.email, p.specialty, p.role_code, p.active, p.version,
                    a.legacy_user_id FROM professional_profiles p JOIN actors a ON a.actor_id = p.professional_id
              WHERE p.professional_id = :id
-            """, Map.of("id", id), (rs, row) -> new ProfessionalView(id, (Long) rs.getObject("legacy_user_id"),
+            """, Map.of("id", id), (rs, row) -> professionalView(id, (Long) rs.getObject("legacy_user_id"),
                 rs.getString("display_name"), rs.getString("email"), rs.getString("specialty"),
                 rs.getString("role_code"), rs.getBoolean("active"), rs.getLong("version")));
+    }
+
+    private static ProfessionalRoleDefinition professionalRole(String roleCode) {
+        if (blank(roleCode)) throw new IllegalArgumentException("Selecciona el rol del profesional");
+        return PROFESSIONAL_ROLES.stream().filter(item -> item.roleCode().equals(roleCode)).findFirst()
+            .orElseThrow(() -> new IllegalArgumentException("El rol no pertenece al flujo Prekínder"));
+    }
+
+    private static ProfessionalView professionalView(UUID id, Long legacyUserId, String displayName, String email,
+                                                       String specialty, String roleCode, boolean active, long version) {
+        ProfessionalRoleDefinition definition = PROFESSIONAL_ROLES.stream()
+            .filter(item -> item.roleCode().equals(roleCode)).findFirst().orElse(null);
+        return new ProfessionalView(id, legacyUserId, displayName, email, specialty, roleCode,
+            definition == null ? "Pendiente de homologación" : definition.label(),
+            definition == null ? "PENDING" : definition.groupCode(),
+            definition == null ? null : definition.instrumentCode(), active, version);
     }
 
     private RoomView room(UUID id) {
@@ -1104,6 +1214,61 @@ public class PrekinderFlowService {
         return employee || alumni ? "STAFF_OR_ALUMNI" : "NEW_FAMILIES";
     }
 
+    private void validateApplicationDetails(SubmitApplication command, String category) {
+        ApplicationDetails details = command.applicationDetails();
+        if (details == null) throw new IllegalArgumentException("Los antecedentes de la postulación son obligatorios");
+        if (!"PRE_KINDER".equals(details.grade())) throw new IllegalArgumentException("El nivel debe ser Prekínder");
+        Integer academicYear = jdbc.queryForObject(
+            "SELECT academic_year FROM admission_processes WHERE process_id = :id",
+            Map.of("id", command.processId()), Integer.class);
+        if (academicYear == null || academicYear != details.applicationYear()) {
+            throw new IllegalArgumentException("El año de postulación no corresponde al proceso vigente");
+        }
+        if (details.father() == null || details.mother() == null || details.supporter() == null || details.guardian() == null) {
+            throw new IllegalArgumentException("Padre, madre, sostenedor y apoderado son obligatorios");
+        }
+        PrekinderRut.normalize(details.father().rut());
+        PrekinderRut.normalize(details.mother().rut());
+        PrekinderRut.normalize(details.supporter().rut());
+        PrekinderRut.normalize(details.guardian().rut());
+        if (command.eligibility().siblings() != null) {
+            command.eligibility().siblings().forEach(sibling -> PrekinderRut.normalize(sibling.rut()));
+        }
+        switch (category) {
+            case "SIBLINGS" -> {
+                if (!details.hasSiblingsInSchool() || blank(details.siblingsInSchoolDetails())
+                    || !"NINGUNA".equals(details.admissionPreference())) {
+                    throw new IllegalArgumentException("Debes registrar el hermano vigente de esta etapa");
+                }
+            }
+            case "STAFF_OR_ALUMNI" -> {
+                boolean employee = !blank(command.eligibility().employeeParent());
+                boolean alumni = alumni(command.eligibility().fatherAlumni()) || alumni(command.eligibility().motherAlumni());
+                if (employee && !List.of("FATHER", "MOTHER", "BOTH").contains(command.eligibility().employeeParent())) {
+                    throw new IllegalArgumentException("Padre o madre funcionario inválido");
+                }
+                if (employee == alumni) {
+                    throw new IllegalArgumentException("Selecciona sólo un vínculo: funcionario o exalumno");
+                }
+                if (employee && !"HIJO_FUNCIONARIO".equals(details.admissionPreference())) {
+                    throw new IllegalArgumentException("La relación familiar no coincide con el funcionario declarado");
+                }
+                if (alumni && !"HIJO_EX_ALUMNO".equals(details.admissionPreference())) {
+                    throw new IllegalArgumentException("La relación familiar no coincide con el exalumno declarado");
+                }
+                if (details.hasSiblingsInSchool()) {
+                    throw new IllegalArgumentException("La etapa vigente no corresponde a hermanos de alumnos");
+                }
+            }
+            case "NEW_FAMILIES" -> {
+                if (details.hasSiblingsInSchool() || !"NINGUNA".equals(details.admissionPreference())) {
+                    throw new IllegalArgumentException("La etapa vigente corresponde a nuevas familias");
+                }
+            }
+            default -> throw new IllegalArgumentException("Categoría de postulación inválida");
+        }
+    }
+
     private static boolean alumni(AlumniDeclaration declaration) {
         if (declaration == null || declaration.status() == null || declaration.status().equals("NO_ALUMNI")) return false;
         if (declaration.status().equals("GRADUATED") || declaration.status().equals("GRADUATED_4TH")) {
@@ -1173,19 +1338,36 @@ public class PrekinderFlowService {
     public record AlumniDeclaration(String status, Integer graduationYear, String lastGrade, String withdrawalReason) {}
     public record EligibilityDeclaration(List<SiblingDeclaration> siblings, String employeeParent,
                                          AlumniDeclaration fatherAlumni, AlumniDeclaration motherAlumni) {}
+    public record AddressDetails(String street, String number, String apartment, String country,
+                                 String region, String commune) {}
+    public record FamilyAdultDetails(String fullName, String rut, String email, String phone,
+                                     String address, String profession) {}
+    public record ResponsibleAdultDetails(String fullName, String rut, String email, String phone,
+                                          String relationship) {}
+    public record ApplicationDetails(String gender, String studentEmail, AddressDetails address, String grade,
+                                     int applicationYear, String currentSchool, String additionalNotes,
+                                     String admissionPreference, boolean hasSiblingsInSchool,
+                                     String siblingsInSchoolDetails, FamilyAdultDetails father,
+                                     FamilyAdultDetails mother, ResponsibleAdultDetails supporter,
+                                     ResponsibleAdultDetails guardian) {}
     public record SubmitApplication(UUID processId, String rut, String firstName, String paternalLastName,
                                     String maternalLastName, LocalDate birthDate, String familyEmail,
-                                    String fatherEmail, String motherEmail, EligibilityDeclaration eligibility) {}
+                                    String fatherEmail, String motherEmail, ApplicationDetails applicationDetails,
+                                    EligibilityDeclaration eligibility) {}
     public record ApplicantIdentity(String rut, String firstName, String paternalLastName,
                                     String maternalLastName, LocalDate birthDate, String familyEmail,
                                     String fatherEmail, String motherEmail) {}
     public record ApplicationView(UUID applicationId, UUID applicantId, UUID processId, UUID waveId,
                                   String status, String eligibilityCategory, String eligibilityStatus,
-                                  long version, long declarationVersion, ApplicantIdentity identity, Instant createdAt) {}
-    public record ProfessionalCommand(UUID professionalId, Long legacyUserId, String displayName, String email,
+                                  long version, long declarationVersion, ApplicantIdentity identity,
+                                  ApplicationDetails applicationDetails, Instant createdAt) {}
+    public record ProfessionalCommand(UUID processId, UUID professionalId, Long legacyUserId, String displayName, String email,
                                       String specialty, String roleCode, boolean active, long expectedVersion) {}
+    public record ProfessionalRoleDefinition(String roleCode, String label, String groupCode,
+                                             String instrumentCode, int position) {}
     public record ProfessionalView(UUID professionalId, Long legacyUserId, String displayName, String email,
-                                   String specialty, String roleCode, boolean active, long version) {}
+                                   String specialty, String roleCode, String roleLabel, String roleGroup,
+                                   String instrumentCode, boolean active, long version) {}
     public record AvailabilityView(UUID availabilityId, UUID professionalId, Instant startsAt, Instant endsAt,
                                    String status, long version) {}
     public record ScheduleBlockView(UUID dayId, LocalDate date, String dayName, String dayStatus, long dayVersion,
