@@ -53,13 +53,13 @@ public class PrekinderAuthenticationFilter extends OncePerRequestFilter {
             throws ServletException, IOException {
         String header = request.getHeader(HttpHeaders.AUTHORIZATION);
         if (header == null || !header.startsWith("Bearer ")) {
-            writeUnauthorized(response); return;
+            writeUnauthorized(request, response); return;
         }
         TokenIdentity identity;
         try {
             identity = resolve(header.substring(7));
         } catch (Exception exception) {
-            writeUnauthorized(response);
+            writeUnauthorized(request, response);
             return;
         }
 
@@ -94,7 +94,13 @@ public class PrekinderAuthenticationFilter extends OncePerRequestFilter {
     private static String normalizeRole(String role) {
         if (role == null) return "APODERADO";
         return switch (role) {
-            case "ADMIN", "COORDINATOR", "CYCLE_DIRECTOR", "TEACHER", "PSYCHOLOGIST", "INTERVIEWER", "APODERADO" -> role;
+            case "ADMIN", "COORDINATOR", "CYCLE_DIRECTOR", "TEACHER", "PSYCHOLOGIST", "INTERVIEWER", "EVALUATOR", "APODERADO",
+                 "PK_ADMIN", "PK_COORDINATOR", "PK_RECEPTION", "PK_DATA_ENTRY", "PK_REVIEWER", "PK_COMMITTEE",
+                 "PK_FINAL_APPROVER", "PK_AUDITOR", "PK_EVALUATOR_ACADEMIC", "PK_EVALUATOR_PSYCHOMOTOR",
+                 "PK_EVALUATOR_PSYCHOLOGY", "PK_EVALUATOR_ENTRY_INDICATORS", "PK_EVALUATOR_GROUP_OBSERVATION",
+                 "PK_EVALUATOR_LEARNING_SUPPORT", "PK_EVALUATOR_DAP", "PREKINDER_ACADEMIC",
+                 "PREKINDER_PSYCHOMOTOR", "PREKINDER_PSYCHOLOGY", "PREKINDER_INDICATORS",
+                 "PREKINDER_OBSERVER", "PREKINDER_SUPPORT", "PREKINDER_DAP" -> role;
             default -> "APODERADO";
         };
     }
@@ -108,11 +114,15 @@ public class PrekinderAuthenticationFilter extends OncePerRequestFilter {
         }
     }
 
-    private static void writeUnauthorized(HttpServletResponse response) throws IOException {
+    private static void writeUnauthorized(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        String requestId = request.getHeader("X-Request-ID");
+        if (requestId == null || requestId.isBlank()) requestId = java.util.UUID.randomUUID().toString();
         response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
         response.setCharacterEncoding(StandardCharsets.UTF_8.name());
         response.setContentType("application/json");
-        response.getWriter().write("{\"success\":false,\"error\":{\"code\":\"UNAUTHORIZED\",\"message\":\"No autenticado\"}}");
+        response.getWriter().write("{\"success\":false,\"error\":{\"code\":\"AUTHENTICATION_REQUIRED\","
+            + "\"message\":\"No autenticado\",\"requestId\":\"" + requestId.replace("\"", "")
+            + "\",\"details\":{}}}");
     }
 
     private record TokenIdentity(String subject, String email, String role, String sessionId) {}

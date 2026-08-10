@@ -49,12 +49,14 @@ public class SecurityConfig {
             .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .exceptionHandling(exceptions -> exceptions
                 .authenticationEntryPoint((request, response, authException) ->
-                    writeJsonError(response, HttpServletResponse.SC_UNAUTHORIZED, "UNAUTHORIZED", "No autenticado"))
+                    writeJsonError(request, response, HttpServletResponse.SC_UNAUTHORIZED,
+                        "AUTHENTICATION_REQUIRED", "No autenticado"))
                 .accessDeniedHandler((request, response, accessDeniedException) ->
-                    writeJsonError(response, HttpServletResponse.SC_FORBIDDEN, "FORBIDDEN", "Acceso denegado"))
+                    writeJsonError(request, response, HttpServletResponse.SC_FORBIDDEN,
+                        "INSUFFICIENT_PERMISSION", "Acceso denegado"))
             )
             .authorizeHttpRequests(auth -> auth
-                .requestMatchers("/health", "/ready", "/gateway/status").permitAll()
+                .requestMatchers("/health", "/ready", "/gateway/status", "/v3/api-docs/**").permitAll()
                 // El upgrade no lleva Bearer: se autentica una vez con ticket en el frame STOMP CONNECT.
                 .requestMatchers("/api/prekinder/realtime").permitAll()
                 // Cada recurso Prekínder aplica autorización por actor/asignación dentro del
@@ -101,11 +103,15 @@ public class SecurityConfig {
         return source;
     }
 
-    private static void writeJsonError(HttpServletResponse response, int status, String code, String message) throws IOException {
+    private static void writeJsonError(jakarta.servlet.http.HttpServletRequest request,
+                                       HttpServletResponse response, int status, String code, String message) throws IOException {
+        String requestId = request.getHeader("X-Request-ID");
+        if (requestId == null || requestId.isBlank()) requestId = java.util.UUID.randomUUID().toString();
         String body = String.format(
-            "{\"success\":false,\"error\":{\"code\":\"%s\",\"message\":\"%s\"}}",
+            "{\"success\":false,\"error\":{\"code\":\"%s\",\"message\":\"%s\",\"requestId\":\"%s\",\"details\":{}}}",
             code,
-            message.replace("\"", "\\\"")
+            message.replace("\"", "\\\""),
+            requestId.replace("\"", "")
         );
         response.setStatus(status);
         response.setCharacterEncoding(StandardCharsets.UTF_8.name());

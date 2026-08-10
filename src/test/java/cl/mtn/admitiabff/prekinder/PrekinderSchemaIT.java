@@ -35,7 +35,7 @@ class PrekinderSchemaIT {
                     'restricted_case_access_grants','audit_events','outbox_events'
                   )
                  """)) {
-            try (var result = countStatement.executeQuery()) { result.next(); assertEquals(52, result.getInt(1)); }
+            try (var result = countStatement.executeQuery()) { result.next(); assertEquals(58, result.getInt(1)); }
             try (var result = statement.executeQuery()) { result.next(); assertEquals(18, result.getInt(1)); }
         }
 

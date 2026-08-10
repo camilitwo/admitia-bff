@@ -46,7 +46,9 @@ public class PrekinderActorRepository {
             INSERT INTO actors(actor_id, external_subject, email_hash, role_code)
             VALUES (:id, :subject, :emailHash, :role)
             ON CONFLICT (external_subject) WHERE external_subject IS NOT NULL DO UPDATE
-              SET email_hash = EXCLUDED.email_hash, updated_at = now()
+              SET email_hash = EXCLUDED.email_hash,
+                  role_code = CASE WHEN EXCLUDED.role_code <> 'APODERADO' THEN EXCLUDED.role_code ELSE actors.role_code END,
+                  updated_at = now()
             RETURNING actor_id, legacy_user_id, role_code
             """, Map.of("id", id, "subject", subject, "emailHash", emailHash, "role", proposedRole),
             (rs, row) -> new PrekinderActor(rs.getObject("actor_id", UUID.class), rs.getLong("legacy_user_id"), rs.getString("role_code")));

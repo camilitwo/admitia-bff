@@ -14,10 +14,19 @@ import org.springframework.stereotype.Service;
 public class PrekinderAccessService {
     private static final String ADMIN_ROLE = "ADMIN";
     private static final Set<String> MODULE_ROLES = Set.of(
-        "ADMIN", "COORDINATOR", "CYCLE_DIRECTOR", "TEACHER", "PSYCHOLOGIST", "INTERVIEWER", "APODERADO"
+        "ADMIN", "COORDINATOR", "CYCLE_DIRECTOR", "TEACHER", "PSYCHOLOGIST", "INTERVIEWER", "EVALUATOR", "APODERADO",
+        "PK_ADMIN", "PK_COORDINATOR", "PK_RECEPTION", "PK_DATA_ENTRY", "PK_REVIEWER", "PK_COMMITTEE",
+        "PK_FINAL_APPROVER", "PK_AUDITOR", "PK_EVALUATOR_ACADEMIC", "PK_EVALUATOR_PSYCHOMOTOR",
+        "PK_EVALUATOR_PSYCHOLOGY", "PK_EVALUATOR_ENTRY_INDICATORS", "PK_EVALUATOR_GROUP_OBSERVATION",
+        "PK_EVALUATOR_LEARNING_SUPPORT", "PK_EVALUATOR_DAP", "PREKINDER_ACADEMIC", "PREKINDER_PSYCHOMOTOR",
+        "PREKINDER_PSYCHOLOGY", "PREKINDER_INDICATORS", "PREKINDER_OBSERVER", "PREKINDER_SUPPORT", "PREKINDER_DAP"
     );
     private static final Set<String> EVALUATOR_ROLES = Set.of(
-        "ADMIN", "COORDINATOR", "CYCLE_DIRECTOR", "TEACHER", "PSYCHOLOGIST", "INTERVIEWER"
+        "ADMIN", "COORDINATOR", "CYCLE_DIRECTOR", "TEACHER", "PSYCHOLOGIST", "INTERVIEWER", "EVALUATOR", "PK_ADMIN",
+        "PK_EVALUATOR_ACADEMIC", "PK_EVALUATOR_PSYCHOMOTOR", "PK_EVALUATOR_PSYCHOLOGY",
+        "PK_EVALUATOR_ENTRY_INDICATORS", "PK_EVALUATOR_GROUP_OBSERVATION", "PK_EVALUATOR_LEARNING_SUPPORT",
+        "PK_EVALUATOR_DAP", "PREKINDER_ACADEMIC", "PREKINDER_PSYCHOMOTOR", "PREKINDER_PSYCHOLOGY",
+        "PREKINDER_INDICATORS", "PREKINDER_OBSERVER", "PREKINDER_SUPPORT", "PREKINDER_DAP"
     );
     private final PrekinderActorRepository actors;
 
@@ -41,7 +50,7 @@ public class PrekinderAccessService {
 
     public PrekinderActor requireAdmin() {
         PrekinderActor actor = requireActor();
-        if (!Set.of("ADMIN", "COORDINATOR", "CYCLE_DIRECTOR").contains(actor.role())) {
+        if (!Set.of("ADMIN", "COORDINATOR", "CYCLE_DIRECTOR", "PK_ADMIN", "PK_COORDINATOR").contains(actor.role())) {
             throw new AccessDeniedException("Permiso administrativo requerido");
         }
         return actor;
@@ -49,13 +58,24 @@ public class PrekinderAccessService {
 
     public PrekinderActor requireSuperAdmin() {
         PrekinderActor actor = requireActor();
-        if (!ADMIN_ROLE.equals(actor.role())) throw new AccessDeniedException("Permiso especial de administración requerido");
+        if (!Set.of(ADMIN_ROLE, "PK_ADMIN").contains(actor.role())) {
+            throw new AccessDeniedException("Permiso especial de administración requerido");
+        }
         return actor;
     }
 
     public PrekinderActor requireEvaluator() {
         PrekinderActor actor = requireActor();
         if (!EVALUATOR_ROLES.contains(actor.role())) throw new AccessDeniedException("Permiso de evaluación requerido");
+        return actor;
+    }
+
+    public PrekinderActor requireOperations() {
+        PrekinderActor actor = requireActor();
+        if (!Set.of("ADMIN", "COORDINATOR", "CYCLE_DIRECTOR", "PK_ADMIN", "PK_COORDINATOR", "PK_RECEPTION")
+                .contains(actor.role())) {
+            throw new AccessDeniedException("Permiso operativo requerido");
+        }
         return actor;
     }
 }
