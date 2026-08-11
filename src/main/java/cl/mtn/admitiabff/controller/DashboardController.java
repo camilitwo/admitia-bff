@@ -2,6 +2,7 @@ package cl.mtn.admitiabff.controller;
 
 import cl.mtn.admitiabff.service.DashboardService;
 import java.util.Map;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
 @RestController
@@ -14,6 +15,7 @@ public class DashboardController {
     @GetMapping("/api/dashboard/admin/stats") public Map<String, Object> adminStats() { return dashboardService.adminStats(); }
     @GetMapping("/api/dashboard/admin/detailed-stats") public Map<String, Object> detailedAdminStats(@RequestParam(required = false) Integer academicYear) { return dashboardService.detailedAdminStats(academicYear); }
     @GetMapping("/api/dashboard/applicants/{id}/summary") public Map<String, Object> applicantSummary(@PathVariable Long id) { return dashboardService.applicantSummary(id); }
+    @PreAuthorize("hasRole('ADMIN')")
     @GetMapping("/api/dashboard/applicants/{id}/card") public Map<String, Object> applicantCard(@PathVariable Long id) { return dashboardService.applicantCard(id); }
     @GetMapping("/api/dashboard/course-applicants") public Map<String, Object> courseApplicants(@RequestParam(required = false) Integer academicYear) { return dashboardService.courseApplicants(academicYear); }
     @GetMapping("/api/dashboard/applicant-metrics") public Map<String, Object> applicantMetrics(@RequestParam(required = false) Integer academicYear, @RequestParam(required = false) String grade, @RequestParam(required = false) String status, @RequestParam(required = false) String sortBy, @RequestParam(required = false) String sortOrder) { return dashboardService.applicantMetrics(academicYear, grade, status, sortBy, sortOrder); }

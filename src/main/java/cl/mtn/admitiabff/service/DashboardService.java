@@ -4,11 +4,13 @@ import cl.mtn.admitiabff.domain.common.ApplicationStatus;
 import cl.mtn.admitiabff.domain.common.EvaluationStatus;
 import cl.mtn.admitiabff.domain.common.InterviewStatus;
 import cl.mtn.admitiabff.domain.application.ApplicationEntity;
+import cl.mtn.admitiabff.domain.application.ComplementaryFormEntity;
 import cl.mtn.admitiabff.domain.document.DocumentEntity;
 import cl.mtn.admitiabff.domain.evaluation.EvaluationEntity;
 import cl.mtn.admitiabff.domain.interview.InterviewEntity;
 import cl.mtn.admitiabff.domain.student.StudentEntity;
 import cl.mtn.admitiabff.repository.ApplicationRepository;
+import cl.mtn.admitiabff.repository.ComplementaryFormRepository;
 import cl.mtn.admitiabff.repository.DocumentRepository;
 import cl.mtn.admitiabff.repository.EvaluationRepository;
 import cl.mtn.admitiabff.repository.GuardianRepository;
@@ -16,6 +18,7 @@ import cl.mtn.admitiabff.repository.InterviewRepository;
 import cl.mtn.admitiabff.repository.InterviewerScheduleRepository;
 import cl.mtn.admitiabff.repository.NotificationRepository;
 import cl.mtn.admitiabff.repository.UserRepository;
+import cl.mtn.admitiabff.util.JsonSupport;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -43,8 +46,10 @@ public class DashboardService {
     private final InterviewRepository interviewRepository;
     private final InterviewerScheduleRepository scheduleRepository;
     private final DocumentRepository documentRepository;
+    private final ComplementaryFormRepository complementaryFormRepository;
+    private final JsonSupport jsonSupport;
 
-    public DashboardService(ApplicationRepository applicationRepository, UserRepository userRepository, GuardianRepository guardianRepository, NotificationRepository notificationRepository, EvaluationRepository evaluationRepository, InterviewRepository interviewRepository, InterviewerScheduleRepository scheduleRepository, DocumentRepository documentRepository) {
+    public DashboardService(ApplicationRepository applicationRepository, UserRepository userRepository, GuardianRepository guardianRepository, NotificationRepository notificationRepository, EvaluationRepository evaluationRepository, InterviewRepository interviewRepository, InterviewerScheduleRepository scheduleRepository, DocumentRepository documentRepository, ComplementaryFormRepository complementaryFormRepository, JsonSupport jsonSupport) {
         this.applicationRepository = applicationRepository;
         this.userRepository = userRepository;
         this.guardianRepository = guardianRepository;
@@ -53,6 +58,8 @@ public class DashboardService {
         this.interviewRepository = interviewRepository;
         this.scheduleRepository = scheduleRepository;
         this.documentRepository = documentRepository;
+        this.complementaryFormRepository = complementaryFormRepository;
+        this.jsonSupport = jsonSupport;
     }
 
     public Map<String, Object> generalStats() {
@@ -356,10 +363,7 @@ public class DashboardService {
         data.put("student", studentMap);
         data.put("family", family);
         String questionnaireLink = findDocumentLink(documents, "questionnaire", "cuestionario", "family", "familia");
-        Map<String, Object> familyQuestionnaire = new LinkedHashMap<>();
-        familyQuestionnaire.put("received", questionnaireLink == null ? null : true);
-        familyQuestionnaire.put("reportLink", questionnaireLink);
-        data.put("familyQuestionnaire", familyQuestionnaire);
+        data.put("familyQuestionnaire", familyQuestionnaire(applicationId, questionnaireLink));
         data.put("prekinderProcess", prekinderProcess(evaluations, interviews, documents));
         data.put("exams", exams);
         data.put("cycleDirector", cycleInterview);
@@ -376,6 +380,66 @@ public class DashboardService {
         result.put("success", true);
         result.put("data", data);
         return result;
+    }
+
+    private Map<String, Object> familyQuestionnaire(Long applicationId, String reportLink) {
+        ComplementaryFormEntity form = complementaryFormRepository.findByApplicationId(applicationId).orElse(null);
+        Map<String, Object> questionnaire = new LinkedHashMap<>();
+        questionnaire.put("status", form == null ? "NOT_STARTED" : form.isSubmitted() ? "SUBMITTED" : "DRAFT");
+        questionnaire.put("received", (form != null && form.isSubmitted()) || reportLink != null);
+        questionnaire.put("submittedAt", form == null ? null : form.getSubmittedAt());
+        questionnaire.put("updatedAt", form == null ? null : form.getUpdatedAt());
+        questionnaire.put("reportLink", reportLink);
+        if (form != null && form.isSubmitted()) {
+            questionnaire.put("answers", questionnaireAnswers(jsonSupport.readMap(form.getFormData())));
+        }
+        return questionnaire;
+    }
+
+    private Map<String, Object> questionnaireAnswers(Map<String, Object> raw) {
+        Map<String, Object> answers = new LinkedHashMap<>();
+        answers.put("otherSchools", questionnaireText(raw, "otherSchools", "other_schools"));
+        answers.put("fatherName", questionnaireText(raw, "fatherName", "father_name"));
+        answers.put("fatherEducation", questionnaireText(raw, "fatherEducation", "father_education"));
+        answers.put("fatherCurrentActivity", questionnaireText(raw, "fatherCurrentActivity", "father_current_activity"));
+        answers.put("motherName", questionnaireText(raw, "motherName", "mother_name"));
+        answers.put("motherEducation", questionnaireText(raw, "motherEducation", "mother_education"));
+        answers.put("motherCurrentActivity", questionnaireText(raw, "motherCurrentActivity", "mother_current_activity"));
+        answers.put("applicationReasons", questionnaireText(raw, "applicationReasons", "application_reasons"));
+        answers.put("schoolChangeReason", questionnaireText(raw, "schoolChangeReason", "school_change_reason"));
+        answers.put("familyValues", questionnaireText(raw, "familyValues", "family_values"));
+        answers.put("faithExperiences", questionnaireText(raw, "faithExperiences", "faith_experiences"));
+        answers.put("communityServiceExperiences", questionnaireText(raw, "communityServiceExperiences", "community_service_experiences"));
+        answers.put("childrenDescriptions", questionnaireChildren(firstPresent(raw, "childrenDescriptions", "children_descriptions")));
+        return answers;
+    }
+
+    private List<Map<String, Object>> questionnaireChildren(Object value) {
+        if (!(value instanceof List<?> children)) return List.of();
+        return children.stream()
+            .filter(Map.class::isInstance)
+            .map(Map.class::cast)
+            .map(child -> {
+                Map<String, Object> item = new LinkedHashMap<>();
+                item.put("childName", questionnaireText(child, "childName", "child_name"));
+                item.put("description", questionnaireText(child, "description"));
+                item.put("dream", questionnaireText(child, "dream"));
+                return item;
+            })
+            .toList();
+    }
+
+    private String questionnaireText(Map<?, ?> source, String... keys) {
+        Object value = firstPresent(source, keys);
+        return value == null ? null : String.valueOf(value);
+    }
+
+    private Object firstPresent(Map<?, ?> source, String... keys) {
+        for (String key : keys) {
+            Object value = source.get(key);
+            if (value != null) return value;
+        }
+        return null;
     }
 
     private int academicYearOf(ApplicationEntity app) {
