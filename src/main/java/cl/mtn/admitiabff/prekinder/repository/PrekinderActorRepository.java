@@ -47,7 +47,10 @@ public class PrekinderActorRepository {
             VALUES (:id, :subject, :emailHash, :role)
             ON CONFLICT (external_subject) WHERE external_subject IS NOT NULL DO UPDATE
               SET email_hash = EXCLUDED.email_hash,
-                  role_code = CASE WHEN EXCLUDED.role_code <> 'APODERADO' THEN EXCLUDED.role_code ELSE actors.role_code END,
+                  role_code = CASE
+                      WHEN EXCLUDED.role_code IN ('APODERADO', 'PREKINDER_PROFESSIONAL') THEN actors.role_code
+                      ELSE EXCLUDED.role_code
+                  END,
                   updated_at = now()
             RETURNING actor_id, legacy_user_id, role_code
             """, Map.of("id", id, "subject", subject, "emailHash", emailHash, "role", proposedRole),

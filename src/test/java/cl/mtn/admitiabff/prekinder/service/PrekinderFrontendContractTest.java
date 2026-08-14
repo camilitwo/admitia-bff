@@ -3,6 +3,8 @@ package cl.mtn.admitiabff.prekinder.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import cl.mtn.admitiabff.prekinder.domain.PrekinderActor;
+import java.util.UUID;
 import org.junit.jupiter.api.Test;
 
 class PrekinderFrontendContractTest {
@@ -12,6 +14,14 @@ class PrekinderFrontendContractTest {
         assertThat(PrekinderEvaluatorService.normalizeInstrument("SUPPORT")).isEqualTo("LEARNING_SUPPORT");
         assertThat(PrekinderEvaluatorService.normalizeInstrument("PREKINDER_OBSERVER")).isEqualTo("GROUP_OBSERVATION");
         assertThat(PrekinderEvaluatorService.normalizeInstrument("PK_EVALUATOR_ACADEMIC")).isEqualTo("ACADEMIC");
+    }
+
+    @Test
+    void genericProfessionalAccountUsesDatabaseInstrumentAuthorizations() {
+        var actor = new PrekinderActor(UUID.randomUUID(), 73L, "PREKINDER_PROFESSIONAL");
+
+        assertThat(PrekinderEvaluatorService.roleAllowsInstrument(actor, "ACADEMIC")).isTrue();
+        assertThat(PrekinderEvaluatorService.roleAllowsInstrument(actor, "PSYCHOLOGY")).isTrue();
     }
 
     @Test

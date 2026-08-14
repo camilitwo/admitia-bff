@@ -103,13 +103,13 @@ public class PrekinderEvaluatorService {
                AND (
                     EXISTS (
                         SELECT 1
-                          FROM professional_instrument_authorizations authorization
-                         WHERE authorization.professional_id = :actorId
-                           AND authorization.instrument_code = i.instrument_code
-                           AND authorization.active = true
-                           AND authorization.valid_from <= now()
-                           AND (authorization.valid_until IS NULL OR authorization.valid_until > now())
-                           AND (:processId IS NULL OR authorization.process_id = :processId)
+                          FROM professional_instrument_authorizations authz
+                         WHERE authz.professional_id = :actorId
+                           AND authz.instrument_code = i.instrument_code
+                           AND authz.active = true
+                           AND authz.valid_from <= now()
+                           AND (authz.valid_until IS NULL OR authz.valid_until > now())
+                           AND (:processId IS NULL OR authz.process_id = :processId)
                     )
                     OR EXISTS (
                         SELECT 1
@@ -368,9 +368,10 @@ public class PrekinderEvaluatorService {
         }
     }
 
-    private static boolean roleAllowsInstrument(PrekinderActor actor, String instrument) {
+    static boolean roleAllowsInstrument(PrekinderActor actor, String instrument) {
         if (ADMIN_ROLES.contains(actor.role())
-            || Set.of("TEACHER", "PSYCHOLOGIST", "INTERVIEWER", "EVALUATOR").contains(actor.role())) return true;
+            || Set.of("TEACHER", "PSYCHOLOGIST", "INTERVIEWER", "EVALUATOR", "PREKINDER_PROFESSIONAL")
+                .contains(actor.role())) return true;
         return instrument.equals(normalizeInstrument(actor.role()));
     }
 

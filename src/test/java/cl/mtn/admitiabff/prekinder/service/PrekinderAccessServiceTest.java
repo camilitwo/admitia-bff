@@ -50,6 +50,15 @@ class PrekinderAccessServiceTest {
     }
 
     @Test
+    void allowsGenericPrekinderProfessionalToUseEvaluatorWorkspace() {
+        PrekinderActor actor = new PrekinderActor(UUID.randomUUID(), 73L, "PREKINDER_PROFESSIONAL");
+        PrekinderAuthContext.set(new PrekinderAuthContext.Principal(
+            actor, "legacy:73", "professional@mtn.cl", "session-professional"));
+
+        assertThat(access.requireEvaluator()).isSameAs(actor);
+    }
+
+    @Test
     void rejectsMissingAuthentication() {
         assertThatThrownBy(access::requireActor)
             .isInstanceOf(AccessDeniedException.class)
