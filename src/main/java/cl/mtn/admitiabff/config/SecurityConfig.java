@@ -59,6 +59,9 @@ public class SecurityConfig {
                 .requestMatchers("/health", "/ready", "/gateway/status", "/v3/api-docs/**").permitAll()
                 // El upgrade no lleva Bearer: se autentica una vez con ticket en el frame STOMP CONNECT.
                 .requestMatchers("/api/prekinder/realtime").permitAll()
+                // Alta autocontenida: sólo permite registrarse a emails previamente creados
+                // como profesionales activos dentro del módulo aislado de Prekínder.
+                .requestMatchers(HttpMethod.POST, "/api/prekinder/professional-registration").permitAll()
                 // Cada recurso Prekínder aplica autorización por actor/asignación dentro del
                 // datasource aislado. Aquí sólo exigimos una identidad autenticada.
                 .requestMatchers("/api/prekinder/**").authenticated()

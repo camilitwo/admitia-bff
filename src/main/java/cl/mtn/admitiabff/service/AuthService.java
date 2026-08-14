@@ -45,7 +45,7 @@ public class AuthService {
 
     private static final Set<Role> STAFF_PORTAL_ROLES = Set.of(
         Role.TEACHER, Role.COORDINATOR, Role.CYCLE_DIRECTOR,
-        Role.PSYCHOLOGIST, Role.INTERVIEWER
+        Role.PSYCHOLOGIST, Role.INTERVIEWER, Role.PREKINDER_PROFESSIONAL
     );
 
     private static final Set<Role> GUARDIAN_PORTAL_ROLES = Set.of(Role.APODERADO);

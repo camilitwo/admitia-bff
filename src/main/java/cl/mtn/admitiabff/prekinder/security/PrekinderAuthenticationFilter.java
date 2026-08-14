@@ -45,7 +45,10 @@ public class PrekinderAuthenticationFilter extends OncePerRequestFilter {
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
         String path = request.getRequestURI();
-        return !path.startsWith("/api/prekinder/") || path.equals("/api/prekinder/realtime");
+        return !path.startsWith("/api/prekinder/")
+            || path.equals("/api/prekinder/realtime")
+            || (path.equals("/api/prekinder/professional-registration")
+                && "POST".equalsIgnoreCase(request.getMethod()));
     }
 
     @Override
@@ -94,7 +97,7 @@ public class PrekinderAuthenticationFilter extends OncePerRequestFilter {
     private static String normalizeRole(String role) {
         if (role == null) return "APODERADO";
         return switch (role) {
-            case "ADMIN", "COORDINATOR", "CYCLE_DIRECTOR", "TEACHER", "PSYCHOLOGIST", "INTERVIEWER", "EVALUATOR", "APODERADO",
+            case "ADMIN", "COORDINATOR", "CYCLE_DIRECTOR", "TEACHER", "PSYCHOLOGIST", "INTERVIEWER", "EVALUATOR", "PREKINDER_PROFESSIONAL", "APODERADO",
                  "PK_ADMIN", "PK_COORDINATOR", "PK_RECEPTION", "PK_DATA_ENTRY", "PK_REVIEWER", "PK_COMMITTEE",
                  "PK_FINAL_APPROVER", "PK_AUDITOR", "PK_EVALUATOR_ACADEMIC", "PK_EVALUATOR_PSYCHOMOTOR",
                  "PK_EVALUATOR_PSYCHOLOGY", "PK_EVALUATOR_ENTRY_INDICATORS", "PK_EVALUATOR_GROUP_OBSERVATION",
