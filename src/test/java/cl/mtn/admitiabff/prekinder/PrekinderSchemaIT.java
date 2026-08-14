@@ -4,6 +4,8 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import java.sql.DriverManager;
+import java.sql.Types;
+import java.util.UUID;
 import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.Test;
 import org.testcontainers.containers.PostgreSQLContainer;
@@ -66,6 +68,38 @@ class PrekinderSchemaIT {
                 """);
             assertThrows(java.sql.SQLException.class,
                 () -> statement.executeUpdate("UPDATE audit_events SET result='ALTERED'"));
+        }
+
+        try (var connection = DriverManager.getConnection(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword());
+             var statement = connection.prepareStatement("""
+                 SELECT DISTINCT i.instrument_code, i.display_name, i.capture_mode, i.sensitive, i.active, i.position
+                   FROM evaluation_instruments i
+                  WHERE i.active = true
+                    AND (
+                         EXISTS (
+                             SELECT 1 FROM professional_instrument_authorizations authz
+                              WHERE authz.professional_id = ?
+                                AND authz.instrument_code = i.instrument_code
+                                AND (CAST(? AS uuid) IS NULL OR authz.process_id = CAST(? AS uuid))
+                         )
+                         OR EXISTS (
+                             SELECT 1 FROM group_instrument_assignments assignment
+                             JOIN evaluation_groups assigned_group ON assigned_group.group_id = assignment.group_id
+                              WHERE assignment.evaluator_id = ?
+                                AND assignment.instrument_code = i.instrument_code
+                                AND (CAST(? AS uuid) IS NULL OR assigned_group.process_id = CAST(? AS uuid))
+                         )
+                    )
+                  ORDER BY i.position
+                 """)) {
+            UUID actorId = UUID.randomUUID();
+            statement.setObject(1, actorId);
+            statement.setNull(2, Types.OTHER);
+            statement.setNull(3, Types.OTHER);
+            statement.setObject(4, actorId);
+            statement.setNull(5, Types.OTHER);
+            statement.setNull(6, Types.OTHER);
+            statement.executeQuery().close();
         }
     }
 }

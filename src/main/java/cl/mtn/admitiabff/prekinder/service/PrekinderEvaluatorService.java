@@ -72,7 +72,7 @@ public class PrekinderEvaluatorService {
               JOIN evaluation_groups g ON g.group_id = ia.group_id
               JOIN prekinder_rooms room ON room.room_id = g.room_id
              WHERE ia.evaluator_id = :actorId AND ia.instrument_code = :instrument
-               AND (:processId IS NULL OR g.process_id = :processId)
+               AND (CAST(:processId AS uuid) IS NULL OR g.process_id = CAST(:processId AS uuid))
                AND g.starts_at >= :from AND g.starts_at < :to
                AND ia.status NOT IN ('REPLACED','CANCELLED')
              ORDER BY g.starts_at, g.code
@@ -109,7 +109,7 @@ public class PrekinderEvaluatorService {
                            AND authz.active = true
                            AND authz.valid_from <= now()
                            AND (authz.valid_until IS NULL OR authz.valid_until > now())
-                           AND (:processId IS NULL OR authz.process_id = :processId)
+                           AND (CAST(:processId AS uuid) IS NULL OR authz.process_id = CAST(:processId AS uuid))
                     )
                     OR EXISTS (
                         SELECT 1
@@ -118,7 +118,7 @@ public class PrekinderEvaluatorService {
                          WHERE assignment.evaluator_id = :actorId
                            AND assignment.instrument_code = i.instrument_code
                            AND assignment.status NOT IN ('REPLACED','CANCELLED')
-                           AND (:processId IS NULL OR assigned_group.process_id = :processId)
+                           AND (CAST(:processId AS uuid) IS NULL OR assigned_group.process_id = CAST(:processId AS uuid))
                     )
                )
              ORDER BY i.position
