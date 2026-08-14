@@ -17,6 +17,7 @@ import java.util.Map;
 import java.util.UUID;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.format.annotation.DateTimeFormat;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -74,8 +75,20 @@ public class PrekinderFlowController {
     @PostMapping("/professionals")
     public Map<String, Object> professional(@Valid @RequestBody ProfessionalCommand command) {
         return ok(flow.saveProfessional(new PrekinderFlowService.ProfessionalCommand(command.processId(), command.professionalId(),
-            command.legacyUserId(), command.displayName(), command.email(), command.specialty(), command.roleCode(),
+            command.legacyUserId(), command.displayName(), command.email(), command.password(), command.specialty(), command.roleCode(),
             command.active(), command.expectedVersion())));
+    }
+
+    @PutMapping("/professionals/{professionalId}/password")
+    public Map<String, Object> professionalPassword(@PathVariable UUID professionalId,
+        @Valid @RequestBody ProfessionalPasswordCommand command) {
+        return ok(flow.updateProfessionalPassword(professionalId, command.password()));
+    }
+
+    @DeleteMapping("/professionals/{professionalId}")
+    public Map<String, Object> deleteProfessional(@PathVariable UUID professionalId,
+        @RequestParam @Min(0) long expectedVersion) {
+        return ok(flow.deleteProfessional(professionalId, expectedVersion));
     }
 
     @GetMapping("/professionals/{professionalId}/availability")
@@ -113,9 +126,13 @@ public class PrekinderFlowController {
 
     @PostMapping("/groups")
     public Map<String, Object> group(@Valid @RequestBody GroupCommand command) {
-        return ok(flow.createGroup(new PrekinderFlowService.GroupCommand(command.processId(), command.roomId(),
+        var groupCommand = new PrekinderFlowService.GroupCommand(command.processId(), command.roomId(),
             command.stage(), command.code(), command.startsAt(), command.durationMinutes(), command.capacity(),
-            command.requiredEvaluators())));
+            command.requiredEvaluators());
+        if (command.memberIds() != null || command.evaluatorIds() != null) {
+            return ok(flow.createAssignedGroup(groupCommand, command.memberIds(), command.evaluatorIds()));
+        }
+        return ok(flow.createGroup(groupCommand));
     }
 
     @PutMapping("/groups/{groupId}/schedule")
@@ -248,8 +265,10 @@ public class PrekinderFlowController {
                                     @Min(0) long expectedVersion) {}
     public record ProfessionalCommand(@NotNull UUID processId, UUID professionalId, Long legacyUserId,
         @NotBlank @Size(max = 160) String displayName,
-        @Email @NotBlank @Size(max = 254) String email, @Size(max = 96) String specialty, @NotBlank String roleCode,
+        @Email @NotBlank @Size(max = 254) String email, @Size(min = 6, max = 128) String password,
+        @Size(max = 96) String specialty, @NotBlank String roleCode,
         boolean active, @Min(0) long expectedVersion) {}
+    public record ProfessionalPasswordCommand(@NotBlank @Size(min = 6, max = 128) String password) {}
     public record AvailabilityCommand(@NotNull Instant startsAt, @NotNull Instant endsAt, @NotBlank String status) {}
     public record RoomCommand(@NotBlank @Size(max = 64) String code, @NotBlank @Size(max = 160) String name,
                               @Min(9) @Max(200) int capacity) {}
@@ -257,7 +276,9 @@ public class PrekinderFlowController {
                                @NotBlank @Size(max = 64) String code, @NotNull Instant startsAt,
                                @Min(10) @Max(240) Integer durationMinutes,
                                @Min(1) @Max(30) Integer capacity,
-                               @Min(1) @Max(12) Integer requiredEvaluators) {}
+                               @Min(1) @Max(12) Integer requiredEvaluators,
+                               @Size(max = 30) List<@NotNull UUID> memberIds,
+                               @Size(max = 12) List<@NotNull UUID> evaluatorIds) {}
     public record RescheduleCommand(@NotNull UUID roomId, @NotNull Instant startsAt,
                                     @Min(10) @Max(240) Integer durationMinutes,
                                     @Size(max = 2000) String reason, @Min(0) long expectedVersion) {}

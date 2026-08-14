@@ -18,6 +18,8 @@ public interface UserRepository extends JpaRepository<UserEntity, Long>, JpaSpec
     boolean existsByEmailIgnoreCase(String email);
     Optional<UserEntity> findByRut(String rut);
     long countByActiveTrue();
+    long countByRoleNot(Role role);
+    long countByActiveTrueAndRoleNot(Role role);
     long countByRole(Role role);
     List<UserEntity> findByRoleOrderByFirstNameAscLastNameAsc(Role role);
     List<UserEntity> findByRoleInOrderByRoleAscFirstNameAscLastNameAsc(Collection<Role> roles);

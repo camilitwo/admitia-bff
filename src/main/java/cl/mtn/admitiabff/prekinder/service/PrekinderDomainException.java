@@ -19,10 +19,6 @@ public class PrekinderDomainException extends RuntimeException {
         return new PrekinderDomainException(code, message, HttpStatus.CONFLICT);
     }
 
-    public static PrekinderDomainException badRequest(String code, String message) {
-        return new PrekinderDomainException(code, message, HttpStatus.BAD_REQUEST);
-    }
-
     public static PrekinderDomainException forbidden(String code, String message) {
         return new PrekinderDomainException(code, message, HttpStatus.FORBIDDEN);
     }

@@ -45,10 +45,7 @@ public class PrekinderAuthenticationFilter extends OncePerRequestFilter {
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
         String path = request.getRequestURI();
-        return !path.startsWith("/api/prekinder/")
-            || path.equals("/api/prekinder/realtime")
-            || (path.equals("/api/prekinder/professional-registration")
-                && "POST".equalsIgnoreCase(request.getMethod()));
+        return !path.startsWith("/api/prekinder/") || path.equals("/api/prekinder/realtime");
     }
 
     @Override

@@ -10,6 +10,22 @@ import org.springframework.stereotype.Service;
 public class FirebaseCredentialService {
     public record ResolvedUser(String uid, String email) {}
 
+    public ResolvedUser createUser(String email, String password, String displayName) {
+        requireConfigured();
+        try {
+            UserRecord user = FirebaseAuth.getInstance().createUser(
+                new UserRecord.CreateRequest()
+                    .setEmail(email)
+                    .setPassword(password)
+                    .setDisplayName(displayName)
+                    .setEmailVerified(false)
+                    .setDisabled(false));
+            return new ResolvedUser(user.getUid(), user.getEmail());
+        } catch (Exception ex) {
+            throw new IllegalStateException("No fue posible crear la cuenta del profesional en Firebase", ex);
+        }
+    }
+
     public ResolvedUser resolveByEmail(String email) {
         requireConfigured();
         try {
@@ -41,6 +57,15 @@ public class FirebaseCredentialService {
             FirebaseAuth.getInstance().revokeRefreshTokens(firebaseUid);
         } catch (Exception ex) {
             throw new IllegalStateException("No fue posible revocar las sesiones de Firebase", ex);
+        }
+    }
+
+    public void deleteUser(String firebaseUid) {
+        requireConfigured();
+        try {
+            FirebaseAuth.getInstance().deleteUser(firebaseUid);
+        } catch (Exception ex) {
+            throw new IllegalStateException("No fue posible revertir la cuenta creada en Firebase", ex);
         }
     }
 

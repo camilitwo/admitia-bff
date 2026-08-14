@@ -46,12 +46,14 @@ public class UserService {
     }
 
     public Map<String, Object> roles() {
-        return Map.of("roles", Arrays.stream(Role.values()).map(Enum::name).toList());
+        return Map.of("roles", Arrays.stream(Role.values())
+            .filter(role -> role != Role.PREKINDER_PROFESSIONAL).map(Enum::name).toList());
     }
 
     public Map<String, Object> publicSchoolStaff(Boolean activeOnly) {
         List<Map<String, Object>> staff = userRepository.findByRoleInOrderByRoleAscFirstNameAscLastNameAsc(
-                Arrays.stream(Role.values()).filter(role -> role != Role.APODERADO).toList())
+                Arrays.stream(Role.values()).filter(role -> role != Role.APODERADO
+                    && role != Role.PREKINDER_PROFESSIONAL).toList())
             .stream()
             .filter(user -> activeOnly == null || !activeOnly || user.isActive())
             .map(this::toResponse)
@@ -64,9 +66,12 @@ public class UserService {
     }
 
     public Map<String, Object> stats() {
-        long total = userRepository.count();
-        long active = userRepository.countByActiveTrue();
-        Map<String, Object> byRole = userRepository.countByRole().stream().collect(Collectors.toMap(item -> item.getRole().name(), UserRepository.RoleCountView::getTotal, (a, b) -> b, LinkedHashMap::new));
+        long total = userRepository.countByRoleNot(Role.PREKINDER_PROFESSIONAL);
+        long active = userRepository.countByActiveTrueAndRoleNot(Role.PREKINDER_PROFESSIONAL);
+        Map<String, Object> byRole = userRepository.countByRole().stream()
+            .filter(item -> item.getRole() != Role.PREKINDER_PROFESSIONAL)
+            .collect(Collectors.toMap(item -> item.getRole().name(), UserRepository.RoleCountView::getTotal,
+                (a, b) -> b, LinkedHashMap::new));
         return Map.of("success", true, "data", Map.of("total", total, "active", active, "inactive", total - active, "byRole", byRole));
     }
 
@@ -79,6 +84,9 @@ public class UserService {
 
     public Map<String, Object> byRole(String role, Boolean activeOnly) {
         Role normalized = Role.valueOf(role.toUpperCase());
+        if (normalized == Role.PREKINDER_PROFESSIONAL) {
+            return Map.of("success", true, "data", List.of(), "count", 0, "role", normalized.name());
+        }
         List<Map<String, Object>> users = userRepository.findByRoleOrderByFirstNameAscLastNameAsc(normalized).stream()
             .filter(user -> activeOnly == null || !activeOnly || user.isActive())
             .map(this::toResponse)
@@ -106,6 +114,7 @@ public class UserService {
     public Map<String, Object> search(String query, String role, Boolean activeOnly) {
         Pageable pageable = PageRequest.of(0, 50);
         List<Map<String, Object>> users = userRepository.search(query, pageable).stream()
+            .filter(user -> user.getRole() != Role.PREKINDER_PROFESSIONAL)
             .filter(user -> role == null || role.isBlank() || user.getRole().name().equalsIgnoreCase(role))
             .filter(user -> activeOnly == null || !activeOnly || user.isActive())
             .map(this::toResponse)
@@ -126,7 +135,9 @@ public class UserService {
     }
 
     public Map<String, Object> getAll() {
-        List<Map<String, Object>> users = userRepository.findAll().stream().map(this::toResponse).toList();
+        List<Map<String, Object>> users = userRepository.findAll().stream()
+            .filter(user -> user.getRole() != Role.PREKINDER_PROFESSIONAL)
+            .map(this::toResponse).toList();
         return Map.of("success", true, "data", users, "users", users, "count", users.size());
     }
 
@@ -183,6 +194,9 @@ public class UserService {
     private Map<String, Object> pageUsers(int page, int size, String search, Boolean active, Role role, boolean guardiansOnly) {
         Pageable pageable = PageRequest.of(page, size);
         Specification<UserEntity> specification = Specification.where((root, query, cb) -> guardiansOnly ? cb.equal(root.get("role"), Role.APODERADO) : cb.notEqual(root.get("role"), Role.APODERADO));
+        if (!guardiansOnly) {
+            specification = specification.and((root, query, cb) -> cb.notEqual(root.get("role"), Role.PREKINDER_PROFESSIONAL));
+        }
         if (role != null) {
             specification = specification.and((root, query, cb) -> cb.equal(root.get("role"), role));
         }

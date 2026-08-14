@@ -32,19 +32,6 @@ class PrekinderAuthenticationFilterTest {
     }
 
     @Test
-    void allowsPublicProfessionalRegistrationWithoutBearerToken() throws Exception {
-        var request = new MockHttpServletRequest("POST", "/api/prekinder/professional-registration");
-        var response = new MockHttpServletResponse();
-        FilterChain chain = mock(FilterChain.class);
-
-        filter.doFilter(request, response, chain);
-
-        assertEquals(200, response.getStatus());
-        org.mockito.Mockito.verify(chain).doFilter(request, response);
-        verifyNoInteractions(jwtService, actors);
-    }
-
-    @Test
     void doesNotMaskActorStorageFailureAsUnauthorized() {
         var request = authorizedRequest();
         var response = new MockHttpServletResponse();

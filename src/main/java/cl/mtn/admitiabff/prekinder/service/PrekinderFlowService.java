@@ -52,16 +52,20 @@ public class PrekinderFlowService {
     private final NamedParameterJdbcTemplate jdbc;
     private final TransactionTemplate transactions;
     private final PrekinderAccessService access;
+    private final PrekinderProfessionalAccountService professionalAccounts;
     private final EnvelopeEncryptionService encryption;
     private final ObjectMapper mapper;
 
     public PrekinderFlowService(@Qualifier("prekinderJdbc") NamedParameterJdbcTemplate jdbc,
                                 @Qualifier("prekinderTransactionManager") PlatformTransactionManager manager,
-                                PrekinderAccessService access, EnvelopeEncryptionService encryption,
+                                PrekinderAccessService access,
+                                PrekinderProfessionalAccountService professionalAccounts,
+                                EnvelopeEncryptionService encryption,
                                 ObjectMapper mapper) {
         this.jdbc = jdbc;
         this.transactions = new TransactionTemplate(manager);
         this.access = access;
+        this.professionalAccounts = professionalAccounts;
         this.encryption = encryption;
         this.mapper = mapper;
     }
@@ -292,6 +296,17 @@ public class PrekinderFlowService {
     public ProfessionalView saveProfessional(ProfessionalCommand command) {
         PrekinderActor admin = access.requireAdmin();
         if (command.processId() == null) throw new IllegalArgumentException("Selecciona el proceso Prekínder");
+        List<Long> existingAccountLinks = command.professionalId() == null ? List.of() : jdbc.query(
+            "SELECT legacy_user_id FROM actors WHERE actor_id = :id",
+            Map.of("id", command.professionalId()), (rs, row) -> (Long) rs.getObject("legacy_user_id"));
+        boolean accountRequired = command.professionalId() == null
+            || existingAccountLinks.isEmpty() || existingAccountLinks.getFirst() == null;
+        if (!accountRequired) {
+            professionalAccounts.requireMatchingEmail(existingAccountLinks.getFirst(), clean(command.email()));
+        }
+        if (accountRequired && (command.password() == null || command.password().length() < 6)) {
+            throw new IllegalArgumentException("La contraseña debe tener al menos 6 caracteres");
+        }
         ProfessionalRoleDefinition definition = professionalRole(command.roleCode());
         String role = definition.roleCode();
         String emailHash = sha256(clean(command.email()).toLowerCase());
@@ -301,44 +316,127 @@ public class PrekinderFlowService {
             : List.of();
         UUID actorId = command.professionalId() == null
             ? (actorMatches.isEmpty() ? UUID.randomUUID() : actorMatches.getFirst()) : command.professionalId();
-        return transactions.execute(status -> {
-            if (command.professionalId() == null) {
-                if (actorMatches.isEmpty()) {
+        PrekinderProfessionalAccountService.ProvisionedAccount account = accountRequired
+            ? professionalAccounts.provision(clean(command.displayName()), clean(command.email()), command.password())
+            : null;
+        try {
+            return transactions.execute(status -> {
+                if (command.professionalId() == null) {
+                    Long legacyUserId = account.userId();
+                    if (actorMatches.isEmpty()) {
+                        jdbc.update("""
+                            INSERT INTO actors(actor_id, legacy_user_id, role_code, display_name, email_hash)
+                            VALUES (:id, :legacyId, :actorRole, :displayName, :emailHash)
+                            """, new MapSqlParameterSource().addValue("id", actorId).addValue("legacyId", legacyUserId)
+                            .addValue("actorRole", role)
+                            .addValue("displayName", clean(command.displayName())).addValue("emailHash", emailHash));
+                    } else {
+                        jdbc.update("""
+                            UPDATE actors SET legacy_user_id = COALESCE(legacy_user_id, :legacyId),
+                                role_code = :role, display_name = :name, updated_at = now()
+                             WHERE actor_id = :id
+                            """, Map.of("id", actorId, "legacyId", legacyUserId, "role", role,
+                                "name", clean(command.displayName())));
+                    }
                     jdbc.update("""
-                        INSERT INTO actors(actor_id, legacy_user_id, role_code, display_name, email_hash)
-                        VALUES (:id, :legacyId, :actorRole, :displayName, :emailHash)
-                        """, new MapSqlParameterSource().addValue("id", actorId).addValue("legacyId", command.legacyUserId())
-                        .addValue("actorRole", role)
-                        .addValue("displayName", clean(command.displayName())).addValue("emailHash", emailHash));
+                        INSERT INTO professional_profiles(professional_id, display_name, email, specialty, role_code, active)
+                        VALUES (:id, :displayName, :email, :specialty, :role, true)
+                        """, new MapSqlParameterSource().addValue("id", actorId).addValue("displayName", clean(command.displayName()))
+                        .addValue("email", clean(command.email())).addValue("specialty", cleanNullable(command.specialty()))
+                        .addValue("role", role));
                 } else {
-                    jdbc.update("UPDATE actors SET role_code = :role, display_name = :name, updated_at = now() WHERE actor_id = :id",
-                        Map.of("id", actorId, "role", role, "name", clean(command.displayName())));
+                    int updated = jdbc.update("""
+                        UPDATE professional_profiles SET display_name = :displayName, email = :email,
+                            specialty = :specialty, role_code = :role, active = :active,
+                            version = version + 1, updated_at = now()
+                         WHERE professional_id = :id AND version = :version
+                        """, new MapSqlParameterSource().addValue("id", actorId).addValue("displayName", clean(command.displayName()))
+                        .addValue("email", clean(command.email())).addValue("specialty", cleanNullable(command.specialty()))
+                        .addValue("role", role).addValue("active", command.active()).addValue("version", command.expectedVersion()));
+                    if (updated != 1) throw new VersionConflictException("El perfil cambió");
+                    jdbc.update("UPDATE actors SET display_name = :displayName, email_hash = :emailHash, updated_at = now() WHERE actor_id = :id",
+                        Map.of("id", actorId, "displayName", clean(command.displayName()),
+                            "emailHash", sha256(clean(command.email()).toLowerCase())));
+                    jdbc.update("UPDATE actors SET role_code = :role WHERE actor_id = :id", Map.of("id", actorId, "role", role));
+                    if (account != null) {
+                        jdbc.update("UPDATE actors SET legacy_user_id = COALESCE(legacy_user_id, :legacyId) WHERE actor_id = :id",
+                            Map.of("id", actorId, "legacyId", account.userId()));
+                    }
                 }
-                jdbc.update("""
-                    INSERT INTO professional_profiles(professional_id, display_name, email, specialty, role_code, active)
-                    VALUES (:id, :displayName, :email, :specialty, :role, true)
-                    """, new MapSqlParameterSource().addValue("id", actorId).addValue("displayName", clean(command.displayName()))
-                    .addValue("email", clean(command.email())).addValue("specialty", cleanNullable(command.specialty()))
-                    .addValue("role", role));
-            } else {
-                int updated = jdbc.update("""
-                    UPDATE professional_profiles SET display_name = :displayName, email = :email,
-                        specialty = :specialty, role_code = :role, active = :active,
-                        version = version + 1, updated_at = now()
-                     WHERE professional_id = :id AND version = :version
-                    """, new MapSqlParameterSource().addValue("id", actorId).addValue("displayName", clean(command.displayName()))
-                    .addValue("email", clean(command.email())).addValue("specialty", cleanNullable(command.specialty()))
-                    .addValue("role", role).addValue("active", command.active()).addValue("version", command.expectedVersion()));
-                if (updated != 1) throw new VersionConflictException("El perfil cambió");
-                jdbc.update("UPDATE actors SET display_name = :displayName, email_hash = :emailHash, updated_at = now() WHERE actor_id = :id",
-                    Map.of("id", actorId, "displayName", clean(command.displayName()),
-                        "emailHash", sha256(clean(command.email()).toLowerCase())));
-                jdbc.update("UPDATE actors SET role_code = :role WHERE actor_id = :id", Map.of("id", actorId, "role", role));
+                syncProfessionalRole(command.processId(), actorId, definition, admin.id());
+                audit(admin.id(), "PROFESSIONAL_SAVED", "PROFESSIONAL", actorId, Map.of("role", role));
+                return professional(actorId);
+            });
+        } catch (RuntimeException exception) {
+            if (account != null) professionalAccounts.rollback(account);
+            throw exception;
+        }
+    }
+
+    public PasswordUpdateResult updateProfessionalPassword(UUID professionalId, String password) {
+        PrekinderActor admin = access.requireAdmin();
+        if (password == null || password.length() < 6 || password.length() > 128) {
+            throw new IllegalArgumentException("La contraseña debe tener entre 6 y 128 caracteres");
+        }
+        Long legacyUserId = jdbc.queryForObject("""
+            SELECT a.legacy_user_id
+              FROM professional_profiles p JOIN actors a ON a.actor_id = p.professional_id
+             WHERE p.professional_id = :id
+            """, Map.of("id", professionalId), Long.class);
+        if (legacyUserId == null) {
+            throw PrekinderDomainException.conflict("PROFESSIONAL_ACCOUNT_NOT_FOUND",
+                "El profesional no tiene una cuenta de acceso enlazada.");
+        }
+        professionalAccounts.updatePassword(legacyUserId, password);
+        audit(admin.id(), "PROFESSIONAL_PASSWORD_UPDATED", "PROFESSIONAL", professionalId, Map.of());
+        return new PasswordUpdateResult(professionalId, true);
+    }
+
+    public ProfessionalDeletionResult deleteProfessional(UUID professionalId, long expectedVersion) {
+        PrekinderActor admin = access.requireAdmin();
+        Long legacyUserId = transactions.execute(status -> {
+            Map<String, Object> profile = jdbc.queryForMap("""
+                SELECT p.version, a.legacy_user_id
+                  FROM professional_profiles p JOIN actors a ON a.actor_id = p.professional_id
+                 WHERE p.professional_id = :id
+                 FOR UPDATE
+                """, Map.of("id", professionalId));
+            long currentVersion = ((Number) profile.get("version")).longValue();
+            if (currentVersion != expectedVersion) throw new VersionConflictException("El perfil cambió");
+
+            Long activeGroups = jdbc.queryForObject("""
+                SELECT count(*)
+                  FROM group_evaluator_assignments assignment
+                  JOIN evaluation_groups evaluation_group ON evaluation_group.group_id = assignment.group_id
+                 WHERE assignment.evaluator_id = :id
+                   AND assignment.status = 'ACTIVE'
+                   AND evaluation_group.status IN ('DRAFT','CONFIRMED','IN_PROGRESS')
+                """, Map.of("id", professionalId), Long.class);
+            if (activeGroups != null && activeGroups > 0) {
+                throw PrekinderDomainException.conflict("PROFESSIONAL_HAS_ACTIVE_GROUPS",
+                    "No puedes eliminar al profesional mientras tenga grupos activos asignados.");
             }
-            syncProfessionalRole(command.processId(), actorId, definition, admin.id());
-            audit(admin.id(), "PROFESSIONAL_SAVED", "PROFESSIONAL", actorId, Map.of("role", role));
-            return professional(actorId);
+
+            audit(admin.id(), "PROFESSIONAL_DELETED", "PROFESSIONAL", professionalId, Map.of());
+            jdbc.update("""
+                UPDATE prekinder_actor_role_assignments
+                   SET active = false, valid_until = now(), version = version + 1
+                 WHERE actor_id = :id AND active
+                """, Map.of("id", professionalId));
+            jdbc.update("DELETE FROM professional_instrument_authorizations WHERE professional_id = :id",
+                Map.of("id", professionalId));
+            jdbc.update("DELETE FROM professional_availability WHERE professional_id = :id",
+                Map.of("id", professionalId));
+            jdbc.update("DELETE FROM professional_profiles WHERE professional_id = :id",
+                Map.of("id", professionalId));
+            jdbc.update("""
+                UPDATE actors SET active = false, role_code = 'DELETED_PREKINDER', updated_at = now()
+                 WHERE actor_id = :id
+                """, Map.of("id", professionalId));
+            return (Long) profile.get("legacy_user_id");
         });
+        boolean accountDeleted = professionalAccounts.deleteExclusiveAccount(legacyUserId);
+        return new ProfessionalDeletionResult(professionalId, true, accountDeleted);
     }
 
     private void syncProfessionalRole(UUID processId, UUID professionalId,
@@ -429,6 +527,49 @@ public class PrekinderFlowService {
         }
         audit(actor.id(), "GROUP_CREATED", "GROUP", id, Map.of("stage", stage));
         return group(id);
+    }
+
+    public GroupView createAssignedGroup(GroupCommand command, List<UUID> memberIds, List<UUID> evaluatorIds) {
+        List<UUID> children = memberIds == null ? List.of() : List.copyOf(memberIds);
+        List<UUID> evaluators = evaluatorIds == null ? List.of() : List.copyOf(evaluatorIds);
+        int capacity = command.capacity() == null ? ("GROUP_3".equals(command.stage()) ? 3 : 9) : command.capacity();
+        int requiredEvaluators = command.requiredEvaluators() == null
+            ? ("GROUP_3".equals(command.stage()) ? 3 : 6)
+            : command.requiredEvaluators();
+
+        if (children.isEmpty()) {
+            throw new IllegalArgumentException("Selecciona al menos un postulante para formar el grupo");
+        }
+        if (children.size() > capacity) {
+            throw new IllegalArgumentException("La cantidad de postulantes supera la capacidad del grupo");
+        }
+        if (children.stream().distinct().count() != children.size()) {
+            throw new IllegalArgumentException("Un postulante no puede repetirse dentro del grupo");
+        }
+        if (evaluators.size() != requiredEvaluators) {
+            throw new IllegalArgumentException("El equipo debe completar la cantidad de evaluadores requeridos");
+        }
+        if (evaluators.stream().distinct().count() != evaluators.size()) {
+            throw new IllegalArgumentException("Un evaluador no puede repetirse dentro del equipo");
+        }
+
+        return transactions.execute(status -> {
+            Long eligibleChildren = jdbc.queryForObject("""
+                SELECT count(*) FROM applications
+                 WHERE process_id = :processId
+                   AND eligibility_status = 'VERIFIED'
+                   AND application_id IN (:applicationIds)
+                """, new MapSqlParameterSource().addValue("processId", command.processId())
+                .addValue("applicationIds", children), Long.class);
+            if (eligibleChildren == null || eligibleChildren != children.size()) {
+                throw PrekinderDomainException.conflict("INELIGIBLE_MEMBER",
+                    "Todos los postulantes deben pertenecer al proceso y tener su elegibilidad verificada");
+            }
+            GroupView created = createGroup(command);
+            children.forEach(applicationId -> addMember(created.groupId(), applicationId));
+            evaluators.forEach(evaluatorId -> assignEvaluator(created.groupId(), evaluatorId));
+            return group(created.groupId());
+        });
     }
 
     public GroupView rescheduleGroup(UUID groupId, UUID roomId, Instant startsAt, Integer durationMinutes,
@@ -1362,12 +1503,14 @@ public class PrekinderFlowService {
                                   long version, long declarationVersion, ApplicantIdentity identity,
                                   ApplicationDetails applicationDetails, Instant createdAt) {}
     public record ProfessionalCommand(UUID processId, UUID professionalId, Long legacyUserId, String displayName, String email,
-                                      String specialty, String roleCode, boolean active, long expectedVersion) {}
+                                      String password, String specialty, String roleCode, boolean active, long expectedVersion) {}
     public record ProfessionalRoleDefinition(String roleCode, String label, String groupCode,
                                              String instrumentCode, int position) {}
     public record ProfessionalView(UUID professionalId, Long legacyUserId, String displayName, String email,
                                    String specialty, String roleCode, String roleLabel, String roleGroup,
                                    String instrumentCode, boolean active, long version) {}
+    public record PasswordUpdateResult(UUID professionalId, boolean passwordUpdated) {}
+    public record ProfessionalDeletionResult(UUID professionalId, boolean deleted, boolean firebaseAccountDeleted) {}
     public record AvailabilityView(UUID availabilityId, UUID professionalId, Instant startsAt, Instant endsAt,
                                    String status, long version) {}
     public record ScheduleBlockView(UUID dayId, LocalDate date, String dayName, String dayStatus, long dayVersion,
