@@ -67,7 +67,9 @@ public class PrekinderFlowController {
     }
 
     @GetMapping("/professionals")
-    public Map<String, Object> professionals() { return ok(flow.professionals()); }
+    public Map<String, Object> professionals(@RequestParam(required = false) UUID processId) {
+        return ok(flow.professionals(processId));
+    }
 
     @GetMapping("/professional-roles")
     public Map<String, Object> professionalRoles() { return ok(flow.professionalRoles()); }
