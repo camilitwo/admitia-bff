@@ -863,28 +863,30 @@ public class PrekinderFlowService {
         PrekinderActor actor = access.requireAdmin();
         return transactions.execute(status -> {
             GroupView group = group(groupId);
-            Long eligible = jdbc.queryForObject("""
-                SELECT count(*)
+            String roleCode = jdbc.queryForObject("""
+                SELECT p.role_code
                   FROM professional_profiles p
                   JOIN prekinder_actor_role_assignments r
                     ON r.actor_id = p.professional_id AND r.process_id = :processId AND r.active
                  WHERE p.professional_id = :evaluatorId AND p.active
                    AND p.role_code LIKE 'PK_EVALUATOR_%' AND r.role_code = p.role_code
-                """, Map.of("processId", group.processId(), "evaluatorId", evaluatorId), Long.class);
-            if (eligible == null || eligible == 0) {
+                """, Map.of("processId", group.processId(), "evaluatorId", evaluatorId), String.class);
+            if (roleCode == null) {
                 throw PrekinderDomainException.forbidden("PROFESSIONAL_ROLE_MISMATCH",
                     "El profesional no tiene un rol evaluador homologado para este proceso");
             }
+            ProfessionalRoleDefinition definition = professionalRole(roleCode);
+            String instrumentCode = definition.instrumentCode();
             if (group.evaluatorIds().size() >= group.requiredEvaluators()) {
                 throw PrekinderDomainException.conflict("EVALUATOR_CAPACITY", "El grupo ya tiene todos sus evaluadores");
             }
             UUID assignmentId = UUID.randomUUID();
             try {
                 jdbc.update("""
-                    INSERT INTO group_evaluator_assignments(assignment_id, group_id, evaluator_id, assigned_by)
-                    VALUES (:id, :groupId, :evaluatorId, :assignedBy)
+                    INSERT INTO group_evaluator_assignments(assignment_id, group_id, evaluator_id, instrument_code, assigned_by)
+                    VALUES (:id, :groupId, :evaluatorId, :instrumentCode, :assignedBy)
                     """, Map.of("id", assignmentId, "groupId", groupId, "evaluatorId", evaluatorId,
-                    "assignedBy", actor.id()));
+                    "instrumentCode", instrumentCode, "assignedBy", actor.id()));
                 jdbc.update("""
                     INSERT INTO evaluator_group_bookings(booking_id, assignment_id, evaluator_id, starts_at, ends_at)
                     VALUES (:id, :assignmentId, :evaluatorId, :startsAt, :endsAt)
@@ -979,14 +981,14 @@ public class PrekinderFlowService {
         Instant from = date.atStartOfDay(SANTIAGO).toInstant();
         Instant to = date.plusDays(1).atStartOfDay(SANTIAGO).toInstant();
         return jdbc.query("""
-            SELECT DISTINCT g.group_id FROM evaluation_groups g
+            SELECT g.group_id, ge.instrument_code FROM evaluation_groups g
               JOIN group_evaluator_assignments ge ON ge.group_id = g.group_id
              WHERE ge.evaluator_id = :actorId AND ge.status = 'ACTIVE'
                AND g.starts_at >= :from AND g.starts_at < :to AND g.status <> 'CANCELLED'
              ORDER BY g.group_id
             """, new MapSqlParameterSource().addValue("actorId", actor.id())
             .addValue("from", Timestamp.from(from)).addValue("to", Timestamp.from(to)),
-            (rs, row) -> agendaGroup(rs.getObject(1, UUID.class), actor.id()));
+            (rs, row) -> agendaGroup(rs.getObject("group_id", UUID.class), actor.id(), rs.getString("instrument_code")));
     }
 
     public DecisionView decide(UUID applicationId, String decision, String note) {
@@ -1212,7 +1214,7 @@ public class PrekinderFlowService {
                     Map.of("id", id), UUID.class)));
     }
 
-    private AgendaGroupView agendaGroup(UUID groupId, UUID evaluatorId) {
+    private AgendaGroupView agendaGroup(UUID groupId, UUID evaluatorId, String instrumentCode) {
         GroupView group = group(groupId);
         List<ReportSummary> reports = jdbc.query("""
             SELECT r.report_id, r.application_id, r.status, r.version, r.raw_score, r.maximum_score,
@@ -1232,7 +1234,7 @@ public class PrekinderFlowService {
                     (java.math.BigDecimal) rs.getObject("raw_score"), (java.math.BigDecimal) rs.getObject("maximum_score"));
             });
         Instant now = Instant.now();
-        return new AgendaGroupView(group, now.isAfter(group.startsAt().minus(Duration.ofMinutes(3)))
+        return new AgendaGroupView(instrumentCode, group, now.isAfter(group.startsAt().minus(Duration.ofMinutes(3)))
             && now.isBefore(group.endsAt().plus(Duration.ofMinutes(10))), reports);
     }
 
@@ -1538,7 +1540,7 @@ public class PrekinderFlowService {
                             String status, long version, List<UUID> memberIds, List<UUID> evaluatorIds) {}
     public record ReportSummary(UUID reportId, UUID applicationId, String applicantName, String status,
                                 long version, java.math.BigDecimal rawScore, java.math.BigDecimal maximumScore) {}
-    public record AgendaGroupView(GroupView group, boolean editableNow, List<ReportSummary> reports) {}
+    public record AgendaGroupView(String instrumentCode, GroupView group, boolean editableNow, List<ReportSummary> reports) {}
     public record DecisionView(UUID decisionId, UUID applicationId, String decision, int version,
                                String status, Instant decidedAt) {}
     public record BatchView(UUID batchId, UUID processId, Instant scheduledAt, String status,
