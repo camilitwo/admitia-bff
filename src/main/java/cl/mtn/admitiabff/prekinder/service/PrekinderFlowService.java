@@ -228,8 +228,22 @@ public class PrekinderFlowService {
         });
     }
 
-    public List<ProfessionalView> professionals() {
+    public List<ProfessionalView> professionals(UUID processId) {
         access.requireAdmin();
+        if (processId != null) {
+            return jdbc.query("""
+                SELECT p.professional_id, p.display_name, p.email, p.specialty, p.role_code, p.active, p.version,
+                       a.legacy_user_id, r.role_code as assignment_role
+                  FROM professional_profiles p
+                  JOIN actors a ON a.actor_id = p.professional_id
+                  JOIN prekinder_actor_role_assignments r ON r.actor_id = p.professional_id
+                                                         AND r.process_id = :processId AND r.active
+                 WHERE p.active
+                ORDER BY p.display_name
+                """, Map.of("processId", processId), (rs, row) -> professionalView(rs.getObject("professional_id", UUID.class),
+                    (Long) rs.getObject("legacy_user_id"), rs.getString("display_name"), rs.getString("email"),
+                    rs.getString("specialty"), rs.getString("role_code"), rs.getBoolean("active"), rs.getLong("version")));
+        }
         return jdbc.query("""
             SELECT p.professional_id, p.display_name, p.email, p.specialty, p.role_code, p.active, p.version,
                    a.legacy_user_id
