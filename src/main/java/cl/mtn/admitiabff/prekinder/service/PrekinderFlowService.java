@@ -586,6 +586,47 @@ public class PrekinderFlowService {
         });
     }
 
+    public GroupView updateGroup(UUID groupId, UUID roomId, Instant startsAt, Integer durationMinutes,
+                                 int capacity, int requiredEvaluators, List<UUID> memberIds,
+                                 List<UUID> evaluatorIds, String reason, long expectedVersion) {
+        access.requireAdmin();
+        List<UUID> members = memberIds == null ? List.of() : List.copyOf(memberIds);
+        List<UUID> evaluators = evaluatorIds == null ? List.of() : List.copyOf(evaluatorIds);
+        if (members.isEmpty()) throw new IllegalArgumentException("El grupo debe conservar al menos un postulante");
+        if (members.size() > capacity) throw new IllegalArgumentException("Los postulantes superan la capacidad del grupo");
+        if (members.stream().distinct().count() != members.size()) throw new IllegalArgumentException("Hay postulantes repetidos");
+        if (evaluators.size() != requiredEvaluators) {
+            throw new IllegalArgumentException("El equipo debe completar la cantidad de evaluadores requeridos");
+        }
+        if (evaluators.stream().distinct().count() != evaluators.size()) throw new IllegalArgumentException("Hay evaluadores repetidos");
+
+        return transactions.execute(status -> {
+            GroupView updated = editableFutureGroup(groupId, expectedVersion);
+            int duration = durationMinutes == null ? 30 : durationMinutes;
+            if (!updated.roomId().equals(roomId) || !updated.startsAt().equals(startsAt)
+                || !updated.endsAt().equals(startsAt.plus(Duration.ofMinutes(duration)))) {
+                updated = rescheduleGroup(groupId, roomId, startsAt, duration, reason, updated.version());
+            }
+
+            for (UUID applicationId : updated.memberIds().stream().filter(id -> !members.contains(id)).toList()) {
+                updated = removeMember(groupId, applicationId, updated.version());
+            }
+            for (UUID evaluatorId : updated.evaluatorIds().stream().filter(id -> !evaluators.contains(id)).toList()) {
+                updated = removeEvaluator(groupId, evaluatorId, updated.version());
+            }
+            if (updated.capacity() != capacity || updated.requiredEvaluators() != requiredEvaluators) {
+                updated = configureGroup(groupId, capacity, requiredEvaluators, reason, updated.version());
+            }
+            for (UUID applicationId : members) {
+                if (!updated.memberIds().contains(applicationId)) updated = addMember(groupId, applicationId);
+            }
+            for (UUID evaluatorId : evaluators) {
+                if (!updated.evaluatorIds().contains(evaluatorId)) updated = assignEvaluator(groupId, evaluatorId);
+            }
+            return group(groupId);
+        });
+    }
+
     public GroupView rescheduleGroup(UUID groupId, UUID roomId, Instant startsAt, Integer durationMinutes,
                                      String reason, long expectedVersion) {
         PrekinderActor actor = access.requireAdmin();
@@ -674,6 +715,49 @@ public class PrekinderFlowService {
                     "evaluators", requiredEvaluators));
             if (updated != 1) throw new VersionConflictException("El grupo cambió");
             history(actor.id(), groupId, "GROUP", groupId, "LIMITS_CONFIGURED", reason);
+            return group(groupId);
+        });
+    }
+
+    public GroupView deleteGroup(UUID groupId, long expectedVersion) {
+        PrekinderActor actor = access.requireAdmin();
+        return transactions.execute(status -> {
+            GroupView current = group(groupId);
+            if (current.version() != expectedVersion) throw new VersionConflictException("El grupo cambió");
+            if (!List.of("DRAFT", "CONFIRMED").contains(current.status())) {
+                throw PrekinderDomainException.conflict("GROUP_LOCKED",
+                    "Sólo se pueden eliminar grupos en preparación o listos para evaluación");
+            }
+            if (!Instant.now().isBefore(current.startsAt())) {
+                throw PrekinderDomainException.conflict("GROUP_ALREADY_STARTED",
+                    "No se puede eliminar un grupo cuyo bloque ya comenzó");
+            }
+
+            jdbc.update("""
+                UPDATE applicant_group_bookings SET active = false
+                 WHERE member_id IN (SELECT member_id FROM evaluation_group_members WHERE group_id = :groupId)
+                """, Map.of("groupId", groupId));
+            jdbc.update("""
+                UPDATE evaluation_group_members SET status = 'CANCELLED', version = version + 1, updated_at = now()
+                 WHERE group_id = :groupId AND status IN ('ASSIGNED','ATTENDED','ABSENT')
+                """, Map.of("groupId", groupId));
+            jdbc.update("""
+                UPDATE evaluator_group_bookings SET active = false
+                 WHERE assignment_id IN (SELECT assignment_id FROM group_evaluator_assignments WHERE group_id = :groupId)
+                """, Map.of("groupId", groupId));
+            jdbc.update("""
+                UPDATE group_evaluator_assignments SET status = 'CANCELLED', version = version + 1,
+                    ended_at = now()
+                 WHERE group_id = :groupId AND status = 'ACTIVE'
+                """, Map.of("groupId", groupId));
+            int updated = jdbc.update("""
+                UPDATE evaluation_groups SET status = 'CANCELLED', version = version + 1, updated_at = now()
+                 WHERE group_id = :groupId AND version = :version AND status IN ('DRAFT','CONFIRMED')
+                """, Map.of("groupId", groupId, "version", expectedVersion));
+            if (updated != 1) throw new VersionConflictException("El grupo cambió");
+
+            history(actor.id(), groupId, "GROUP", groupId, "DELETED", "Eliminado desde la gestión de grupos");
+            audit(actor.id(), "GROUP_DELETED", "GROUP", groupId, Map.of("previousStatus", current.status()));
             return group(groupId);
         });
     }
@@ -831,30 +915,81 @@ public class PrekinderFlowService {
         PrekinderActor actor = access.requireAdmin();
         return transactions.execute(status -> {
             GroupView group = group(groupId);
+            ensureEditableFutureGroup(group);
             if (group.memberIds().size() >= group.capacity()) {
                 throw PrekinderDomainException.conflict("GROUP_CAPACITY", "El grupo alcanzó su capacidad máxima");
             }
             if (group.stage().equals("GROUP_9") && !firstStageComplete(applicationId)) {
                 throw PrekinderDomainException.conflict("STAGE_ORDER", "La primera instancia aún no está completa");
             }
-            UUID memberId = UUID.randomUUID();
+            List<UUID> previousMembers = jdbc.queryForList("""
+                SELECT member_id FROM evaluation_group_members
+                 WHERE group_id = :groupId AND application_id = :applicationId AND status = 'CANCELLED'
+                """, Map.of("groupId", groupId, "applicationId", applicationId), UUID.class);
+            UUID memberId = previousMembers.isEmpty() ? UUID.randomUUID() : previousMembers.getFirst();
             try {
-                jdbc.update("""
-                    INSERT INTO evaluation_group_members(member_id, group_id, application_id)
-                    VALUES (:id, :groupId, :applicationId)
-                    """, Map.of("id", memberId, "groupId", groupId, "applicationId", applicationId));
-                jdbc.update("""
-                    INSERT INTO applicant_group_bookings(booking_id, member_id, application_id, starts_at, ends_at)
-                    VALUES (:id, :memberId, :applicationId, :startsAt, :endsAt)
-                    """, new MapSqlParameterSource().addValue("id", UUID.randomUUID()).addValue("memberId", memberId)
-                    .addValue("applicationId", applicationId).addValue("startsAt", Timestamp.from(group.startsAt()))
-                    .addValue("endsAt", Timestamp.from(group.endsAt())));
+                if (previousMembers.isEmpty()) {
+                    jdbc.update("""
+                        INSERT INTO evaluation_group_members(member_id, group_id, application_id)
+                        VALUES (:id, :groupId, :applicationId)
+                        """, Map.of("id", memberId, "groupId", groupId, "applicationId", applicationId));
+                    jdbc.update("""
+                        INSERT INTO applicant_group_bookings(booking_id, member_id, application_id, starts_at, ends_at)
+                        VALUES (:id, :memberId, :applicationId, :startsAt, :endsAt)
+                        """, new MapSqlParameterSource().addValue("id", UUID.randomUUID()).addValue("memberId", memberId)
+                        .addValue("applicationId", applicationId).addValue("startsAt", Timestamp.from(group.startsAt()))
+                        .addValue("endsAt", Timestamp.from(group.endsAt())));
+                } else {
+                    jdbc.update("""
+                        UPDATE evaluation_group_members SET status = 'ASSIGNED', version = version + 1, updated_at = now()
+                         WHERE member_id = :memberId
+                        """, Map.of("memberId", memberId));
+                    jdbc.update("""
+                        UPDATE applicant_group_bookings SET starts_at = :startsAt, ends_at = :endsAt, active = true
+                         WHERE member_id = :memberId
+                        """, new MapSqlParameterSource().addValue("memberId", memberId)
+                        .addValue("startsAt", Timestamp.from(group.startsAt())).addValue("endsAt", Timestamp.from(group.endsAt())));
+                    jdbc.update("""
+                        UPDATE evaluator_reports SET status = 'PENDING', version = version + 1, updated_at = now()
+                         WHERE group_id = :groupId AND application_id = :applicationId AND status = 'SUPERSEDED'
+                        """, Map.of("groupId", groupId, "applicationId", applicationId));
+                }
             } catch (DataIntegrityViolationException exception) {
                 throw PrekinderDomainException.conflict("SCHEDULE_CONFLICT", "El postulante ya está asignado en ese horario");
             }
             history(actor.id(), groupId, "MEMBER", memberId, "ASSIGNED", null);
             createReportsForMemberIfNeeded(group, applicationId);
             enqueueApplicationScheduleNotification(groupId, applicationId, "PREKINDER_GROUP_ASSIGNED");
+            touchGroupVersion(groupId);
+            return group(groupId);
+        });
+    }
+
+    public GroupView removeMember(UUID groupId, UUID applicationId, long expectedVersion) {
+        PrekinderActor actor = access.requireAdmin();
+        return transactions.execute(status -> {
+            GroupView current = editableFutureGroup(groupId, expectedVersion);
+            List<UUID> members = jdbc.queryForList("""
+                SELECT member_id FROM evaluation_group_members
+                 WHERE group_id = :groupId AND application_id = :applicationId
+                   AND status IN ('ASSIGNED','ATTENDED')
+                """, Map.of("groupId", groupId, "applicationId", applicationId), UUID.class);
+            if (members.isEmpty()) {
+                throw PrekinderDomainException.conflict("MEMBER_NOT_ASSIGNED", "El postulante no pertenece al grupo");
+            }
+            UUID memberId = members.getFirst();
+            jdbc.update("UPDATE applicant_group_bookings SET active = false WHERE member_id = :memberId",
+                Map.of("memberId", memberId));
+            jdbc.update("""
+                UPDATE evaluation_group_members SET status = 'CANCELLED', version = version + 1, updated_at = now()
+                 WHERE member_id = :memberId
+                """, Map.of("memberId", memberId));
+            jdbc.update("""
+                UPDATE evaluator_reports SET status = 'SUPERSEDED', version = version + 1, updated_at = now()
+                 WHERE group_id = :groupId AND application_id = :applicationId AND status <> 'COMPLETED'
+                """, Map.of("groupId", groupId, "applicationId", applicationId));
+            bumpGroupVersion(groupId, current.version());
+            history(actor.id(), groupId, "MEMBER", memberId, "REMOVED", "Desasignado desde la gestión de grupos");
             return group(groupId);
         });
     }
@@ -863,6 +998,7 @@ public class PrekinderFlowService {
         PrekinderActor actor = access.requireAdmin();
         return transactions.execute(status -> {
             GroupView group = group(groupId);
+            ensureEditableFutureGroup(group);
             String roleCode = jdbc.queryForObject("""
                 SELECT p.role_code
                   FROM professional_profiles p
@@ -897,10 +1033,76 @@ public class PrekinderFlowService {
                 throw PrekinderDomainException.conflict("SCHEDULE_CONFLICT", "El profesional ya está asignado en ese horario");
             }
             history(actor.id(), groupId, "EVALUATOR", assignmentId, "ASSIGNED", null);
+            jdbc.update("""
+                UPDATE evaluator_reports SET status = 'PENDING', version = version + 1, updated_at = now()
+                 WHERE group_id = :groupId AND evaluator_id = :evaluatorId AND status = 'SUPERSEDED'
+                """, Map.of("groupId", groupId, "evaluatorId", evaluatorId));
             createReportsForEvaluatorIfNeeded(group, evaluatorId);
             enqueueProfessionalScheduleNotification(groupId, evaluatorId, "PREKINDER_GROUP_ASSIGNED");
+            touchGroupVersion(groupId);
             return group(groupId);
         });
+    }
+
+    public GroupView removeEvaluator(UUID groupId, UUID evaluatorId, long expectedVersion) {
+        PrekinderActor actor = access.requireAdmin();
+        return transactions.execute(status -> {
+            GroupView current = editableFutureGroup(groupId, expectedVersion);
+            List<UUID> assignments = jdbc.queryForList("""
+                SELECT assignment_id FROM group_evaluator_assignments
+                 WHERE group_id = :groupId AND evaluator_id = :evaluatorId AND status = 'ACTIVE'
+                """, Map.of("groupId", groupId, "evaluatorId", evaluatorId), UUID.class);
+            if (assignments.isEmpty()) {
+                throw PrekinderDomainException.conflict("EVALUATOR_NOT_ASSIGNED", "El profesional no pertenece al grupo");
+            }
+            UUID assignmentId = assignments.getFirst();
+            jdbc.update("UPDATE evaluator_group_bookings SET active = false WHERE assignment_id = :assignmentId",
+                Map.of("assignmentId", assignmentId));
+            jdbc.update("""
+                UPDATE group_evaluator_assignments SET status = 'CANCELLED', version = version + 1,
+                    ended_at = now()
+                 WHERE assignment_id = :assignmentId
+                """, Map.of("assignmentId", assignmentId));
+            jdbc.update("""
+                UPDATE evaluator_reports SET status = 'SUPERSEDED', version = version + 1, updated_at = now()
+                 WHERE group_id = :groupId AND evaluator_id = :evaluatorId AND status <> 'COMPLETED'
+                """, Map.of("groupId", groupId, "evaluatorId", evaluatorId));
+            bumpGroupVersion(groupId, current.version());
+            history(actor.id(), groupId, "EVALUATOR", assignmentId, "REMOVED", "Desasignado desde la gestión de grupos");
+            return group(groupId);
+        });
+    }
+
+    private GroupView editableFutureGroup(UUID groupId, long expectedVersion) {
+        GroupView current = group(groupId);
+        if (current.version() != expectedVersion) throw new VersionConflictException("El grupo cambió");
+        ensureEditableFutureGroup(current);
+        return current;
+    }
+
+    private void ensureEditableFutureGroup(GroupView current) {
+        if (!List.of("DRAFT", "CONFIRMED").contains(current.status())) {
+            throw PrekinderDomainException.conflict("GROUP_LOCKED",
+                "Sólo se puede modificar la composición de grupos en preparación o listos");
+        }
+        if (!Instant.now().isBefore(current.startsAt())) {
+            throw PrekinderDomainException.conflict("GROUP_ALREADY_STARTED",
+                "No se puede modificar la composición de un grupo cuyo bloque ya comenzó");
+        }
+    }
+
+    private void bumpGroupVersion(UUID groupId, long expectedVersion) {
+        int updated = jdbc.update("""
+            UPDATE evaluation_groups SET version = version + 1, updated_at = now()
+             WHERE group_id = :groupId AND version = :version
+            """, Map.of("groupId", groupId, "version", expectedVersion));
+        if (updated != 1) throw new VersionConflictException("El grupo cambió");
+    }
+
+    private void touchGroupVersion(UUID groupId) {
+        jdbc.update("""
+            UPDATE evaluation_groups SET version = version + 1, updated_at = now() WHERE group_id = :groupId
+            """, Map.of("groupId", groupId));
     }
 
     public GroupView confirmGroup(UUID groupId, long expectedVersion) {

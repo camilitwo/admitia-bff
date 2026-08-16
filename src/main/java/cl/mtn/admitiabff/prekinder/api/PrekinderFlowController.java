@@ -137,6 +137,14 @@ public class PrekinderFlowController {
         return ok(flow.createGroup(groupCommand));
     }
 
+    @PutMapping("/groups/{groupId}")
+    public Map<String, Object> updateGroup(@PathVariable UUID groupId,
+        @Valid @RequestBody UpdateGroupCommand command) {
+        return ok(flow.updateGroup(groupId, command.roomId(), command.startsAt(), command.durationMinutes(),
+            command.capacity(), command.requiredEvaluators(), command.memberIds(), command.evaluatorIds(),
+            command.reason(), command.expectedVersion()));
+    }
+
     @PutMapping("/groups/{groupId}/schedule")
     public Map<String, Object> reschedule(@PathVariable UUID groupId, @Valid @RequestBody RescheduleCommand command) {
         return ok(flow.rescheduleGroup(groupId, command.roomId(), command.startsAt(), command.durationMinutes(),
@@ -150,14 +158,32 @@ public class PrekinderFlowController {
             command.expectedVersion()));
     }
 
+    @DeleteMapping("/groups/{groupId}")
+    public Map<String, Object> deleteGroup(@PathVariable UUID groupId,
+        @RequestParam @Min(0) long expectedVersion) {
+        return ok(flow.deleteGroup(groupId, expectedVersion));
+    }
+
     @PostMapping("/groups/{groupId}/members/{applicationId}")
     public Map<String, Object> member(@PathVariable UUID groupId, @PathVariable UUID applicationId) {
         return ok(flow.addMember(groupId, applicationId));
     }
 
+    @DeleteMapping("/groups/{groupId}/members/{applicationId}")
+    public Map<String, Object> removeMember(@PathVariable UUID groupId, @PathVariable UUID applicationId,
+        @RequestParam @Min(0) long expectedVersion) {
+        return ok(flow.removeMember(groupId, applicationId, expectedVersion));
+    }
+
     @PostMapping("/groups/{groupId}/evaluators/{evaluatorId}")
     public Map<String, Object> evaluator(@PathVariable UUID groupId, @PathVariable UUID evaluatorId) {
         return ok(flow.assignEvaluator(groupId, evaluatorId));
+    }
+
+    @DeleteMapping("/groups/{groupId}/evaluators/{evaluatorId}")
+    public Map<String, Object> removeEvaluator(@PathVariable UUID groupId, @PathVariable UUID evaluatorId,
+        @RequestParam @Min(0) long expectedVersion) {
+        return ok(flow.removeEvaluator(groupId, evaluatorId, expectedVersion));
     }
 
     @PutMapping("/groups/{groupId}/confirmation")
@@ -288,6 +314,14 @@ public class PrekinderFlowController {
                                             @Min(1) @Max(12) int requiredEvaluators,
                                             @Size(max = 2000) String reason,
                                             @Min(0) long expectedVersion) {}
+    public record UpdateGroupCommand(@NotNull UUID roomId, @NotNull Instant startsAt,
+                                     @Min(10) @Max(240) Integer durationMinutes,
+                                     @Min(1) @Max(30) int capacity,
+                                     @Min(1) @Max(12) int requiredEvaluators,
+                                     @NotNull @Size(min = 1, max = 30) List<@NotNull UUID> memberIds,
+                                     @NotNull @Size(min = 1, max = 12) List<@NotNull UUID> evaluatorIds,
+                                     @Size(max = 2000) String reason,
+                                     @Min(0) long expectedVersion) {}
     public record VersionCommand(@Min(0) long expectedVersion) {}
     public record DecisionCommand(@NotBlank String decision, @Size(max = 4000) String note) {}
     public record CorrectionCommand(@NotBlank String decision, @Size(max = 4000) String note,
