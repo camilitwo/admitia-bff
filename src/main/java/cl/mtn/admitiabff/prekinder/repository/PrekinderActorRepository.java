@@ -35,7 +35,9 @@ public class PrekinderActorRepository {
             UPDATE actors SET external_subject = :subject, updated_at = now()
              WHERE actor_id = (
                 SELECT p.professional_id FROM professional_profiles p JOIN actors a ON a.actor_id = p.professional_id
-                 WHERE a.email_hash = :emailHash AND a.external_subject IS NULL AND p.active = true LIMIT 1
+                 WHERE a.email_hash = :emailHash AND p.active = true
+                   AND (a.external_subject IS NULL OR a.external_subject LIKE 'legacy:%')
+                 LIMIT 1
              )
             RETURNING actor_id, legacy_user_id, role_code
             """, Map.of("subject", subject, "emailHash", emailHash),
