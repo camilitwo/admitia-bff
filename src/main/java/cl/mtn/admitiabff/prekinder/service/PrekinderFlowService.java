@@ -981,14 +981,15 @@ public class PrekinderFlowService {
         Instant from = date.atStartOfDay(SANTIAGO).toInstant();
         Instant to = date.plusDays(1).atStartOfDay(SANTIAGO).toInstant();
         return jdbc.query("""
-            SELECT g.group_id, ge.instrument_code FROM evaluation_groups g
+            SELECT ge.assignment_id, ge.instrument_code, ge.version, g.group_id FROM evaluation_groups g
               JOIN group_evaluator_assignments ge ON ge.group_id = g.group_id
              WHERE ge.evaluator_id = :actorId AND ge.status = 'ACTIVE'
                AND g.starts_at >= :from AND g.starts_at < :to AND g.status <> 'CANCELLED'
              ORDER BY g.group_id
             """, new MapSqlParameterSource().addValue("actorId", actor.id())
             .addValue("from", Timestamp.from(from)).addValue("to", Timestamp.from(to)),
-            (rs, row) -> agendaGroup(rs.getObject("group_id", UUID.class), actor.id(), rs.getString("instrument_code")));
+            (rs, row) -> agendaGroup(rs.getObject("group_id", UUID.class), actor.id(),
+                rs.getString("instrument_code"), rs.getObject("assignment_id", UUID.class), rs.getLong("version")));
     }
 
     public DecisionView decide(UUID applicationId, String decision, String note) {
@@ -1214,7 +1215,7 @@ public class PrekinderFlowService {
                     Map.of("id", id), UUID.class)));
     }
 
-    private AgendaGroupView agendaGroup(UUID groupId, UUID evaluatorId, String instrumentCode) {
+    private AgendaGroupView agendaGroup(UUID groupId, UUID evaluatorId, String instrumentCode, UUID assignmentId, long version) {
         GroupView group = group(groupId);
         List<ReportSummary> reports = jdbc.query("""
             SELECT r.report_id, r.application_id, r.status, r.version, r.raw_score, r.maximum_score,
@@ -1234,7 +1235,7 @@ public class PrekinderFlowService {
                     (java.math.BigDecimal) rs.getObject("raw_score"), (java.math.BigDecimal) rs.getObject("maximum_score"));
             });
         Instant now = Instant.now();
-        return new AgendaGroupView(instrumentCode, group, now.isAfter(group.startsAt().minus(Duration.ofMinutes(3)))
+        return new AgendaGroupView(assignmentId, instrumentCode, version, group, now.isAfter(group.startsAt().minus(Duration.ofMinutes(3)))
             && now.isBefore(group.endsAt().plus(Duration.ofMinutes(10))), reports);
     }
 
@@ -1540,7 +1541,7 @@ public class PrekinderFlowService {
                             String status, long version, List<UUID> memberIds, List<UUID> evaluatorIds) {}
     public record ReportSummary(UUID reportId, UUID applicationId, String applicantName, String status,
                                 long version, java.math.BigDecimal rawScore, java.math.BigDecimal maximumScore) {}
-    public record AgendaGroupView(String instrumentCode, GroupView group, boolean editableNow, List<ReportSummary> reports) {}
+    public record AgendaGroupView(UUID assignmentId, String instrumentCode, long version, GroupView group, boolean editableNow, List<ReportSummary> reports) {}
     public record DecisionView(UUID decisionId, UUID applicationId, String decision, int version,
                                String status, Instant decidedAt) {}
     public record BatchView(UUID batchId, UUID processId, Instant scheduledAt, String status,
