@@ -160,6 +160,11 @@ public class PrekinderFlowController {
         return ok(flow.assignEvaluator(groupId, evaluatorId));
     }
 
+    @DeleteMapping("/groups/{groupId}/evaluators/{evaluatorId}")
+    public Map<String, Object> removeEvaluator(@PathVariable UUID groupId, @PathVariable UUID evaluatorId) {
+        return ok(flow.removeEvaluator(groupId, evaluatorId));
+    }
+
     @PutMapping("/groups/{groupId}/confirmation")
     public Map<String, Object> confirm(@PathVariable UUID groupId, @Valid @RequestBody VersionCommand command) {
         return ok(flow.confirmGroup(groupId, command.expectedVersion()));

@@ -903,6 +903,18 @@ public class PrekinderFlowService {
         });
     }
 
+    public GroupView removeEvaluator(UUID groupId, UUID evaluatorId) {
+        access.requireAdmin();
+        int updated = jdbc.update("""
+            UPDATE group_evaluator_assignments SET status = 'CANCELLED', ended_at = now()
+             WHERE group_id = :groupId AND evaluator_id = :evaluatorId AND status = 'ACTIVE'
+            """, Map.of("groupId", groupId, "evaluatorId", evaluatorId));
+        if (updated == 0) {
+            throw PrekinderDomainException.notFound("ASSIGNMENT_NOT_FOUND", "No se encontró asignación activa para este evaluador");
+        }
+        return group(groupId);
+    }
+
     public GroupView confirmGroup(UUID groupId, long expectedVersion) {
         PrekinderActor actor = access.requireAdmin();
         return transactions.execute(status -> {
