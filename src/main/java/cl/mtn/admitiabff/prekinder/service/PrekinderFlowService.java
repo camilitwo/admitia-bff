@@ -493,7 +493,6 @@ public class PrekinderFlowService {
 
     public RoomView createRoom(UUID processId, String code, String name, int capacity) {
         PrekinderActor actor = access.requireAdmin();
-        if (capacity < 0) throw new IllegalArgumentException("La capacidad de la sala no puede ser negativa");
         UUID id = UUID.randomUUID();
         jdbc.update("""
             INSERT INTO prekinder_rooms(room_id, process_id, code, name, capacity)
