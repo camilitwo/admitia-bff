@@ -299,7 +299,7 @@ public class PrekinderFlowController {
     public record ProfessionalPasswordCommand(@NotBlank @Size(min = 6, max = 128) String password) {}
     public record AvailabilityCommand(@NotNull Instant startsAt, @NotNull Instant endsAt, @NotBlank String status) {}
     public record RoomCommand(@NotBlank @Size(max = 64) String code, @NotBlank @Size(max = 160) String name,
-                              @Min(9) @Max(200) int capacity) {}
+                               @Max(30) int capacity) {}
     public record GroupCommand(@NotNull UUID processId, @NotNull UUID roomId, @NotBlank String stage,
                                @NotBlank @Size(max = 64) String code, @NotNull Instant startsAt,
                                @Min(10) @Max(240) Integer durationMinutes,
