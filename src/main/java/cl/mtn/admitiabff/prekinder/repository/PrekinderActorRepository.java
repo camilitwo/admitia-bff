@@ -36,7 +36,7 @@ public class PrekinderActorRepository {
              WHERE actor_id = (
                 SELECT p.professional_id FROM professional_profiles p JOIN actors a ON a.actor_id = p.professional_id
                  WHERE a.email_hash = :emailHash AND p.active = true
-                   AND (a.external_subject IS NULL OR a.external_subject LIKE 'legacy:%')
+                   AND (a.external_subject IS NULL OR a.external_subject LIKE 'legacy:%' OR a.external_subject LIKE 'firebase:%')
                    LIMIT 1
              )
             RETURNING actor_id, legacy_user_id, role_code
