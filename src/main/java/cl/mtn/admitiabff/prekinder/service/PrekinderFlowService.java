@@ -1187,7 +1187,7 @@ public class PrekinderFlowService {
                 });
             for (var evalAssign : evaluatorAssignments) {
                 UUID templateVersionId = publishedTemplate(current.processId(), evalAssign.instrumentCode, "confirmGroup");
-                UUID instrAssignmentId = UUID.randomUUID();
+                // Use the existing assignment_id from group_evaluator_assignments, not a new UUID
                 jdbc.update("""
                     INSERT INTO group_instrument_assignments(
                         assignment_id, group_id, instrument_code, evaluator_id,
@@ -1201,7 +1201,7 @@ public class PrekinderFlowService {
                             template_version_id = EXCLUDED.template_version_id,
                             confirmed_at = now(),
                             version = group_instrument_assignments.version + 1
-                    """, Map.of("id", instrAssignmentId, "groupId", groupId,
+                    """, Map.of("id", evalAssign.assignmentId, "groupId", groupId,
                     "instrumentCode", evalAssign.instrumentCode,
                     "evaluatorId", evalAssign.evaluatorId,
                     "templateVersionId", templateVersionId,
@@ -1215,7 +1215,7 @@ public class PrekinderFlowService {
                         ON CONFLICT (group_id, application_id, evaluator_id) DO NOTHING
                         """, Map.of("id", UUID.randomUUID(), "groupId", groupId, "applicationId", applicationId,
                         "evaluatorId", evalAssign.evaluatorId, "templateVersionId", templateVersionId,
-                        "instrAssignmentId", instrAssignmentId));
+                        "instrAssignmentId", evalAssign.assignmentId));
                 }
             }
 
