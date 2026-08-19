@@ -1174,9 +1174,8 @@ public class PrekinderFlowService {
                  WHERE group_id = :groupId AND version = :version AND status = 'DRAFT'
                 """, Map.of("groupId", groupId, "version", expectedVersion));
             if (updated != 1) throw new VersionConflictException("El grupo cambió");
-            UUID templateVersionId = publishedTemplate(current.processId(), current.stage());
 
-            // Sync group_instrument_assignments from group_evaluator_assignments for each evaluator
+            // Sync group_instrument_assignments and create reports per evaluator instrument
             var evaluatorAssignments = jdbc.query("""
                 SELECT assignment_id, evaluator_id, instrument_code
                   FROM group_evaluator_assignments
@@ -1187,6 +1186,7 @@ public class PrekinderFlowService {
                     final String instrumentCode = rs.getString("instrument_code");
                 });
             for (var evalAssign : evaluatorAssignments) {
+                UUID templateVersionId = publishedTemplate(current.processId(), evalAssign.instrumentCode, "confirmGroup");
                 UUID instrAssignmentId = UUID.randomUUID();
                 jdbc.update("""
                     INSERT INTO group_instrument_assignments(
@@ -1206,17 +1206,16 @@ public class PrekinderFlowService {
                     "evaluatorId", evalAssign.evaluatorId,
                     "templateVersionId", templateVersionId,
                     "actorId", actor.id()));
-            }
 
-            for (UUID applicationId : current.memberIds()) {
-                for (UUID evaluatorId : current.evaluatorIds()) {
+                for (UUID applicationId : current.memberIds()) {
                     jdbc.update("""
                         INSERT INTO evaluator_reports(report_id, group_id, application_id, evaluator_id,
-                            evaluation_template_version_id)
-                        VALUES (:id, :groupId, :applicationId, :evaluatorId, :templateVersionId)
+                            evaluation_template_version_id, instrument_assignment_id)
+                        VALUES (:id, :groupId, :applicationId, :evaluatorId, :templateVersionId, :instrAssignmentId)
                         ON CONFLICT (group_id, application_id, evaluator_id) DO NOTHING
                         """, Map.of("id", UUID.randomUUID(), "groupId", groupId, "applicationId", applicationId,
-                        "evaluatorId", evaluatorId, "templateVersionId", templateVersionId));
+                        "evaluatorId", evalAssign.evaluatorId, "templateVersionId", templateVersionId,
+                        "instrAssignmentId", instrAssignmentId));
                 }
             }
 
@@ -1245,29 +1244,50 @@ public class PrekinderFlowService {
 
     private void createReportsForMemberIfNeeded(GroupView group, UUID applicationId) {
         if (!List.of("CONFIRMED", "IN_PROGRESS").contains(group.status())) return;
-        UUID templateVersionId = publishedTemplate(group.processId(), group.stage());
-        for (UUID evaluatorId : group.evaluatorIds()) {
+        var evaluatorAssignments = jdbc.query("""
+            SELECT evaluator_id, instrument_code FROM group_evaluator_assignments
+             WHERE group_id = :groupId AND status = 'ACTIVE'
+            """, Map.of("groupId", group.groupId()), (rs, row) -> new Object() {
+                final UUID evaluatorId = rs.getObject("evaluator_id", UUID.class);
+                final String instrumentCode = rs.getString("instrument_code");
+            });
+        for (var eval : evaluatorAssignments) {
+            UUID templateVersionId = publishedTemplate(group.processId(), eval.instrumentCode, "createReportsForMember");
+            UUID instrAssignmentId = jdbc.queryForObject("""
+                SELECT assignment_id FROM group_instrument_assignments
+                 WHERE group_id = :groupId AND evaluator_id = :evaluatorId AND status = 'CONFIRMED'
+                """, Map.of("groupId", group.groupId(), "evaluatorId", eval.evaluatorId), UUID.class);
             jdbc.update("""
                 INSERT INTO evaluator_reports(report_id, group_id, application_id, evaluator_id,
-                    evaluation_template_version_id)
-                VALUES (:id, :groupId, :applicationId, :evaluatorId, :templateVersionId)
+                    evaluation_template_version_id, instrument_assignment_id)
+                VALUES (:id, :groupId, :applicationId, :evaluatorId, :templateVersionId, :instrAssignmentId)
                 ON CONFLICT (group_id, application_id, evaluator_id) DO NOTHING
                 """, Map.of("id", UUID.randomUUID(), "groupId", group.groupId(), "applicationId", applicationId,
-                "evaluatorId", evaluatorId, "templateVersionId", templateVersionId));
+                "evaluatorId", eval.evaluatorId, "templateVersionId", templateVersionId,
+                "instrAssignmentId", instrAssignmentId));
         }
     }
 
     private void createReportsForEvaluatorIfNeeded(GroupView group, UUID evaluatorId) {
         if (!List.of("CONFIRMED", "IN_PROGRESS").contains(group.status())) return;
-        UUID templateVersionId = publishedTemplate(group.processId(), group.stage());
+        String instrumentCode = jdbc.queryForObject("""
+            SELECT instrument_code FROM group_evaluator_assignments
+             WHERE group_id = :groupId AND evaluator_id = :evaluatorId AND status = 'ACTIVE'
+            """, Map.of("groupId", group.groupId(), "evaluatorId", evaluatorId), String.class);
+        if (instrumentCode == null) return;
+        UUID templateVersionId = publishedTemplate(group.processId(), instrumentCode, "createReportsForEvaluator");
+        UUID instrAssignmentId = jdbc.queryForObject("""
+            SELECT assignment_id FROM group_instrument_assignments
+             WHERE group_id = :groupId AND evaluator_id = :evaluatorId AND status = 'CONFIRMED'
+            """, Map.of("groupId", group.groupId(), "evaluatorId", evaluatorId), UUID.class);
         for (UUID applicationId : group.memberIds()) {
             jdbc.update("""
                 INSERT INTO evaluator_reports(report_id, group_id, application_id, evaluator_id,
-                    evaluation_template_version_id)
-                VALUES (:id, :groupId, :applicationId, :evaluatorId, :templateVersionId)
+                    evaluation_template_version_id, instrument_assignment_id)
+                VALUES (:id, :groupId, :applicationId, :evaluatorId, :templateVersionId, :instrAssignmentId)
                 ON CONFLICT (group_id, application_id, evaluator_id) DO NOTHING
                 """, Map.of("id", UUID.randomUUID(), "groupId", group.groupId(), "applicationId", applicationId,
-                "evaluatorId", evaluatorId, "templateVersionId", templateVersionId));
+                "evaluatorId", evaluatorId, "templateVersionId", templateVersionId, "instrAssignmentId", instrAssignmentId));
         }
     }
 
@@ -1635,6 +1655,20 @@ public class PrekinderFlowService {
              ORDER BY v.version DESC LIMIT 1
             """, Map.of("processId", processId, "stage", stage), UUID.class);
         if (ids.isEmpty()) throw PrekinderDomainException.conflict("RUBRIC_MISSING", "No existe una pauta publicada para esta instancia");
+        return ids.getFirst();
+    }
+
+    private UUID publishedTemplate(UUID processId, String instrumentCode, String context) {
+        List<UUID> ids = jdbc.queryForList("""
+            SELECT v.evaluation_template_version_id FROM evaluation_template_versions v
+              JOIN evaluation_templates t ON t.evaluation_template_id = v.evaluation_template_id
+             WHERE t.process_id = :processId AND t.type_code = :instrumentCode AND v.status = 'PUBLISHED'
+             ORDER BY v.version DESC LIMIT 1
+            """, Map.of("processId", processId, "instrumentCode", instrumentCode), UUID.class);
+        if (ids.isEmpty()) {
+            throw PrekinderDomainException.conflict("RUBRIC_MISSING",
+                "No existe una pauta publicada para el instrumento " + instrumentCode + " en " + context);
+        }
         return ids.getFirst();
     }
 
