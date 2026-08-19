@@ -1175,6 +1175,35 @@ public class PrekinderFlowService {
                 """, Map.of("groupId", groupId, "version", expectedVersion));
             if (updated != 1) throw new VersionConflictException("El grupo cambió");
             UUID templateVersionId = publishedTemplate(current.processId(), current.stage());
+
+            // Sync group_instrument_assignments from group_evaluator_assignments for each evaluator
+            var evaluatorAssignments = jdbc.query("""
+                SELECT assignment_id, evaluator_id, instrument_code
+                  FROM group_evaluator_assignments
+                 WHERE group_id = :groupId AND status = 'ACTIVE'
+                """, Map.of("groupId", groupId), (rs, row) -> new Object() {
+                    final UUID assignmentId = rs.getObject("assignment_id", UUID.class);
+                    final UUID evaluatorId = rs.getObject("evaluator_id", UUID.class);
+                    final String instrumentCode = rs.getString("instrument_code");
+                });
+            for (var evalAssign : evaluatorAssignments) {
+                UUID instrAssignmentId = UUID.randomUUID();
+                jdbc.update("""
+                    INSERT INTO group_instrument_assignments(
+                        assignment_id, group_id, instrument_code, evaluator_id,
+                        template_version_id, status, assigned_by, assigned_at,
+                        confirmed_at, version)
+                    VALUES (:id, :groupId, :instrumentCode, :evaluatorId,
+                        :templateVersionId, 'CONFIRMED', :actorId, now(),
+                        now(), 0)
+                    ON CONFLICT (group_id, instrument_code) WHERE status = 'CONFIRMED' DO NOTHING
+                    """, Map.of("id", instrAssignmentId, "groupId", groupId,
+                    "instrumentCode", evalAssign.instrumentCode,
+                    "evaluatorId", evalAssign.evaluatorId,
+                    "templateVersionId", templateVersionId,
+                    "actorId", actor.id()));
+            }
+
             for (UUID applicationId : current.memberIds()) {
                 for (UUID evaluatorId : current.evaluatorIds()) {
                     jdbc.update("""
@@ -1186,6 +1215,25 @@ public class PrekinderFlowService {
                         "evaluatorId", evaluatorId, "templateVersionId", templateVersionId));
                 }
             }
+
+            // Backfill instrument_assignment_id in evaluator_reports using the synced group_instrument_assignments
+            jdbc.update("""
+                UPDATE evaluator_reports
+                   SET instrument_assignment_id = (
+                       SELECT ia.assignment_id
+                         FROM group_instrument_assignments ia
+                         JOIN group_evaluator_assignments ea
+                           ON ea.group_id = ia.group_id
+                          AND ea.evaluator_id = ia.evaluator_id
+                          AND ea.instrument_code = ia.instrument_code
+                        WHERE ia.group_id = evaluator_reports.group_id
+                          AND ia.evaluator_id = evaluator_reports.evaluator_id
+                          AND ia.status = 'CONFIRMED'
+                   )
+                 WHERE group_id = :groupId
+                   AND instrument_assignment_id IS NULL
+                """, Map.of("groupId", groupId));
+
             history(actor.id(), groupId, "GROUP", groupId, "CONFIRMED", null);
             return group(groupId);
         });
