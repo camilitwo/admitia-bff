@@ -494,13 +494,70 @@ public class PrekinderFlowService {
     public RoomView createRoom(UUID processId, String code, String name, int capacity) {
         PrekinderActor actor = access.requireAdmin();
         UUID id = UUID.randomUUID();
-        jdbc.update("""
-            INSERT INTO prekinder_rooms(room_id, process_id, code, name, capacity)
-            VALUES (:id, :processId, :code, :name, :capacity)
-            """, Map.of("id", id, "processId", processId, "code", clean(code).toUpperCase(),
-                "name", clean(name), "capacity", capacity));
+        try {
+            jdbc.update("""
+                INSERT INTO prekinder_rooms(room_id, process_id, code, name, capacity)
+                VALUES (:id, :processId, :code, :name, :capacity)
+                """, Map.of("id", id, "processId", processId, "code", clean(code).toUpperCase(),
+                    "name", clean(name), "capacity", capacity));
+        } catch (DataIntegrityViolationException exception) {
+            throw PrekinderDomainException.conflict("ROOM_CODE_TAKEN", "Ya existe una sala con ese código");
+        }
         audit(actor.id(), "ROOM_CREATED", "ROOM", id, Map.of());
         return room(id);
+    }
+
+    public RoomView updateRoom(UUID roomId, String code, String name, int capacity, long expectedVersion) {
+        PrekinderActor actor = access.requireAdmin();
+        return transactions.execute(status -> {
+            RoomView current = room(roomId);
+            if (current.version() != expectedVersion) throw new VersionConflictException("La sala cambió");
+            Integer maxAssignedCapacity = jdbc.queryForObject("""
+                SELECT coalesce(max(coalesce(g.admin_capacity_override, g.capacity)), 0)
+                  FROM evaluation_groups g
+                 WHERE g.room_id = :roomId AND g.status NOT IN ('CANCELLED')
+                """, Map.of("roomId", roomId), Integer.class);
+            if (maxAssignedCapacity != null && capacity < maxAssignedCapacity) {
+                throw PrekinderDomainException.conflict("ROOM_CAPACITY",
+                    "La capacidad no puede ser menor que la de los grupos ya configurados en la sala");
+            }
+            try {
+                int updated = jdbc.update("""
+                    UPDATE prekinder_rooms SET code = :code, name = :name, capacity = :capacity,
+                        version = version + 1, updated_at = now()
+                     WHERE room_id = :roomId AND process_id = :processId AND version = :version
+                    """, Map.of("roomId", roomId, "processId", current.processId(), "version", expectedVersion,
+                        "code", clean(code).toUpperCase(), "name", clean(name), "capacity", capacity));
+                if (updated != 1) throw new VersionConflictException("La sala cambió");
+            } catch (DataIntegrityViolationException exception) {
+                throw PrekinderDomainException.conflict("ROOM_CODE_TAKEN", "Ya existe una sala con ese código");
+            }
+            audit(actor.id(), "ROOM_UPDATED", "ROOM", roomId, Map.of());
+            return room(roomId);
+        });
+    }
+
+    public RoomView deleteRoom(UUID roomId, long expectedVersion) {
+        PrekinderActor actor = access.requireAdmin();
+        return transactions.execute(status -> {
+            RoomView current = room(roomId);
+            if (current.version() != expectedVersion) throw new VersionConflictException("La sala cambió");
+            Long activeGroups = jdbc.queryForObject("""
+                SELECT count(*) FROM evaluation_groups
+                 WHERE room_id = :roomId AND status NOT IN ('CANCELLED','COMPLETED')
+                """, Map.of("roomId", roomId), Long.class);
+            if (activeGroups != null && activeGroups > 0) {
+                throw PrekinderDomainException.conflict("ROOM_HAS_ACTIVE_GROUPS",
+                    "No puedes eliminar la sala mientras tenga grupos activos asignados");
+            }
+            int updated = jdbc.update("""
+                UPDATE prekinder_rooms SET active = false, version = version + 1, updated_at = now()
+                 WHERE room_id = :roomId AND version = :version
+                """, Map.of("roomId", roomId, "version", expectedVersion));
+            if (updated != 1) throw new VersionConflictException("La sala cambió");
+            audit(actor.id(), "ROOM_DELETED", "ROOM", roomId, Map.of());
+            return room(roomId);
+        });
     }
 
     public GroupView createGroup(GroupCommand command) {

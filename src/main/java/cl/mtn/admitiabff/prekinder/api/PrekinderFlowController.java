@@ -114,6 +114,16 @@ public class PrekinderFlowController {
         return ok(flow.createRoom(processId, command.code(), command.name(), command.capacity()));
     }
 
+    @PutMapping("/rooms/{roomId}")
+    public Map<String, Object> updateRoom(@PathVariable UUID roomId, @Valid @RequestBody UpdateRoomCommand command) {
+        return ok(flow.updateRoom(roomId, command.code(), command.name(), command.capacity(), command.expectedVersion()));
+    }
+
+    @DeleteMapping("/rooms/{roomId}")
+    public Map<String, Object> deleteRoom(@PathVariable UUID roomId, @RequestParam @Min(0) long expectedVersion) {
+        return ok(flow.deleteRoom(roomId, expectedVersion));
+    }
+
     @GetMapping("/processes/{processId}/groups")
     public Map<String, Object> groups(@PathVariable UUID processId,
         @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate date) {
@@ -300,6 +310,8 @@ public class PrekinderFlowController {
     public record AvailabilityCommand(@NotNull Instant startsAt, @NotNull Instant endsAt, @NotBlank String status) {}
     public record RoomCommand(@NotBlank @Size(max = 64) String code, @NotBlank @Size(max = 160) String name,
                                @Max(30) int capacity) {}
+    public record UpdateRoomCommand(@NotBlank @Size(max = 64) String code, @NotBlank @Size(max = 160) String name,
+                                    @Max(30) int capacity, @Min(0) long expectedVersion) {}
     public record GroupCommand(@NotNull UUID processId, @NotNull UUID roomId, @NotBlank String stage,
                                @NotBlank @Size(max = 64) String code, @NotNull Instant startsAt,
                                @Min(10) @Max(240) Integer durationMinutes,
