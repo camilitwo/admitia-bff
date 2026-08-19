@@ -1196,7 +1196,11 @@ public class PrekinderFlowService {
                     VALUES (:id, :groupId, :instrumentCode, :evaluatorId,
                         :templateVersionId, 'CONFIRMED', :actorId, now(),
                         now(), 0)
-                    ON CONFLICT (group_id, instrument_code) WHERE status = 'CONFIRMED' DO NOTHING
+                    ON CONFLICT (group_id, evaluator_id) WHERE status = 'CONFIRMED' DO UPDATE
+                        SET instrument_code = EXCLUDED.instrument_code,
+                            template_version_id = EXCLUDED.template_version_id,
+                            confirmed_at = now(),
+                            version = group_instrument_assignments.version + 1
                     """, Map.of("id", instrAssignmentId, "groupId", groupId,
                     "instrumentCode", evalAssign.instrumentCode,
                     "evaluatorId", evalAssign.evaluatorId,
