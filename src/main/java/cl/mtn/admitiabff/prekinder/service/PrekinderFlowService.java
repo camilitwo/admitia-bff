@@ -1763,7 +1763,7 @@ public class PrekinderFlowService {
             """, Map.of("processId", processId, "instrumentCode", instrumentCode), UUID.class);
         if (ids.isEmpty()) {
             throw PrekinderDomainException.conflict("RUBRIC_MISSING",
-                "No existe una pauta publicada para el instrumento " + instrumentCode + " en " + context);
+                "No existe una pauta publicada para el instrumento " + instrumentCode + " en " + context + "processId" + processId);
         }
         return ids.getFirst();
     }
