@@ -1190,22 +1190,48 @@ public class PrekinderFlowService {
                 // Use the existing assignment_id from group_evaluator_assignments, not a new UUID
                 jdbc.update("""
                     INSERT INTO group_instrument_assignments(
-                        assignment_id, group_id, instrument_code, evaluator_id,
-                        template_version_id, status, assigned_by, assigned_at,
-                        confirmed_at, version)
-                    VALUES (:id, :groupId, :instrumentCode, :evaluatorId,
-                        :templateVersionId, 'CONFIRMED', :actorId, now(),
-                        now(), 0)
-                    ON CONFLICT (group_id, evaluator_id) DO UPDATE
-                        SET instrument_code = EXCLUDED.instrument_code,
-                            template_version_id = EXCLUDED.template_version_id,
-                            confirmed_at = now(),
-                            version = group_instrument_assignments.version + 1
-                    """, Map.of("id", evalAssign.assignmentId, "groupId", groupId,
-                    "instrumentCode", evalAssign.instrumentCode,
-                    "evaluatorId", evalAssign.evaluatorId,
-                    "templateVersionId", templateVersionId,
-                    "actorId", actor.id()));
+                        assignment_id,
+                        group_id,
+                        instrument_code,
+                        evaluator_id,
+                        template_version_id,
+                        status,
+                        assigned_by,
+                        assigned_at,
+                        confirmed_at,
+                        version
+                    )
+                    VALUES (
+                        :id,
+                        :groupId,
+                        :instrumentCode,
+                        :evaluatorId,
+                        :templateVersionId,
+                        'CONFIRMED',
+                        :actorId,
+                        now(),
+                        now(),
+                        0
+                    )
+                    ON CONFLICT (group_id, instrument_code)
+                    WHERE status IN ('ACTIVE', 'CONFIRMED', 'IN_PROGRESS', 'SUBMITTED')
+                    DO UPDATE SET
+                        evaluator_id = EXCLUDED.evaluator_id,
+                        template_version_id = EXCLUDED.template_version_id,
+                        status = EXCLUDED.status,
+                        assigned_by = EXCLUDED.assigned_by,
+                        confirmed_at = now(),
+                        version = group_instrument_assignments.version + 1
+                    """,
+                    Map.of(
+                        "id", evalAssign.assignmentId,
+                        "groupId", groupId,
+                        "instrumentCode", evalAssign.instrumentCode,
+                        "evaluatorId", evalAssign.evaluatorId,
+                        "templateVersionId", templateVersionId,
+                        "actorId", actor.id()
+                    )
+                );
 
                 for (UUID applicationId : current.memberIds()) {
                     jdbc.update("""
