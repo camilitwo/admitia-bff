@@ -1185,52 +1185,100 @@ public class PrekinderFlowService {
                     final UUID evaluatorId = rs.getObject("evaluator_id", UUID.class);
                     final String instrumentCode = rs.getString("instrument_code");
                 });
+                 UUID persistedAssignmentId = null;
             for (var evalAssign : evaluatorAssignments) {
                 UUID templateVersionId = publishedTemplate(current.processId(), evalAssign.instrumentCode, "confirmGroup");
                 // Use the existing assignment_id from group_evaluator_assignments, not a new UUID
-                jdbc.update("""
+                 persistedAssignmentId = jdbc.queryForObject("""
+
                     INSERT INTO group_instrument_assignments(
+
                         assignment_id,
+
                         group_id,
+
                         instrument_code,
+
                         evaluator_id,
+
                         template_version_id,
+
                         status,
+
                         assigned_by,
+
                         assigned_at,
+
                         confirmed_at,
+
                         version
+
                     )
+
                     VALUES (
+
                         :id,
+
                         :groupId,
+
                         :instrumentCode,
+
                         :evaluatorId,
+
                         :templateVersionId,
+
                         'CONFIRMED',
+
                         :actorId,
+
                         now(),
+
                         now(),
+
                         0
+
                     )
+
                     ON CONFLICT (group_id, instrument_code)
+
                     WHERE status IN ('ACTIVE', 'CONFIRMED', 'IN_PROGRESS', 'SUBMITTED')
+
                     DO UPDATE SET
+
                         evaluator_id = EXCLUDED.evaluator_id,
+
                         template_version_id = EXCLUDED.template_version_id,
+
                         status = EXCLUDED.status,
+
                         assigned_by = EXCLUDED.assigned_by,
+
                         confirmed_at = now(),
+
                         version = group_instrument_assignments.version + 1
+
+                    RETURNING assignment_id
+
                     """,
+
                     Map.of(
+
                         "id", evalAssign.assignmentId,
+
                         "groupId", groupId,
+
                         "instrumentCode", evalAssign.instrumentCode,
+
                         "evaluatorId", evalAssign.evaluatorId,
+
                         "templateVersionId", templateVersionId,
+
                         "actorId", actor.id()
-                    )
+
+                    ),
+
+                    UUID.class
+
                 );
 
                 for (UUID applicationId : current.memberIds()) {
@@ -1248,7 +1296,7 @@ public class PrekinderFlowService {
             // Backfill instrument_assignment_id in evaluator_reports using the synced group_instrument_assignments
             jdbc.update("""
                 UPDATE evaluator_reports er
-                SET instrument_assignment_id = ia.assignment_id
+                SET instrument_assignment_id = :AssignmentId
                 FROM group_instrument_assignments ia
                 WHERE er.group_id = :groupId
                 AND er.instrument_assignment_id IS NULL
@@ -1263,7 +1311,9 @@ public class PrekinderFlowService {
                         AND ea.instrument_code = ia.instrument_code
                 )
                 """,
-                Map.of("groupId", groupId)
+                Map.of("AssignmentId", persistedAssignmentId,
+                "groupId", groupId)
+                
             );
 
             history(actor.id(), groupId, "GROUP", groupId, "CONFIRMED", null);
