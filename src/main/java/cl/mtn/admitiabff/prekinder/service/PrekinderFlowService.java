@@ -1247,21 +1247,24 @@ public class PrekinderFlowService {
 
             // Backfill instrument_assignment_id in evaluator_reports using the synced group_instrument_assignments
             jdbc.update("""
-                UPDATE evaluator_reports
-                   SET instrument_assignment_id = (
-                       SELECT ia.assignment_id
-                         FROM group_instrument_assignments ia
-                         JOIN group_evaluator_assignments ea
-                           ON ea.group_id = ia.group_id
-                          AND ea.evaluator_id = ia.evaluator_id
-                          AND ea.instrument_code = ia.instrument_code
-                        WHERE ia.group_id = evaluator_reports.group_id
-                          AND ia.evaluator_id = evaluator_reports.evaluator_id
-                          AND ia.status = 'CONFIRMED'
-                   )
-                 WHERE group_id = :groupId
-                   AND instrument_assignment_id IS NULL
-                """, Map.of("groupId", groupId));
+                UPDATE evaluator_reports er
+                SET instrument_assignment_id = ia.assignment_id
+                FROM group_instrument_assignments ia
+                WHERE er.group_id = :groupId
+                AND er.instrument_assignment_id IS NULL
+                AND ia.group_id = er.group_id
+                AND ia.evaluator_id = er.evaluator_id
+                AND ia.status = 'CONFIRMED'
+                AND EXISTS (
+                    SELECT 1
+                        FROM group_evaluator_assignments ea
+                        WHERE ea.group_id = ia.group_id
+                        AND ea.evaluator_id = ia.evaluator_id
+                        AND ea.instrument_code = ia.instrument_code
+                )
+                """,
+                Map.of("groupId", groupId)
+            );
 
             history(actor.id(), groupId, "GROUP", groupId, "CONFIRMED", null);
             return group(groupId);
