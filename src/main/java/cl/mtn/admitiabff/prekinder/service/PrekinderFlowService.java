@@ -1162,164 +1162,181 @@ public class PrekinderFlowService {
     }
 
     public GroupView confirmGroup(UUID groupId, long expectedVersion) {
-        PrekinderActor actor = access.requireAdmin();
-        return transactions.execute(status -> {
-            GroupView current = group(groupId);
-            if (current.memberIds().isEmpty()) throw PrekinderDomainException.conflict("GROUP_EMPTY", "Agrega postulantes antes de confirmar");
-            if (current.evaluatorIds().size() != current.requiredEvaluators()) {
-                throw PrekinderDomainException.conflict("EVALUATORS_REQUIRED", "Completa el equipo evaluador antes de confirmar");
+    PrekinderActor actor = access.requireAdmin();
+
+    return transactions.execute(status -> {
+        GroupView current = group(groupId);
+
+        if (current.memberIds().isEmpty()) {
+            throw PrekinderDomainException.conflict(
+                "GROUP_EMPTY",
+                "Agrega postulantes antes de confirmar"
+            );
+        }
+
+        if (current.evaluatorIds().size() != current.requiredEvaluators()) {
+            throw PrekinderDomainException.conflict(
+                "EVALUATORS_REQUIRED",
+                "Completa el equipo evaluador antes de confirmar"
+            );
+        }
+
+        int updated = jdbc.update("""
+            UPDATE evaluation_groups
+               SET status = 'CONFIRMED',
+                   version = version + 1,
+                   updated_at = now()
+             WHERE group_id = :groupId
+               AND version = :version
+               AND status = 'DRAFT'
+            """,
+            Map.of(
+                "groupId", groupId,
+                "version", expectedVersion
+            )
+        );
+
+        if (updated != 1) {
+            throw new VersionConflictException("El grupo cambió");
+        }
+
+        var evaluatorAssignments = jdbc.query("""
+            SELECT assignment_id,
+                   evaluator_id,
+                   instrument_code
+              FROM group_evaluator_assignments
+             WHERE group_id = :groupId
+               AND status = 'ACTIVE'
+            """,
+            Map.of("groupId", groupId),
+            (rs, rowNum) -> new Object() {
+                final UUID assignmentId =
+                    rs.getObject("assignment_id", UUID.class);
+
+                final UUID evaluatorId =
+                    rs.getObject("evaluator_id", UUID.class);
+
+                final String instrumentCode =
+                    rs.getString("instrument_code");
             }
-            int updated = jdbc.update("""
-                UPDATE evaluation_groups SET status = 'CONFIRMED', version = version + 1, updated_at = now()
-                 WHERE group_id = :groupId AND version = :version AND status = 'DRAFT'
-                """, Map.of("groupId", groupId, "version", expectedVersion));
-            if (updated != 1) throw new VersionConflictException("El grupo cambió");
+        );
 
-            // Sync group_instrument_assignments and create reports per evaluator instrument
-            var evaluatorAssignments = jdbc.query("""
-                SELECT assignment_id, evaluator_id, instrument_code
-                  FROM group_evaluator_assignments
-                 WHERE group_id = :groupId AND status = 'ACTIVE'
-                """, Map.of("groupId", groupId), (rs, row) -> new Object() {
-                    final UUID assignmentId = rs.getObject("assignment_id", UUID.class);
-                    final UUID evaluatorId = rs.getObject("evaluator_id", UUID.class);
-                    final String instrumentCode = rs.getString("instrument_code");
-                });
-                 UUID persistedAssignmentId = null;
-            for (var evalAssign : evaluatorAssignments) {
-                UUID templateVersionId = publishedTemplate(current.processId(), evalAssign.instrumentCode, "confirmGroup");
-                // Use the existing assignment_id from group_evaluator_assignments, not a new UUID
-                 persistedAssignmentId = jdbc.queryForObject("""
+        for (var evalAssign : evaluatorAssignments) {
 
-                    INSERT INTO group_instrument_assignments(
-
-                        assignment_id,
-
-                        group_id,
-
-                        instrument_code,
-
-                        evaluator_id,
-
-                        template_version_id,
-
-                        status,
-
-                        assigned_by,
-
-                        assigned_at,
-
-                        confirmed_at,
-
-                        version
-
-                    )
-
-                    VALUES (
-
-                        :id,
-
-                        :groupId,
-
-                        :instrumentCode,
-
-                        :evaluatorId,
-
-                        :templateVersionId,
-
-                        'CONFIRMED',
-
-                        :actorId,
-
-                        now(),
-
-                        now(),
-
-                        0
-
-                    )
-
-                    ON CONFLICT (group_id, instrument_code)
-
-                    WHERE status IN ('ACTIVE', 'CONFIRMED', 'IN_PROGRESS', 'SUBMITTED')
-
-                    DO UPDATE SET
-
-                        evaluator_id = EXCLUDED.evaluator_id,
-
-                        template_version_id = EXCLUDED.template_version_id,
-
-                        status = EXCLUDED.status,
-
-                        assigned_by = EXCLUDED.assigned_by,
-
-                        confirmed_at = now(),
-
-                        version = group_instrument_assignments.version + 1
-
-                    RETURNING assignment_id
-
-                    """,
-
-                    Map.of(
-
-                        "id", evalAssign.assignmentId,
-
-                        "groupId", groupId,
-
-                        "instrumentCode", evalAssign.instrumentCode,
-
-                        "evaluatorId", evalAssign.evaluatorId,
-
-                        "templateVersionId", templateVersionId,
-
-                        "actorId", actor.id()
-
-                    ),
-
-                    UUID.class
-
-                );
-
-                for (UUID applicationId : current.memberIds()) {
-                    jdbc.update("""
-                        INSERT INTO evaluator_reports(report_id, group_id, application_id, evaluator_id,
-                            evaluation_template_version_id, instrument_assignment_id)
-                        VALUES (:id, :groupId, :applicationId, :evaluatorId, :templateVersionId, :instrAssignmentId)
-                        ON CONFLICT (group_id, application_id, evaluator_id) DO NOTHING
-                        """, Map.of("id", UUID.randomUUID(), "groupId", groupId, "applicationId", applicationId,
-                        "evaluatorId", evalAssign.evaluatorId, "templateVersionId", templateVersionId,
-                        "instrAssignmentId", evalAssign.assignmentId));
-                }
-            }
-
-            // Backfill instrument_assignment_id in evaluator_reports using the synced group_instrument_assignments
-            jdbc.update("""
-                UPDATE evaluator_reports er
-                SET instrument_assignment_id = :AssignmentId
-                FROM group_instrument_assignments ia
-                WHERE er.group_id = :groupId
-                AND er.instrument_assignment_id IS NULL
-                AND ia.group_id = er.group_id
-                AND ia.evaluator_id = er.evaluator_id
-                AND ia.status = 'CONFIRMED'
-                AND EXISTS (
-                    SELECT 1
-                        FROM group_evaluator_assignments ea
-                        WHERE ea.group_id = ia.group_id
-                        AND ea.evaluator_id = ia.evaluator_id
-                        AND ea.instrument_code = ia.instrument_code
-                )
-                """,
-                Map.of("AssignmentId", persistedAssignmentId,
-                "groupId", groupId)
-                
+            UUID templateVersionId = publishedTemplate(
+                current.processId(),
+                evalAssign.instrumentCode,
+                "confirmGroup"
             );
 
-            history(actor.id(), groupId, "GROUP", groupId, "CONFIRMED", null);
-            return group(groupId);
-        });
-    }
+            UUID persistedAssignmentId = jdbc.queryForObject("""
+                INSERT INTO group_instrument_assignments(
+                    assignment_id,
+                    group_id,
+                    instrument_code,
+                    evaluator_id,
+                    template_version_id,
+                    status,
+                    assigned_by,
+                    assigned_at,
+                    confirmed_at,
+                    version
+                )
+                VALUES (
+                    :id,
+                    :groupId,
+                    :instrumentCode,
+                    :evaluatorId,
+                    :templateVersionId,
+                    'CONFIRMED',
+                    :actorId,
+                    now(),
+                    now(),
+                    0
+                )
+                ON CONFLICT (group_id, instrument_code)
+                WHERE status IN (
+                    'ACTIVE',
+                    'CONFIRMED',
+                    'IN_PROGRESS',
+                    'SUBMITTED'
+                )
+                DO UPDATE SET
+                    evaluator_id = EXCLUDED.evaluator_id,
+                    template_version_id = EXCLUDED.template_version_id,
+                    status = EXCLUDED.status,
+                    assigned_by = EXCLUDED.assigned_by,
+                    confirmed_at = now(),
+                    version = group_instrument_assignments.version + 1
+                RETURNING assignment_id
+                """,
+                Map.of(
+                    "id", evalAssign.assignmentId,
+                    "groupId", groupId,
+                    "instrumentCode", evalAssign.instrumentCode,
+                    "evaluatorId", evalAssign.evaluatorId,
+                    "templateVersionId", templateVersionId,
+                    "actorId", actor.id()
+                ),
+                UUID.class
+            );
+
+            if (persistedAssignmentId == null) {
+                throw new IllegalStateException(
+                    "No fue posible obtener el assignment_id persistido para el instrumento "
+                        + evalAssign.instrumentCode
+                );
+            }
+
+            for (UUID applicationId : current.memberIds()) {
+                jdbc.update("""
+                    INSERT INTO evaluator_reports(
+                        report_id,
+                        group_id,
+                        application_id,
+                        evaluator_id,
+                        evaluation_template_version_id,
+                        instrument_assignment_id
+                    )
+                    VALUES (
+                        :id,
+                        :groupId,
+                        :applicationId,
+                        :evaluatorId,
+                        :templateVersionId,
+                        :instrumentAssignmentId
+                    )
+                    ON CONFLICT (
+                        group_id,
+                        application_id,
+                        evaluator_id
+                    )
+                    DO NOTHING
+                    """,
+                    Map.of(
+                        "id", UUID.randomUUID(),
+                        "groupId", groupId,
+                        "applicationId", applicationId,
+                        "evaluatorId", evalAssign.evaluatorId,
+                        "templateVersionId", templateVersionId,
+                        "instrumentAssignmentId", persistedAssignmentId
+                    )
+                );
+            }
+        }
+
+        history(
+            actor.id(),
+            groupId,
+            "GROUP",
+            groupId,
+            "CONFIRMED",
+            null
+        );
+
+        return group(groupId);
+    });
+}
 
     private void createReportsForMemberIfNeeded(GroupView group, UUID applicationId) {
         if (!List.of("CONFIRMED", "IN_PROGRESS").contains(group.status())) return;
