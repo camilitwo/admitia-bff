@@ -55,14 +55,16 @@ public class PrekinderRubricService {
         access.requireAdmin();
         RubricSummary summary = summary(rubricId);
         List<VersionSummary> versions = jdbc.query("""
-            SELECT evaluation_template_version_id, version, status, maximum_score, published_at,
+            SELECT evaluation_template_version_id, version, status, name, instrument_code,
+                   maximum_score, published_at,
                    (SELECT count(*) FROM evaluation_criteria criterion
                      WHERE criterion.evaluation_template_version_id = version.evaluation_template_version_id) AS criteria_count
               FROM evaluation_template_versions version
              WHERE evaluation_template_id = :id ORDER BY version DESC
             """, Map.of("id", rubricId), (rs, row) -> new VersionSummary(
                 rs.getObject("evaluation_template_version_id", UUID.class), rs.getInt("version"),
-                rs.getString("status"), rs.getBigDecimal("maximum_score"),
+                rs.getString("status"), rs.getString("name"), rs.getString("instrument_code"),
+                rs.getBigDecimal("maximum_score"),
                 instant(rs.getTimestamp("published_at")), rs.getInt("criteria_count")));
         return new RubricDetail(summary, versions);
     }
@@ -72,7 +74,7 @@ public class PrekinderRubricService {
         return loadVersion(versionId);
     }
 
-    public RubricDetail create(CreateRubric command) {
+    public RubricVersionView create(CreateRubric command) {
         PrekinderActor actor = access.requireAdmin();
         String code = instrument(command.instrumentCode());
         UUID rubricId = UUID.randomUUID();
@@ -89,11 +91,12 @@ public class PrekinderRubricService {
             }
             jdbc.update("""
                 INSERT INTO evaluation_template_versions(evaluation_template_version_id,
-                    evaluation_template_id, version, status)
-                VALUES (:id, :rubricId, 1, 'DRAFT')
-                """, Map.of("id", versionId, "rubricId", rubricId));
+                    evaluation_template_id, version, status, name, instrument_code)
+                VALUES (:id, :rubricId, 1, 'DRAFT', :name, :code)
+                """, Map.of("id", versionId, "rubricId", rubricId,
+                    "name", required(command.name()), "code", code));
             audit(actor.id(), "RUBRIC_CREATED", rubricId);
-            return detail(rubricId);
+            return loadVersion(versionId);
         });
     }
 
@@ -117,10 +120,13 @@ public class PrekinderRubricService {
                 throw new VersionConflictException("La pauta cambió");
             }
             UUID rubricId = (UUID) current.get("evaluation_template_id");
+            String instrumentCode = instrument(command.instrumentCode());
             jdbc.update("""
-                UPDATE evaluation_templates SET name = :name, version = version + 1, updated_at = now()
+                UPDATE evaluation_templates SET name = :name, type_code = :instrumentCode,
+                       version = version + 1, updated_at = now()
                  WHERE evaluation_template_id = :id AND version = :version
-                """, Map.of("id", rubricId, "name", required(command.name()), "version", templateVersion));
+                """, Map.of("id", rubricId, "name", required(command.name()),
+                    "instrumentCode", instrumentCode, "version", templateVersion));
             jdbc.update("DELETE FROM evaluation_options WHERE criterion_id IN (SELECT criterion_id FROM evaluation_criteria WHERE evaluation_template_version_id = :id)",
                 Map.of("id", versionId));
             jdbc.update("DELETE FROM evaluation_criteria WHERE evaluation_template_version_id = :id", Map.of("id", versionId));
@@ -153,9 +159,11 @@ public class PrekinderRubricService {
                 maximum = maximum.add(criterionMaximum);
             }
             jdbc.update("""
-                UPDATE evaluation_template_versions SET maximum_score = :maximum
+                UPDATE evaluation_template_versions
+                   SET name = :name, instrument_code = :instrumentCode, maximum_score = :maximum
                  WHERE evaluation_template_version_id = :id AND status = 'DRAFT'
-                """, Map.of("id", versionId, "maximum", maximum));
+                """, Map.of("id", versionId, "name", required(command.name()),
+                    "instrumentCode", instrumentCode, "maximum", maximum));
             audit(actor.id(), "RUBRIC_DRAFT_SAVED", versionId);
             return loadVersion(versionId);
         });
@@ -164,6 +172,14 @@ public class PrekinderRubricService {
     public RubricVersionView duplicate(UUID rubricId) {
         PrekinderActor actor = access.requireAdmin();
         return transactions.execute(status -> {
+            long drafts = count("""
+                SELECT count(*) FROM evaluation_template_versions
+                 WHERE evaluation_template_id = :id AND status = 'DRAFT'
+                """, rubricId);
+            if (drafts > 0) {
+                throw PrekinderDomainException.conflict("RUBRIC_DRAFT_EXISTS",
+                    "Edita o elimina el borrador existente antes de crear otra versión");
+            }
             UUID sourceId = jdbc.queryForObject("""
                 SELECT evaluation_template_version_id FROM evaluation_template_versions
                  WHERE evaluation_template_id = :id
@@ -176,8 +192,9 @@ public class PrekinderRubricService {
             UUID targetId = UUID.randomUUID();
             jdbc.update("""
                 INSERT INTO evaluation_template_versions(evaluation_template_version_id,
-                    evaluation_template_id, version, status, maximum_score)
-                SELECT :targetId, evaluation_template_id, :nextVersion, 'DRAFT', maximum_score
+                    evaluation_template_id, version, status, maximum_score, name, instrument_code)
+                SELECT :targetId, evaluation_template_id, :nextVersion, 'DRAFT', maximum_score,
+                       name, instrument_code
                   FROM evaluation_template_versions WHERE evaluation_template_version_id = :sourceId
                 """, Map.of("targetId", targetId, "nextVersion", nextVersion, "sourceId", sourceId));
             List<Map<String, Object>> criteria = jdbc.queryForList("""
@@ -294,7 +311,7 @@ public class PrekinderRubricService {
         return transactions.execute(status -> {
             Map<String, Object> version = jdbc.queryForMap("""
                 SELECT template.evaluation_template_id, template.status AS template_status,
-                       version.status AS version_status
+                       version.status AS version_status, version.instrument_code
                   FROM evaluation_template_versions version
                   JOIN evaluation_templates template
                     ON template.evaluation_template_id = version.evaluation_template_id
@@ -303,6 +320,9 @@ public class PrekinderRubricService {
             if (!"ACTIVE".equals(version.get("template_status")) || !"PUBLISHED".equals(version.get("version_status"))) {
                 throw PrekinderDomainException.conflict("RUBRIC_NOT_PUBLISHED",
                     "Asocia una versión publicada de una pauta activa");
+            }
+            if (!instrument.equals(version.get("instrument_code"))) {
+                throw new IllegalArgumentException("La pauta no corresponde al instrumento seleccionado");
             }
             List<AssignmentView> current = assignments(processId).stream()
                 .filter(value -> value.instrumentCode().equals(instrument)).toList();
@@ -351,7 +371,7 @@ public class PrekinderRubricService {
         Map<String, Object> header = jdbc.queryForMap("""
             SELECT version.evaluation_template_version_id, version.evaluation_template_id,
                    version.version, version.status, version.maximum_score, version.published_at,
-                   template.name, template.type_code
+                   version.name, version.instrument_code, template.version AS rubric_revision
               FROM evaluation_template_versions version
               JOIN evaluation_templates template
                 ON template.evaluation_template_id = version.evaluation_template_id
@@ -374,12 +394,13 @@ public class PrekinderRubricService {
             });
         return new RubricVersionView((UUID) header.get("evaluation_template_version_id"),
             (UUID) header.get("evaluation_template_id"), String.valueOf(header.get("name")),
-            String.valueOf(header.get("type_code")), ((Number) header.get("version")).intValue(),
+            String.valueOf(header.get("instrument_code")), ((Number) header.get("version")).intValue(),
             String.valueOf(header.get("status")), (BigDecimal) header.get("maximum_score"),
-            instant((java.sql.Timestamp) header.get("published_at")), criteria);
+            instant((java.sql.Timestamp) header.get("published_at")),
+            ((Number) header.get("rubric_revision")).longValue(), criteria);
     }
 
-    private static void validateDraft(DraftCommand command) {
+    static void validateDraft(DraftCommand command) {
         required(command.name());
         if (command.criteria() == null || command.criteria().isEmpty()) {
             throw new IllegalArgumentException("Agrega al menos un criterio");
@@ -445,7 +466,8 @@ public class PrekinderRubricService {
     private static Instant instant(java.sql.Timestamp value) { return value == null ? null : value.toInstant(); }
 
     public record CreateRubric(String name, String instrumentCode) {}
-    public record DraftCommand(String name, long expectedRubricVersion, List<CriterionCommand> criteria) {}
+    public record DraftCommand(String name, String instrumentCode, long expectedRubricVersion,
+        List<CriterionCommand> criteria) {}
     public record CriterionCommand(String code, String name, String descriptor, boolean required,
         List<OptionCommand> options) {}
     public record OptionCommand(BigDecimal value, String label, String descriptor,
@@ -453,11 +475,11 @@ public class PrekinderRubricService {
     public record RubricSummary(UUID rubricId, UUID ownerProcessId, String instrumentCode, String name,
         String status, long version, int versionCount, int latestVersion, boolean hasPublishedVersion) {}
     public record RubricDetail(RubricSummary rubric, List<VersionSummary> versions) {}
-    public record VersionSummary(UUID versionId, int version, String status, BigDecimal maximumScore,
-        Instant publishedAt, int criteriaCount) {}
+    public record VersionSummary(UUID versionId, int version, String status, String name,
+        String instrumentCode, BigDecimal maximumScore, Instant publishedAt, int criteriaCount) {}
     public record RubricVersionView(UUID versionId, UUID rubricId, String name, String instrumentCode,
         int version, String status, BigDecimal maximumScore, Instant publishedAt,
-        List<CriterionView> criteria) {}
+        long rubricRevision, List<CriterionView> criteria) {}
     public record CriterionView(UUID criterionId, String code, String name, String descriptor,
         int position, boolean required, List<OptionView> options) {}
     public record OptionView(UUID optionId, BigDecimal value, String label, String descriptor,

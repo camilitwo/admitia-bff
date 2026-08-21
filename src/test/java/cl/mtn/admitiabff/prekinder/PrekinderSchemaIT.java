@@ -71,6 +71,32 @@ class PrekinderSchemaIT {
         }
 
         try (var connection = DriverManager.getConnection(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword());
+             var statement = connection.createStatement()) {
+            statement.executeUpdate("""
+                INSERT INTO evaluation_templates(evaluation_template_id, process_id, type_code, name)
+                VALUES
+                  ('00000000-0000-0000-0000-000000000101', NULL, 'ACADEMIC', 'Pauta académica A'),
+                  ('00000000-0000-0000-0000-000000000102', NULL, 'ACADEMIC', 'Pauta académica B')
+                """);
+            statement.executeUpdate("""
+                INSERT INTO evaluation_template_versions(
+                    evaluation_template_version_id, evaluation_template_id, version, status,
+                    name, instrument_code)
+                VALUES ('00000000-0000-0000-0000-000000000103',
+                        '00000000-0000-0000-0000-000000000101', 1, 'DRAFT',
+                        'Nombre versionado', 'PSYCHOMOTOR')
+                """);
+            try (var result = statement.executeQuery("""
+                SELECT name, instrument_code FROM evaluation_template_versions
+                 WHERE evaluation_template_version_id = '00000000-0000-0000-0000-000000000103'
+                """)) {
+                result.next();
+                assertEquals("Nombre versionado", result.getString("name"));
+                assertEquals("PSYCHOMOTOR", result.getString("instrument_code"));
+            }
+        }
+
+        try (var connection = DriverManager.getConnection(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword());
              var statement = connection.prepareStatement("""
                  SELECT DISTINCT i.instrument_code, i.display_name, i.capture_mode, i.sensitive, i.active, i.position
                    FROM evaluation_instruments i

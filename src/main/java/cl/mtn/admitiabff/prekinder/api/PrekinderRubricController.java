@@ -57,7 +57,7 @@ public class PrekinderRubricController {
                     new PrekinderRubricService.OptionCommand(option.value(), option.label(), option.descriptor(),
                         option.professionallyValidated())).toList())).toList();
         return ok(rubrics.saveDraft(versionId, new PrekinderRubricService.DraftCommand(
-            request.name(), request.expectedRubricVersion(), criteria)));
+            request.name(), request.instrumentCode(), request.expectedRubricVersion(), criteria)));
     }
 
     @PostMapping("/rubric-versions/{versionId}/publication")
@@ -90,7 +90,9 @@ public class PrekinderRubricController {
 
     public record CreateRubric(@NotBlank @Size(max = 160) String name,
         @NotBlank @Pattern(regexp = "[A-Za-z0-9_]{2,64}") String instrumentCode) {}
-    public record SaveDraft(@NotBlank @Size(max = 160) String name, @Min(0) long expectedRubricVersion,
+    public record SaveDraft(@NotBlank @Size(max = 160) String name,
+        @NotBlank @Pattern(regexp = "[A-Za-z0-9_]{2,64}") String instrumentCode,
+        @Min(0) long expectedRubricVersion,
         @NotEmpty List<@Valid Criterion> criteria) {}
     public record Criterion(@NotBlank @Pattern(regexp = "[A-Za-z0-9_]{1,64}") String code,
         @NotBlank @Size(max = 160) String name, @NotBlank @Size(max = 2000) String descriptor,
