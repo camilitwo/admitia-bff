@@ -5,6 +5,7 @@ import cl.mtn.admitiabff.prekinder.crypto.EnvelopeEncryptionService;
 import cl.mtn.admitiabff.prekinder.domain.PrekinderActor;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -147,9 +148,13 @@ public class PrekinderFlowService {
             try {
                 jdbc.update("""
                     INSERT INTO applications(application_id, applicant_id, process_id, wave_id, status,
-                        eligibility_category, eligibility_status, applicant_identity_hash, submitted_at, submitted_by)
+                        eligibility_category, eligibility_status, applicant_identity_hash, submitted_at, submitted_by,
+                        payment_required, payment_status)
                     VALUES (:id, :applicantId, :processId, :waveId, 'SUBMITTED', :category, 'PENDING',
-                        :identityHash, now(), :actorId)
+                        :identityHash, now(), :actorId,
+                        (SELECT payment_enabled FROM prekinder_process_configuration WHERE process_id = :processId),
+                        CASE WHEN (SELECT payment_enabled FROM prekinder_process_configuration WHERE process_id = :processId)
+                             THEN 'PENDING' ELSE 'NOT_REQUIRED' END)
                     """, new MapSqlParameterSource().addValue("id", applicationId).addValue("applicantId", applicantId)
                     .addValue("processId", command.processId()).addValue("waveId", wave.waveId())
                     .addValue("category", category).addValue("identityHash", sha256(rut))
@@ -179,6 +184,8 @@ public class PrekinderFlowService {
                 .addValue("applicationId", applicationId).addValue("actorId", actor.id()));
             audit(actor.id(), "APPLICATION_SUBMITTED", "APPLICATION", applicationId,
                 Map.of("waveType", category));
+            jdbc.update("DELETE FROM guardian_application_drafts WHERE process_id = :processId AND actor_id = :actorId",
+                Map.of("processId", command.processId(), "actorId", actor.id()));
             return application(applicationId);
         });
     }
@@ -1425,6 +1432,7 @@ public class PrekinderFlowService {
             Long published = jdbc.queryForObject("SELECT count(*) FROM application_decisions_v2 WHERE application_id = :id AND status = 'PUBLISHED'",
                 Map.of("id", applicationId), Long.class);
             if (published != null && published > 0) throw PrekinderDomainException.conflict("DECISION_LOCKED", "La decisión publicada requiere una rectificación autorizada");
+            UUID dossierId = createCommitteeDossier(applicationId, actor.id());
             Integer version = jdbc.queryForObject("SELECT coalesce(max(version), 0) + 1 FROM application_decisions_v2 WHERE application_id = :id",
                 Map.of("id", applicationId), Integer.class);
             UUID id = UUID.randomUUID();
@@ -1439,9 +1447,112 @@ public class PrekinderFlowService {
                     :keyVersion, :version, :actorId)
                 """, encryptedValues(encrypted).addValue("id", id).addValue("applicationId", applicationId)
                 .addValue("decision", decision).addValue("version", version).addValue("actorId", actor.id()));
+            EncryptedPayload rationale = encryption.encrypt(note == null ? "" : note.trim(),
+                "prekinder|committee-decision|" + id + "|application:" + applicationId);
+            MapSqlParameterSource committeeValues = new MapSqlParameterSource()
+                .addValue("id", UUID.randomUUID()).addValue("applicationId", applicationId)
+                .addValue("dossierId", dossierId).addValue("decision", committeeDecision(decision))
+                .addValue("actorId", actor.id()).addValue("ciphertext", rationale.ciphertext())
+                .addValue("iv", rationale.iv()).addValue("wrappedDek", rationale.wrappedDek())
+                .addValue("wrappedDekIv", rationale.wrappedDekIv()).addValue("keyVersion", rationale.keyVersion());
+            jdbc.update("""
+                INSERT INTO committee_decisions(decision_id, application_id, dossier_id, decision,
+                    rationale_ciphertext, rationale_iv, rationale_wrapped_dek, rationale_wrapped_dek_iv,
+                    rationale_key_version, decided_by)
+                VALUES (:id, :applicationId, :dossierId, :decision, :ciphertext, :iv, :wrappedDek,
+                    :wrappedDekIv, :keyVersion, :actorId)
+                """, committeeValues);
             audit(actor.id(), "DECISION_SAVED", "APPLICATION", applicationId, Map.of("decision", decision));
             return decision(id);
         });
+    }
+
+    private UUID createCommitteeDossier(UUID applicationId, UUID actorId) {
+        Map<String, Object> application = jdbc.queryForMap(
+            "SELECT process_id, eligibility_status FROM applications WHERE application_id = :id FOR UPDATE",
+            Map.of("id", applicationId));
+        if (!"VERIFIED".equals(application.get("eligibility_status"))) {
+            throw PrekinderDomainException.conflict("DOSSIER_INCOMPLETE",
+                "Verifica la elegibilidad antes de registrar una decisión");
+        }
+        Long completedInstruments = jdbc.queryForObject("""
+            SELECT count(DISTINCT template.type_code)
+              FROM evaluator_reports report
+              JOIN evaluation_template_versions version
+                ON version.evaluation_template_version_id = report.evaluation_template_version_id
+              JOIN evaluation_templates template ON template.evaluation_template_id = version.evaluation_template_id
+             WHERE report.application_id = :id AND report.status = 'COMPLETED'
+               AND template.type_code IN (:instruments)
+            """, new MapSqlParameterSource().addValue("id", applicationId)
+                .addValue("instruments", PrekinderProcessLifecycleService.REQUIRED_INSTRUMENTS), Long.class);
+        if (completedInstruments == null || completedInstruments < PrekinderProcessLifecycleService.REQUIRED_INSTRUMENTS.size()) {
+            throw PrekinderDomainException.conflict("DOSSIER_INCOMPLETE",
+                "El expediente requiere los ocho instrumentos completos antes de decidir");
+        }
+        Long pendingReferrals = jdbc.queryForObject("""
+            SELECT count(*) FROM referrals WHERE application_id = :id
+             AND status NOT IN ('REJECTED','CANCELLED','COMPLETED')
+            """, Map.of("id", applicationId), Long.class);
+        if (pendingReferrals != null && pendingReferrals > 0) {
+            throw PrekinderDomainException.conflict("DOSSIER_INCOMPLETE",
+                "Completa las derivaciones de Apoyo o DAP antes de decidir");
+        }
+        UUID processId = (UUID) application.get("process_id");
+        Map<String, Object> policy = jdbc.queryForMap("""
+            SELECT scoring_policy_id, applicant_weight, family_weight
+              FROM scoring_policies WHERE process_id = :id AND status = 'PUBLISHED'
+             ORDER BY version DESC LIMIT 1
+            """, Map.of("id", processId));
+        Map<String, Object> scores = jdbc.queryForMap("""
+            SELECT coalesce(avg(report.raw_score / nullif(report.maximum_score, 0))
+                       FILTER (WHERE template.type_code <> 'FAMILY_INTERVIEW'), 0) AS applicant_result,
+                   coalesce(avg(report.raw_score / nullif(report.maximum_score, 0))
+                       FILTER (WHERE template.type_code = 'FAMILY_INTERVIEW'), 0) AS family_result
+              FROM evaluator_reports report
+              JOIN evaluation_template_versions version
+                ON version.evaluation_template_version_id = report.evaluation_template_version_id
+              JOIN evaluation_templates template ON template.evaluation_template_id = version.evaluation_template_id
+             WHERE report.application_id = :id AND report.status = 'COMPLETED'
+            """, Map.of("id", applicationId));
+        BigDecimal applicantResult = (BigDecimal) scores.get("applicant_result");
+        BigDecimal familyResult = (BigDecimal) scores.get("family_result");
+        BigDecimal applicantWeight = (BigDecimal) policy.get("applicant_weight");
+        BigDecimal familyWeight = (BigDecimal) policy.get("family_weight");
+        BigDecimal integral = applicantResult.multiply(applicantWeight).add(familyResult.multiply(familyWeight));
+        Integer snapshotVersion = jdbc.queryForObject(
+            "SELECT coalesce(max(snapshot_version), 0) + 1 FROM application_score_snapshots WHERE application_id = :id",
+            Map.of("id", applicationId), Integer.class);
+        UUID scoreSnapshotId = UUID.randomUUID();
+        jdbc.update("""
+            INSERT INTO application_score_snapshots(score_snapshot_id, application_id, scoring_policy_id,
+                snapshot_version, applicant_result, family_result, integral_result, components)
+            VALUES (:id, :applicationId, :policyId, :version, :applicant, :family, :integral,
+                CAST(:components AS jsonb))
+            """, new MapSqlParameterSource().addValue("id", scoreSnapshotId).addValue("applicationId", applicationId)
+            .addValue("policyId", policy.get("scoring_policy_id")).addValue("version", snapshotVersion)
+            .addValue("applicant", applicantResult).addValue("family", familyResult).addValue("integral", integral)
+            .addValue("components", json(Map.of("completedInstruments", completedInstruments))));
+        Integer dossierVersion = jdbc.queryForObject(
+            "SELECT coalesce(max(dossier_version), 0) + 1 FROM committee_dossiers WHERE application_id = :id",
+            Map.of("id", applicationId), Integer.class);
+        UUID dossierId = UUID.randomUUID();
+        jdbc.update("""
+            INSERT INTO committee_dossiers(dossier_id, application_id, dossier_version,
+                score_snapshot_id, completeness_state, snapshot)
+            VALUES (:id, :applicationId, :version, :scoreSnapshotId, 'READY', CAST(:snapshot AS jsonb))
+            """, new MapSqlParameterSource().addValue("id", dossierId).addValue("applicationId", applicationId)
+            .addValue("version", dossierVersion).addValue("scoreSnapshotId", scoreSnapshotId)
+            .addValue("snapshot", json(Map.of("completedInstruments", completedInstruments,
+                "scoringPolicyId", policy.get("scoring_policy_id"), "generatedBy", actorId))));
+        return dossierId;
+    }
+
+    private static String committeeDecision(String decision) {
+        return switch (decision) {
+            case "ACCEPTED" -> "OFFERED";
+            case "WAITLIST" -> "WAITLISTED";
+            default -> "NOT_ADMITTED";
+        };
     }
 
     public DecisionView correctPublishedDecision(UUID applicationId, String decision, String note, String reason) {
@@ -1745,10 +1856,21 @@ public class PrekinderFlowService {
 
     private UUID publishedTemplate(UUID processId, String stage) {
         List<UUID> ids = jdbc.queryForList("""
-            SELECT v.evaluation_template_version_id FROM evaluation_template_versions v
-              JOIN evaluation_templates t ON t.evaluation_template_id = v.evaluation_template_id
-             WHERE t.process_id = :processId AND t.type_code = :stage AND v.status = 'PUBLISHED'
-             ORDER BY v.version DESC LIMIT 1
+            SELECT candidate.evaluation_template_version_id FROM (
+                SELECT version.evaluation_template_version_id, 0 AS priority, version.version
+                  FROM process_rubric_assignments assignment
+                  JOIN evaluation_template_versions version
+                    ON version.evaluation_template_version_id = assignment.evaluation_template_version_id
+                 WHERE assignment.process_id = :processId AND assignment.instrument_code = :stage
+                   AND assignment.active AND version.status = 'PUBLISHED'
+                UNION ALL
+                SELECT version.evaluation_template_version_id, 1 AS priority, version.version
+                  FROM evaluation_template_versions version
+                  JOIN evaluation_templates template
+                    ON template.evaluation_template_id = version.evaluation_template_id
+                 WHERE template.process_id = :processId AND template.type_code = :stage
+                   AND version.status = 'PUBLISHED'
+            ) candidate ORDER BY candidate.priority, candidate.version DESC LIMIT 1
             """, Map.of("processId", processId, "stage", stage), UUID.class);
         if (ids.isEmpty()) throw PrekinderDomainException.conflict("RUBRIC_MISSING", "No existe una pauta publicada para esta instancia");
         return ids.getFirst();
@@ -1756,14 +1878,26 @@ public class PrekinderFlowService {
 
     private UUID publishedTemplate(UUID processId, String instrumentCode, String context) {
         List<UUID> ids = jdbc.queryForList("""
-            SELECT v.evaluation_template_version_id FROM evaluation_template_versions v
-              JOIN evaluation_templates t ON t.evaluation_template_id = v.evaluation_template_id
-             WHERE t.process_id = :processId AND t.type_code = :instrumentCode AND v.status = 'PUBLISHED'
-             ORDER BY v.version DESC LIMIT 1
+            SELECT candidate.evaluation_template_version_id FROM (
+                SELECT version.evaluation_template_version_id, 0 AS priority, version.version
+                  FROM process_rubric_assignments assignment
+                  JOIN evaluation_template_versions version
+                    ON version.evaluation_template_version_id = assignment.evaluation_template_version_id
+                 WHERE assignment.process_id = :processId AND assignment.instrument_code = :instrumentCode
+                   AND assignment.active AND version.status = 'PUBLISHED'
+                UNION ALL
+                SELECT version.evaluation_template_version_id, 1 AS priority, version.version
+                  FROM evaluation_template_versions version
+                  JOIN evaluation_templates template
+                    ON template.evaluation_template_id = version.evaluation_template_id
+                 WHERE template.process_id = :processId AND template.type_code = :instrumentCode
+                   AND version.status = 'PUBLISHED'
+            ) candidate ORDER BY candidate.priority, candidate.version DESC LIMIT 1
             """, Map.of("processId", processId, "instrumentCode", instrumentCode), UUID.class);
         if (ids.isEmpty()) {
             throw PrekinderDomainException.conflict("RUBRIC_MISSING",
-                "No existe una pauta publicada para el instrumento " + instrumentCode + " en " + context + "processId" + processId);
+                "No existe una pauta publicada para el instrumento " + instrumentCode + " en " + context
+                    + " (proceso " + processId + ")");
         }
         return ids.getFirst();
     }

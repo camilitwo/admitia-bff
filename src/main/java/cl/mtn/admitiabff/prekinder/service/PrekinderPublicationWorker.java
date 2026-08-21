@@ -35,11 +35,14 @@ public class PrekinderPublicationWorker {
     private final ObjectMapper mapper;
     private final ResendEmailSender sender;
     private final boolean mockMode;
+    private final String portalUrl;
 
     public PrekinderPublicationWorker(@Qualifier("prekinderJdbc") NamedParameterJdbcTemplate jdbc,
         EnvelopeEncryptionService encryption, ObjectMapper mapper, ResendEmailSender sender,
-        @Value("${app.email.mock-mode:false}") boolean mockMode) {
-        this.jdbc = jdbc; this.encryption = encryption; this.mapper = mapper; this.sender = sender; this.mockMode = mockMode;
+        @Value("${app.email.mock-mode:false}") boolean mockMode,
+        @Value("${app.frontend.url:https://admitia.cl}") String portalUrl) {
+        this.jdbc = jdbc; this.encryption = encryption; this.mapper = mapper; this.sender = sender;
+        this.mockMode = mockMode; this.portalUrl = portalUrl;
     }
 
     @Scheduled(fixedDelayString = "${app.prekinder.publication.worker-delay-ms:3000}")
@@ -80,6 +83,7 @@ public class PrekinderPublicationWorker {
                     UPDATE applications SET status = :status, version = version + 1, updated_at = now()
                      WHERE application_id = :id
                     """, Map.of("id", applicationId, "status", applicationStatus(decision)));
+                if ("ACCEPTED".equals(decision)) createOffer(applicationId);
                 String template = Boolean.TRUE.equals(item.get("rectification"))
                     ? "PREKINDER_RESULT_RECTIFICATION" : "PREKINDER_RESULT";
                 jdbc.update("""
@@ -96,7 +100,10 @@ public class PrekinderPublicationWorker {
                 """, Map.of("id", batchId));
             log.info("Lote Prekínder publicado batchId={} items={}", batchId, items.size());
         } catch (RuntimeException exception) {
-            jdbc.update("UPDATE publication_batches SET status = 'PARTIAL', version = version + 1 WHERE batch_id = :id",
+            jdbc.update("""
+                UPDATE publication_batches SET status = 'PARTIAL', version = version + 1,
+                    last_error_code = 'PUBLICATION_FAILED' WHERE batch_id = :id
+                """,
                 Map.of("id", batchId));
             log.error("Falló publicación Prekínder batchId={} code=PUBLICATION_FAILED", batchId);
         }
@@ -105,11 +112,15 @@ public class PrekinderPublicationWorker {
     private void dispatchPendingEmails() {
         List<Map<String, Object>> intents = jdbc.queryForList("""
             SELECT n.notification_id, n.application_id, n.batch_id, n.template_code, d.decision,
+                   batch.process_id, process.name AS process_name,
+                   bi.communication_template_version_id,
                    a.applicant_id, ap.identity_ciphertext, ap.identity_iv, ap.identity_wrapped_dek,
                    ap.identity_wrapped_dek_iv, ap.identity_key_version
               FROM notification_intents n JOIN applications a ON a.application_id = n.application_id
               JOIN applicants ap ON ap.applicant_id = a.applicant_id
               JOIN publication_batch_items bi ON bi.batch_id = n.batch_id AND bi.application_id = n.application_id
+              JOIN publication_batches batch ON batch.batch_id = n.batch_id
+              JOIN admission_processes process ON process.process_id = batch.process_id
               JOIN application_decisions_v2 d ON d.decision_id = bi.decision_id
              WHERE n.status IN ('PENDING','FAILED') AND n.attempts < 5
                AND coalesce(n.next_attempt_at, now()) <= now()
@@ -132,9 +143,17 @@ public class PrekinderPublicationWorker {
             Set<String> emails = parentEmails(identity);
             if (emails.isEmpty()) throw new IllegalStateException("RECIPIENT_MISSING");
             String decision = String.valueOf(row.get("decision"));
-            String subject = "PREKINDER_RESULT_RECTIFICATION".equals(row.get("template_code"))
-                ? "Rectificación de resultado de admisión Prekínder" : "Resultado proceso de admisión Prekínder";
-            if (!mockMode) for (String email : emails) sender.send(email, subject, emailBody(decision));
+            String eventCode = "PREKINDER_RESULT_RECTIFICATION".equals(row.get("template_code"))
+                ? "RESULT_RECTIFICATION" : resultEvent(decision);
+            CommunicationContent content = communicationSnapshot(
+                (UUID) row.get("communication_template_version_id"), (UUID) row.get("process_id"), eventCode);
+            String applicantName = applicantName(identity);
+            String processName = escapeHtml(String.valueOf(row.get("process_name")));
+            String subject = PrekinderCommunicationTemplateService.render(content.subject(), applicantName,
+                processName, portalUrl, "");
+            String body = PrekinderCommunicationTemplateService.render(content.bodyHtml(), applicantName,
+                processName, portalUrl, "");
+            if (!mockMode) for (String email : emails) sender.send(email, subject, body);
             jdbc.update("""
                 UPDATE notification_intents SET status = 'SENT', sent_at = now(), attempts = attempts + 1,
                     last_error_code = NULL WHERE notification_id = :id
@@ -143,6 +162,15 @@ public class PrekinderPublicationWorker {
                 UPDATE publication_batch_items SET status = 'EMAIL_SENT'
                  WHERE batch_id = :batchId AND application_id = :applicationId
                 """, Map.of("batchId", row.get("batch_id"), "applicationId", applicationId));
+            jdbc.update("""
+                UPDATE publication_batches SET status = 'PUBLISHED', last_error_code = NULL,
+                    version = version + 1
+                 WHERE batch_id = :batchId
+                   AND NOT EXISTS (
+                       SELECT 1 FROM publication_batch_items
+                        WHERE batch_id = :batchId AND status <> 'EMAIL_SENT'
+                   )
+                """, Map.of("batchId", row.get("batch_id")));
         } catch (Exception exception) {
             jdbc.update("""
                 UPDATE notification_intents SET status = 'FAILED', attempts = attempts + 1,
@@ -150,6 +178,14 @@ public class PrekinderPublicationWorker {
                  WHERE notification_id = :id
                 """, new MapSqlParameterSource().addValue("id", notificationId)
                 .addValue("retryAt", Timestamp.from(Instant.now().plus(5, ChronoUnit.MINUTES))));
+            jdbc.update("""
+                UPDATE publication_batch_items SET status = 'EMAIL_FAILED'
+                 WHERE batch_id = :batchId AND application_id = :applicationId
+                """, Map.of("batchId", row.get("batch_id"), "applicationId", row.get("application_id")));
+            jdbc.update("""
+                UPDATE publication_batches SET status = 'PARTIAL', last_error_code = 'EMAIL_PROVIDER_ERROR',
+                    version = version + 1 WHERE batch_id = :batchId
+                """, Map.of("batchId", row.get("batch_id")));
             log.warn("Falló correo Prekínder notificationId={} code=EMAIL_PROVIDER_ERROR", notificationId);
         }
     }
@@ -263,18 +299,55 @@ public class PrekinderPublicationWorker {
         };
     }
 
-    private static String emailBody(String decision) {
-        String label = switch (decision) {
-            case "ACCEPTED" -> "Aceptado/a";
-            case "WAITLIST" -> "Lista de espera";
-            default -> "No admitido/a";
-        };
-        return """
-            <div style="font-family:Arial,sans-serif;color:#102b57;line-height:1.6">
-              <h1>Resultado de admisión Prekínder</h1>
-              <p>El resultado publicado por el establecimiento es: <strong>%s</strong>.</p>
-              <p>Ingresa al portal de admisiones para consultar el detalle oficial.</p>
-            </div>
-            """.formatted(label);
+    private void createOffer(UUID applicationId) {
+        UUID offerId = UUID.randomUUID();
+        int inserted = jdbc.update("""
+            INSERT INTO offers(offer_id, application_id, status, expires_at)
+            VALUES (:id, :applicationId, 'OFFERED', now() + interval '7 days')
+            ON CONFLICT (application_id) WHERE status = 'OFFERED' DO NOTHING
+            """, Map.of("id", offerId, "applicationId", applicationId));
+        if (inserted == 1) jdbc.update("""
+            INSERT INTO offer_status_history(offer_history_id, offer_id, to_status, reason_code)
+            VALUES (:id, :offerId, 'OFFERED', 'RESULT_PUBLISHED')
+            """, Map.of("id", UUID.randomUUID(), "offerId", offerId));
     }
+
+    private CommunicationContent communicationSnapshot(UUID versionId, UUID processId, String eventCode) {
+        String versionPredicate = versionId == null
+            ? "AND version.status = 'PUBLISHED'"
+            : "AND version.communication_template_version_id = :versionId AND version.status IN ('PUBLISHED','SUPERSEDED')";
+        Map<String, Object> parameters = new java.util.HashMap<>();
+        parameters.put("processId", processId); parameters.put("eventCode", eventCode);
+        if (versionId != null) parameters.put("versionId", versionId);
+        List<CommunicationContent> rows = jdbc.query("""
+            SELECT version.subject, version.body_html
+              FROM prekinder_communication_templates template
+              JOIN prekinder_communication_template_versions version
+                ON version.communication_template_id = template.communication_template_id
+             WHERE template.process_id = :processId AND template.event_code = :eventCode
+            """ + versionPredicate, parameters,
+            (rs, row) -> new CommunicationContent(rs.getString("subject"), rs.getString("body_html")));
+        if (rows.isEmpty()) throw new IllegalStateException("COMMUNICATION_MISSING");
+        return rows.getFirst();
+    }
+
+    private static String resultEvent(String decision) {
+        return switch (decision) {
+            case "ACCEPTED" -> "RESULT_ACCEPTED";
+            case "WAITLIST" -> "RESULT_WAITLIST";
+            default -> "RESULT_REJECTED";
+        };
+    }
+
+    private static String applicantName(Map<String, Object> identity) {
+        return escapeHtml((String.valueOf(identity.getOrDefault("firstName", "")) + " "
+            + String.valueOf(identity.getOrDefault("paternalLastName", ""))).trim());
+    }
+
+    private static String escapeHtml(String value) {
+        return value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+            .replace("\"", "&quot;").replace("'", "&#39;");
+    }
+
+    private record CommunicationContent(String subject, String bodyHtml) {}
 }

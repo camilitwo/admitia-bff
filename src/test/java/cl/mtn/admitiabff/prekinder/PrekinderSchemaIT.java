@@ -39,7 +39,7 @@ class PrekinderSchemaIT {
                     'prekinder_application_school_syncs','prekinder_complementary_forms'
                   )
                  """)) {
-            try (var result = countStatement.executeQuery()) { result.next(); assertEquals(62, result.getInt(1)); }
+            try (var result = countStatement.executeQuery()) { result.next(); assertEquals(69, result.getInt(1)); }
             try (var result = statement.executeQuery()) { result.next(); assertEquals(22, result.getInt(1)); }
         }
 

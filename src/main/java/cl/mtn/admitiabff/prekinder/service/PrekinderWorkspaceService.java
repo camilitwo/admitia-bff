@@ -2,6 +2,7 @@ package cl.mtn.admitiabff.prekinder.service;
 
 import cl.mtn.admitiabff.prekinder.crypto.EnvelopeEncryptionService;
 import cl.mtn.admitiabff.prekinder.crypto.EncryptedPayload;
+import cl.mtn.admitiabff.prekinder.config.PrekinderPaymentProperties;
 import cl.mtn.admitiabff.prekinder.domain.PrekinderActor;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -30,12 +31,14 @@ public class PrekinderWorkspaceService {
     private final PrekinderAccessService access;
     private final EnvelopeEncryptionService encryption;
     private final ObjectMapper mapper;
+    private final PrekinderPaymentProperties paymentDefaults;
 
     public PrekinderWorkspaceService(@Qualifier("prekinderJdbc") NamedParameterJdbcTemplate jdbc,
         @Qualifier("prekinderTransactionManager") PlatformTransactionManager manager,
-        PrekinderAccessService access, EnvelopeEncryptionService encryption, ObjectMapper mapper) {
+        PrekinderAccessService access, EnvelopeEncryptionService encryption, ObjectMapper mapper,
+        PrekinderPaymentProperties paymentDefaults) {
         this.jdbc = jdbc; this.transactions = new TransactionTemplate(manager); this.access = access;
-        this.encryption = encryption; this.mapper = mapper;
+        this.encryption = encryption; this.mapper = mapper; this.paymentDefaults = paymentDefaults;
     }
 
     public ProcessView createProcess(int academicYear, String name) {
@@ -51,7 +54,9 @@ public class PrekinderWorkspaceService {
                 throw new IllegalStateException("Ya existe un proceso Prekínder con ese año y nombre", exception);
             }
             seedWaves(id);
-            seedProvisionalRubrics(id);
+            seedWorkflowStages(id);
+            seedProcessConfiguration(id);
+            seedCommunicationTemplates(id);
             audit(actor.id(), "PROCESS_CREATED", id);
             return process(id);
         });
@@ -111,6 +116,11 @@ public class PrekinderWorkspaceService {
             throw new IllegalArgumentException("La fecha de cierre debe ser posterior a la fecha de apertura");
         }
         return transactions.execute(status -> {
+            List<String> blockers = openingBlockers(processId);
+            if (!blockers.isEmpty()) {
+                throw PrekinderDomainException.conflict("PROCESS_NOT_READY",
+                    "Completa la preparación del proceso antes de abrirlo: " + String.join(", ", blockers));
+            }
             int updated = jdbc.update("""
                 UPDATE admission_processes
                    SET status = 'PUBLISHED', starts_at = :startsAt, ends_at = :endsAt,
@@ -154,8 +164,12 @@ public class PrekinderWorkspaceService {
                 VALUES (:applicantId, :familyId, :ciphertext, :iv, :wrappedDek, :wrappedDekIv, :keyVersion)
                 """, values);
             jdbc.update("""
-                INSERT INTO applications(application_id, applicant_id, process_id, status)
-                VALUES (:id, :applicantId, :processId, 'DRAFT')
+                INSERT INTO applications(application_id, applicant_id, process_id, status,
+                    payment_required, payment_status)
+                VALUES (:id, :applicantId, :processId, 'DRAFT',
+                    (SELECT payment_enabled FROM prekinder_process_configuration WHERE process_id = :processId),
+                    CASE WHEN (SELECT payment_enabled FROM prekinder_process_configuration WHERE process_id = :processId)
+                         THEN 'PENDING' ELSE 'NOT_REQUIRED' END)
                 """, Map.of("id", applicationId, "applicantId", applicantId, "processId", processId));
             audit(actor.id(), "APPLICATION_CREATED", applicationId);
             return new ApplicationView(applicationId, applicantId, processId, "DRAFT", normalizedIdentity, Instant.now());
@@ -224,47 +238,117 @@ public class PrekinderWorkspaceService {
         }
     }
 
-    private void seedProvisionalRubrics(UUID processId) {
-        seedRubric(processId, "GROUP_3", "Pauta provisoria · Grupo de 3", List.of(
-            "Comunicación", "Lenguaje", "Adaptación y regulación", "Psicomotricidad",
-            "Seguimiento de instrucciones", "Autonomía"));
-        seedRubric(processId, "GROUP_9", "Pauta provisoria · Grupo de 9", List.of(
-            "Interacción con pares", "Participación", "Cooperación", "Regulación",
-            "Respuesta a transiciones", "Comunicación grupal"));
+    private void seedWorkflowStages(UUID processId) {
+        List<String[]> stages = List.of(
+            new String[]{"APPLICANT", "Postulante y familia"},
+            new String[]{"QUESTIONNAIRE", "Cuestionario familiar"},
+            new String[]{"INCLUSION", "Inclusión"},
+            new String[]{"BACKGROUND", "Antecedentes generales"},
+            new String[]{"REVIEW", "Revisión y envío"},
+            new String[]{"COORDINATION", "Revisión de coordinación"},
+            new String[]{"SCHEDULE", "Agenda"},
+            new String[]{"EVALUATION", "Evaluaciones"},
+            new String[]{"COMMITTEE", "Comisión"},
+            new String[]{"RESULT", "Resultado y oferta"}
+        );
+        for (int index = 0; index < stages.size(); index++) {
+            String[] stage = stages.get(index);
+            jdbc.update("""
+                INSERT INTO workflow_stages(stage_id, process_id, code, name, position)
+                VALUES (:id, :processId, :code, :name, :position)
+                """, Map.of("id", UUID.randomUUID(), "processId", processId,
+                    "code", stage[0], "name", stage[1], "position", index));
+        }
     }
 
-    private void seedRubric(UUID processId, String code, String name, List<String> criteria) {
-        UUID templateId = UUID.randomUUID();
-        UUID versionId = UUID.randomUUID();
+    private void seedProcessConfiguration(UUID processId) {
         jdbc.update("""
-            INSERT INTO evaluation_templates(evaluation_template_id, process_id, type_code, name)
-            VALUES (:id, :processId, :code, :name)
-            """, Map.of("id", templateId, "processId", processId, "code", code, "name", name));
+            INSERT INTO prekinder_process_configuration(process_id, payment_enabled, payment_amount,
+                payment_currency, payment_glosa, payment_due_days)
+            VALUES (:processId, :enabled, :amount, :currency, :glosa, :dueDays)
+            ON CONFLICT (process_id) DO NOTHING
+            """, new MapSqlParameterSource().addValue("processId", processId)
+            .addValue("enabled", paymentDefaults.enabled()).addValue("amount", paymentDefaults.applicationFee())
+            .addValue("currency", paymentDefaults.currency()).addValue("glosa", paymentDefaults.paymentGlosa())
+            .addValue("dueDays", Math.max(1, paymentDefaults.dueDays())));
         jdbc.update("""
-            INSERT INTO evaluation_template_versions(evaluation_template_version_id, evaluation_template_id,
-                version, status, maximum_score, published_at)
-            VALUES (:id, :templateId, 1, 'PUBLISHED', 18, now())
-            """, Map.of("id", versionId, "templateId", templateId));
-        for (int index = 0; index < criteria.size(); index++) {
-            UUID criterionId = UUID.randomUUID();
-            String criterionName = criteria.get(index);
+            INSERT INTO prekinder_process_configuration_versions(
+                configuration_version_id, process_id, version, snapshot)
+            SELECT :id, process_id, version,
+                   jsonb_build_object(
+                     'paymentEnabled', payment_enabled, 'paymentAmount', payment_amount,
+                     'paymentCurrency', payment_currency, 'paymentGlosa', payment_glosa,
+                     'paymentDueDays', payment_due_days, 'inclusionEnabled', inclusion_enabled,
+                     'inclusionDocumentsRequired', inclusion_documents_required,
+                     'minimumAgeMonths', minimum_age_months, 'maximumAgeMonths', maximum_age_months,
+                     'applicantWeight', applicant_weight, 'familyWeight', family_weight)
+              FROM prekinder_process_configuration WHERE process_id = :processId
+            ON CONFLICT (process_id, version) DO NOTHING
+            """, Map.of("id", UUID.randomUUID(), "processId", processId));
+        jdbc.update("""
+            INSERT INTO scoring_policies(scoring_policy_id, process_id, version, status,
+                applicant_weight, family_weight, formula_document, published_at)
+            SELECT :id, process_id, 1, 'PUBLISHED', applicant_weight, family_weight,
+                   jsonb_build_object('source', 'PROCESS_CONFIGURATION', 'configurationVersion', version), now()
+              FROM prekinder_process_configuration WHERE process_id = :processId
+            """, Map.of("id", UUID.randomUUID(), "processId", processId));
+    }
+
+    private void seedCommunicationTemplates(UUID processId) {
+        List<String[]> templates = List.of(
+            new String[]{"APPLICATION_SUBMITTED", "Postulación recibida", "Postulación Prekínder recibida",
+                "<h1>Postulación recibida</h1><p>Recibimos la postulación de {{applicantName}}.</p>"},
+            new String[]{"SCHEDULE_ASSIGNED", "Jornada agendada", "Jornada de evaluación Prekínder",
+                "<h1>Jornada agendada</h1><p>Revisa en el portal la fecha asignada a {{applicantName}}.</p>"},
+            new String[]{"RESULT_ACCEPTED", "Resultado aceptado", "Resultado proceso de admisión Prekínder",
+                "<h1>Resultado disponible</h1><p>El resultado de {{applicantName}} ya está en el portal.</p>"},
+            new String[]{"RESULT_WAITLIST", "Resultado lista de espera", "Resultado proceso de admisión Prekínder",
+                "<h1>Resultado disponible</h1><p>El resultado de {{applicantName}} ya está en el portal.</p>"},
+            new String[]{"RESULT_REJECTED", "Resultado no admitido", "Resultado proceso de admisión Prekínder",
+                "<h1>Resultado disponible</h1><p>El resultado de {{applicantName}} ya está en el portal.</p>"},
+            new String[]{"RESULT_RECTIFICATION", "Rectificación de resultado", "Rectificación de resultado de admisión Prekínder",
+                "<h1>Resultado rectificado</h1><p>Existe una actualización para {{applicantName}} en el portal.</p>"}
+        );
+        for (String[] template : templates) {
+            UUID templateId = UUID.randomUUID();
             jdbc.update("""
-                INSERT INTO evaluation_criteria(criterion_id, evaluation_template_version_id, code, name,
-                    descriptor, position, required)
-                VALUES (:id, :versionId, :code, :name, :descriptor, :position, true)
-                """, Map.of("id", criterionId, "versionId", versionId,
-                    "code", "C" + (index + 1), "name", criterionName,
-                    "descriptor", "Observación provisoria: " + criterionName, "position", index));
-            List<String> labels = List.of("No evidenciado", "Requiere apoyo constante", "En desarrollo", "Logrado en la instancia");
-            for (int value = 0; value <= 3; value++) {
-                jdbc.update("""
-                    INSERT INTO evaluation_options(option_id, criterion_id, value, label, descriptor,
-                        professionally_validated, position)
-                    VALUES (:id, :criterionId, :value, :label, :descriptor, false, :position)
-                    """, Map.of("id", UUID.randomUUID(), "criterionId", criterionId, "value", value,
-                        "label", labels.get(value), "descriptor", labels.get(value), "position", value));
-            }
+                INSERT INTO prekinder_communication_templates(
+                    communication_template_id, process_id, event_code, name)
+                VALUES (:id, :processId, :eventCode, :name)
+                """, Map.of("id", templateId, "processId", processId,
+                    "eventCode", template[0], "name", template[1]));
+            jdbc.update("""
+                INSERT INTO prekinder_communication_template_versions(
+                    communication_template_version_id, communication_template_id, version,
+                    status, subject, body_html, allowed_variables, published_at)
+                VALUES (:id, :templateId, 1, 'PUBLISHED', :subject, :body,
+                    CAST(:variables AS jsonb), now())
+                """, Map.of("id", UUID.randomUUID(), "templateId", templateId,
+                    "subject", template[2], "body", template[3],
+                    "variables", "[\"applicantName\",\"processName\",\"portalUrl\"]"));
         }
+    }
+
+    private List<String> openingBlockers(UUID processId) {
+        List<String> blockers = new java.util.ArrayList<>();
+        Long configuration = jdbc.queryForObject(
+            "SELECT count(*) FROM prekinder_process_configuration WHERE process_id = :id",
+            Map.of("id", processId), Long.class);
+        if (configuration == null || configuration == 0) blockers.add("configuración general");
+        Long stages = jdbc.queryForObject("""
+            SELECT count(*) FROM process_waves
+             WHERE process_id = :id AND opens_at IS NOT NULL AND closes_at IS NOT NULL
+            """, Map.of("id", processId), Long.class);
+        if (stages == null || stages < 3) blockers.add("calendario de las tres etapas");
+        Long communication = jdbc.queryForObject("""
+            SELECT count(*) FROM prekinder_communication_templates template
+              JOIN prekinder_communication_template_versions version
+                ON version.communication_template_id = template.communication_template_id
+             WHERE template.process_id = :id AND template.event_code = 'APPLICATION_SUBMITTED'
+               AND version.status = 'PUBLISHED'
+            """, Map.of("id", processId), Long.class);
+        if (communication == null || communication == 0) blockers.add("comunicación de postulación recibida");
+        return blockers;
     }
 
     private ProcessView process(UUID processId) {

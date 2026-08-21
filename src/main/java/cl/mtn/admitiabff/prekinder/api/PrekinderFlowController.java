@@ -224,11 +224,6 @@ public class PrekinderFlowController {
         return ok(flow.correctPublishedDecision(applicationId, command.decision(), command.note(), command.reason()));
     }
 
-    @PostMapping("/processes/{processId}/publication-batches")
-    public Map<String, Object> publication(@PathVariable UUID processId, @Valid @RequestBody PublicationCommand command) {
-        return ok(flow.schedulePublication(processId, command.scheduledAt()));
-    }
-
     @GetMapping("/processes/{processId}/dashboard")
     public Map<String, Object> dashboard(@PathVariable UUID processId) { return ok(flow.dashboard(processId)); }
 
@@ -338,5 +333,4 @@ public class PrekinderFlowController {
     public record DecisionCommand(@NotBlank String decision, @Size(max = 4000) String note) {}
     public record CorrectionCommand(@NotBlank String decision, @Size(max = 4000) String note,
                                     @NotBlank @Size(max = 2000) String reason) {}
-    public record PublicationCommand(@NotNull @Future Instant scheduledAt) {}
 }

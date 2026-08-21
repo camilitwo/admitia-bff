@@ -77,7 +77,9 @@ public class PrekinderPaymentService {
     }
 
     public Map<String, Object> checkout(UUID applicationId) {
-        paymentProperties.validateForUse();
+        if (!paymentProperties.enabled()) {
+            throw PaymentIntegrationException.unavailable("Los pagos de Prekínder no están habilitados");
+        }
         admissionProperties.validateConnectionForUse();
         PrekinderActor actor = access.requireActor();
         try {
@@ -105,6 +107,7 @@ public class PrekinderPaymentService {
         if (!application.paymentRequired() || "PAID".equals(application.paymentStatus())) {
             return wrap(response(application.applicationId(), application, payment));
         }
+        validatePaymentConfiguration(application.paymentConfiguration());
         validateApplication(application);
         if (payment != null && "PAYMENT_PENDING".equals(payment.status())
             && payment.chargeId() != null && !blank(payment.checkoutUrl())) {
@@ -114,8 +117,10 @@ public class PrekinderPaymentService {
 
         UUID paymentId = payment == null ? UUID.randomUUID() : payment.paymentId();
         String idempotencyKey = referencePrefix() + "-" + application.applicationId();
-        Instant expiresAt = LocalDate.now(providerZone).plusDays(paymentProperties.dueDays()).atStartOfDay(providerZone).toInstant();
-        upsertPendingPayment(paymentId, application.applicationId(), actor.id(), idempotencyKey, expiresAt);
+        Instant expiresAt = LocalDate.now(providerZone).plusDays(application.paymentConfiguration().dueDays())
+            .atStartOfDay(providerZone).toInstant();
+        upsertPendingPayment(paymentId, application.applicationId(), actor.id(), idempotencyKey, expiresAt,
+            application.paymentConfiguration());
         jdbc.update("UPDATE applications SET payment_status = 'PAYMENT_PENDING', updated_at = now() WHERE application_id = :id",
             Map.of("id", application.applicationId()));
         audit(paymentId, "checkout.requested", Map.of("applicationId", application.applicationId(), "reference", idempotencyKey));
@@ -150,10 +155,13 @@ public class PrekinderPaymentService {
                    ap.applicant_id, ap.identity_ciphertext, ap.identity_iv, ap.identity_wrapped_dek,
                    ap.identity_wrapped_dek_iv, ap.identity_key_version,
                    fv.ciphertext AS form_ciphertext, fv.iv AS form_iv, fv.wrapped_dek AS form_wrapped_dek,
-                   fv.wrapped_dek_iv AS form_wrapped_dek_iv, fv.key_version AS form_key_version
+                   fv.wrapped_dek_iv AS form_wrapped_dek_iv, fv.key_version AS form_key_version,
+                   config.payment_enabled, config.payment_amount, config.payment_currency,
+                   config.payment_glosa, config.payment_due_days
               FROM applications a
               JOIN applicants ap ON ap.applicant_id = a.applicant_id
               JOIN families f ON f.family_id = ap.family_id
+              JOIN prekinder_process_configuration config ON config.process_id = a.process_id
               JOIN encrypted_field_values fv ON fv.aggregate_type = 'APPLICATION'
                    AND fv.aggregate_id = a.application_id AND fv.field_code = 'APPLICATION_FORM'
              WHERE a.application_id = :applicationId AND f.external_reference = :actorReference
@@ -165,8 +173,11 @@ public class PrekinderPaymentService {
                 ApplicationDetails details = decrypt(new EncryptedPayload(rs.getString("form_ciphertext"), rs.getString("form_iv"),
                     rs.getString("form_wrapped_dek"), rs.getString("form_wrapped_dek_iv"), rs.getString("form_key_version")),
                     "prekinder|application-form|application:" + applicationId + "|field:APPLICATION_FORM", ApplicationDetails.class);
+                PaymentConfiguration configuration = new PaymentConfiguration(rs.getBoolean("payment_enabled"),
+                    rs.getBigDecimal("payment_amount"), rs.getString("payment_currency"),
+                    rs.getString("payment_glosa"), rs.getInt("payment_due_days"));
                 return new ApplicationData(applicationId, rs.getBoolean("payment_required"), rs.getString("payment_status"),
-                    instant(rs.getTimestamp("paid_at")), identity, details);
+                    instant(rs.getTimestamp("paid_at")), identity, details, configuration);
             });
         if (rows.isEmpty()) throw PaymentIntegrationException.invalidData("Postulación Prekínder no encontrada");
         return rows.get(0);
@@ -176,7 +187,7 @@ public class PrekinderPaymentService {
         return jdbc.queryForObject("SELECT payment_required, payment_status, paid_at FROM applications WHERE application_id = :id",
             Map.of("id", application.applicationId()), (rs, row) -> new ApplicationData(application.applicationId(),
                 rs.getBoolean("payment_required"), rs.getString("payment_status"), instant(rs.getTimestamp("paid_at")),
-                application.identity(), application.details()));
+                application.identity(), application.details(), application.paymentConfiguration()));
     }
 
     private PaymentData latestPayment(UUID applicationId) {
@@ -193,7 +204,8 @@ public class PrekinderPaymentService {
         return rows.isEmpty() ? null : rows.get(0);
     }
 
-    private void upsertPendingPayment(UUID paymentId, UUID applicationId, UUID actorId, String key, Instant expiresAt) {
+    private void upsertPendingPayment(UUID paymentId, UUID applicationId, UUID actorId, String key, Instant expiresAt,
+                                      PaymentConfiguration configuration) {
         jdbc.update("""
             INSERT INTO prekinder_payments(payment_id, application_id, guardian_actor_id, provider, idempotency_key,
                 amount, currency, status, external_status, expires_at)
@@ -206,7 +218,7 @@ public class PrekinderPaymentService {
                 expires_at = EXCLUDED.expires_at, updated_at = now()
             """, new MapSqlParameterSource().addValue("paymentId", paymentId).addValue("applicationId", applicationId)
             .addValue("actorId", actorId).addValue("provider", PROVIDER).addValue("key", key)
-            .addValue("amount", paymentProperties.applicationFee()).addValue("currency", upper(paymentProperties.currency()))
+            .addValue("amount", configuration.amount()).addValue("currency", upper(configuration.currency()))
             .addValue("expiresAt", Timestamp.from(expiresAt)));
     }
 
@@ -224,8 +236,10 @@ public class PrekinderPaymentService {
         RutParts studentRut = rut(application.identity().rut(), "alumno");
         return new ChargeRequest(guardianRut.body(), guardianRut.verifier(), normalizeName(application.details().guardian().fullName()),
             normalizeEmail(application.details().guardian().email()), studentRut.body(), studentRut.verifier(),
-            studentName(application.identity()), "PRE_KINDER", paymentProperties.applicationFee(), upper(paymentProperties.currency()),
-            LocalDate.now(providerZone).plusDays(paymentProperties.dueDays()).toString(), paymentProperties.paymentGlosa().trim(), key);
+            studentName(application.identity()), "PRE_KINDER", application.paymentConfiguration().amount(),
+            upper(application.paymentConfiguration().currency()),
+            LocalDate.now(providerZone).plusDays(application.paymentConfiguration().dueDays()).toString(),
+            application.paymentConfiguration().glosa().trim(), key);
     }
 
     private StudentResponse validateAdmission(AdmissionResponse response, AdmissionRequest request) {
@@ -359,8 +373,8 @@ public class PrekinderPaymentService {
             data.put("providerStatus", payment.externalStatus());
             data.put("lastStatusCheckedAt", payment.lastCheckedAt());
         } else {
-            data.put("amount", paymentProperties.applicationFee());
-            data.put("currency", upper(paymentProperties.currency()));
+            data.put("amount", application.paymentConfiguration().amount());
+            data.put("currency", upper(application.paymentConfiguration().currency()));
         }
         return data;
     }
@@ -406,6 +420,18 @@ public class PrekinderPaymentService {
 
     private String referencePrefix() {
         return blank(paymentProperties.referencePrefix()) ? "ADMITIA-PK" : paymentProperties.referencePrefix().trim();
+    }
+
+    private static void validatePaymentConfiguration(PaymentConfiguration configuration) {
+        if (!configuration.enabled()) throw PaymentIntegrationException.unavailable("Este proceso no requiere pago");
+        if (configuration.amount() == null || configuration.amount().signum() <= 0) {
+            throw PaymentIntegrationException.invalidData("El monto configurado para el proceso debe ser mayor a cero");
+        }
+        if (blank(configuration.glosa())) throw PaymentIntegrationException.invalidData("La glosa de pago no está configurada");
+        if (!("CLP".equalsIgnoreCase(configuration.currency()) || "CLF".equalsIgnoreCase(configuration.currency()))) {
+            throw PaymentIntegrationException.invalidData("La moneda del proceso debe ser CLP o CLF");
+        }
+        if (configuration.dueDays() < 1) throw PaymentIntegrationException.invalidData("El vencimiento del pago es inválido");
     }
 
     private static RutParts rut(String value, String label) {
@@ -459,7 +485,10 @@ public class PrekinderPaymentService {
     private static Map<String, Object> wrap(Map<String, Object> data) { return Map.of("success", true, "data", data); }
 
     private record ApplicationData(UUID applicationId, boolean paymentRequired, String paymentStatus, Instant paidAt,
-                                   ApplicantIdentity identity, ApplicationDetails details) { }
+                                   ApplicantIdentity identity, ApplicationDetails details,
+                                   PaymentConfiguration paymentConfiguration) { }
+    private record PaymentConfiguration(boolean enabled, BigDecimal amount, String currency, String glosa,
+                                        int dueDays) { }
     private record PaymentData(UUID paymentId, String status, Long chargeId, String checkoutUrl, BigDecimal amount,
                                String currency, Instant expiresAt, Instant paidAt, String invoiceId,
                                String externalStatus, Instant lastCheckedAt) { }

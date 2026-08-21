@@ -2,7 +2,6 @@ package cl.mtn.admitiabff.prekinder.service;
 
 import cl.mtn.admitiabff.prekinder.crypto.EncryptedPayload;
 import cl.mtn.admitiabff.prekinder.crypto.EnvelopeEncryptionService;
-import cl.mtn.admitiabff.prekinder.config.PrekinderPaymentProperties;
 import cl.mtn.admitiabff.prekinder.domain.PrekinderActor;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.time.Instant;
@@ -23,18 +22,15 @@ public class PrekinderGuardianService {
     private final PrekinderAccessService access;
     private final EnvelopeEncryptionService encryption;
     private final ObjectMapper mapper;
-    private final PrekinderPaymentProperties paymentProperties;
 
     public PrekinderGuardianService(@Qualifier("prekinderJdbc") NamedParameterJdbcTemplate jdbc,
                                     PrekinderAccessService access,
                                     EnvelopeEncryptionService encryption,
-                                    ObjectMapper mapper,
-                                    PrekinderPaymentProperties paymentProperties) {
+                                    ObjectMapper mapper) {
         this.jdbc = jdbc;
         this.access = access;
         this.encryption = encryption;
         this.mapper = mapper;
-        this.paymentProperties = paymentProperties;
     }
 
     public List<GuardianApplicationView> myApplications() {
@@ -43,6 +39,7 @@ public class PrekinderGuardianService {
             SELECT a.application_id, a.applicant_id, a.status, a.eligibility_status, a.created_at,
                    a.payment_required, a.payment_status, a.paid_at,
                    p.name AS process_name, p.academic_year,
+                   config.payment_amount, config.payment_currency,
                    ap.identity_ciphertext, ap.identity_iv, ap.identity_wrapped_dek,
                    ap.identity_wrapped_dek_iv, ap.identity_key_version,
                    fv.ciphertext AS form_ciphertext, fv.iv AS form_iv,
@@ -54,6 +51,7 @@ public class PrekinderGuardianService {
               JOIN applicants ap ON ap.family_id = f.family_id
               JOIN applications a ON a.applicant_id = ap.applicant_id
               JOIN admission_processes p ON p.process_id = a.process_id
+              JOIN prekinder_process_configuration config ON config.process_id = a.process_id
               LEFT JOIN encrypted_field_values fv ON fv.aggregate_type = 'APPLICATION'
                    AND fv.aggregate_id = a.application_id AND fv.field_code = 'APPLICATION_FORM'
              WHERE f.external_reference = :actorReference
@@ -77,7 +75,7 @@ public class PrekinderGuardianService {
                     rs.getTimestamp("created_at").toInstant(), details, paymentRequired, paymentStatus,
                     rs.getTimestamp("paid_at") == null ? null : rs.getTimestamp("paid_at").toInstant(),
                     !paymentRequired || "PAID".equals(paymentStatus), rs.getBoolean("has_complementary_form"),
-                    paymentProperties.applicationFee(), paymentProperties.currency());
+                    rs.getBigDecimal("payment_amount"), rs.getString("payment_currency"));
             });
     }
 
