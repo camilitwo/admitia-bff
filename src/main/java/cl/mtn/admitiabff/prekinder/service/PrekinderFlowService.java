@@ -1262,12 +1262,6 @@ public class PrekinderFlowService {
                     0
                 )
                 ON CONFLICT (group_id, instrument_code)
-                WHERE status IN (
-                    'ACTIVE',
-                    'CONFIRMED',
-                    'IN_PROGRESS',
-                    'SUBMITTED'
-                )
                 DO UPDATE SET
                     evaluator_id = EXCLUDED.evaluator_id,
                     template_version_id = EXCLUDED.template_version_id,
