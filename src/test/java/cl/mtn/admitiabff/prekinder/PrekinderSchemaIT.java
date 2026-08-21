@@ -82,9 +82,13 @@ class PrekinderSchemaIT {
                 INSERT INTO evaluation_template_versions(
                     evaluation_template_version_id, evaluation_template_id, version, status,
                     name, instrument_code)
-                VALUES ('00000000-0000-0000-0000-000000000103',
-                        '00000000-0000-0000-0000-000000000101', 1, 'DRAFT',
-                        'Nombre versionado', 'PSYCHOMOTOR')
+                VALUES
+                  ('00000000-0000-0000-0000-000000000103',
+                   '00000000-0000-0000-0000-000000000101', 1, 'DRAFT',
+                   'Nombre versionado', 'PSYCHOMOTOR'),
+                  ('00000000-0000-0000-0000-000000000104',
+                   '00000000-0000-0000-0000-000000000102', 1, 'PUBLISHED',
+                   'Nombre publicado', 'ACADEMIC')
                 """);
             try (var result = statement.executeQuery("""
                 SELECT name, instrument_code FROM evaluation_template_versions
@@ -94,6 +98,14 @@ class PrekinderSchemaIT {
                 assertEquals("Nombre versionado", result.getString("name"));
                 assertEquals("PSYCHOMOTOR", result.getString("instrument_code"));
             }
+            assertThrows(java.sql.SQLException.class, () -> statement.executeUpdate("""
+                UPDATE evaluation_template_versions SET name = 'Mutación indebida'
+                 WHERE evaluation_template_version_id = '00000000-0000-0000-0000-000000000104'
+                """));
+            assertEquals(1, statement.executeUpdate("""
+                UPDATE evaluation_template_versions SET status = 'SUPERSEDED'
+                 WHERE evaluation_template_version_id = '00000000-0000-0000-0000-000000000104'
+                """));
         }
 
         try (var connection = DriverManager.getConnection(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword());
