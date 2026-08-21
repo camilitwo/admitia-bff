@@ -164,8 +164,8 @@ CREATE TRIGGER trg_published_communication_immutable
 INSERT INTO prekinder_communication_templates(
     communication_template_id, process_id, event_code, name
 )
-SELECT gen_random_uuid(), process_id, event_code, name
-  FROM admission_processes
+SELECT gen_random_uuid(), process.process_id, defaults.event_code, defaults.template_name
+  FROM admission_processes process
  CROSS JOIN (VALUES
     ('APPLICATION_SUBMITTED', 'Postulación recibida'),
     ('SCHEDULE_ASSIGNED', 'Jornada agendada'),
@@ -173,7 +173,7 @@ SELECT gen_random_uuid(), process_id, event_code, name
     ('RESULT_WAITLIST', 'Resultado lista de espera'),
     ('RESULT_REJECTED', 'Resultado no admitido'),
     ('RESULT_RECTIFICATION', 'Rectificación de resultado')
- ) AS defaults(event_code, name)
+ ) AS defaults(event_code, template_name)
 ON CONFLICT (process_id, event_code) DO NOTHING;
 
 INSERT INTO prekinder_communication_template_versions(
