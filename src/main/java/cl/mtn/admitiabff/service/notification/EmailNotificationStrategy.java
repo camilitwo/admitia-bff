@@ -55,6 +55,7 @@ public class EmailNotificationStrategy implements NotificationChannelStrategy {
         entity.setTemplateData(jsonSupport.write(sensitive ? Map.of("redacted", true) : payload.getOrDefault("templateData", Map.of())));
         entity.setStatus(NotificationStatus.SENT);
         entity.setCreatedAt(LocalDateTime.now());
+        entity.setIdempotencyKey((String) payload.get("idempotencyKey"));
         return entity;
     }
 
@@ -69,7 +70,11 @@ public class EmailNotificationStrategy implements NotificationChannelStrategy {
             String message = notification.getDispatchMessage() != null
                     ? notification.getDispatchMessage()
                     : notification.getMessage();
-            resendEmailSender.send(notification.getRecipient(), notification.getSubject(), message);
+            String messageId = notification.getIdempotencyKey() == null
+                    ? resendEmailSender.send(notification.getRecipient(), notification.getSubject(), message)
+                    : resendEmailSender.send(notification.getRecipient(), notification.getSubject(), message,
+                        notification.getIdempotencyKey());
+            notification.setProviderMessageId(messageId);
             notification.setDispatchMessage(null);
         } catch (Exception ex) {
             log.error("Error enviando email a {}: {}", notification.getRecipient(), ex.getMessage(), ex);

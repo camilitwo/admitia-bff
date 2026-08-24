@@ -135,6 +135,16 @@ app:
     worker-delay-ms: ${APP_ADMISSION_RESULT_WORKER_DELAY_MS:3000}
     lease-minutes: ${APP_ADMISSION_RESULT_LEASE_MINUTES:10}
     max-attempts: ${APP_ADMISSION_RESULT_MAX_ATTEMPTS:5}
+  application-reminders:
+    enabled: ${APP_APPLICATION_REMINDERS_ENABLED:false}
+    academic-year: ${APP_APPLICATION_REMINDERS_ACADEMIC_YEAR:2027}
+    cron: ${APP_APPLICATION_REMINDERS_CRON:0 0 11 * * MON,THU}
+    zone: ${APP_APPLICATION_REMINDERS_ZONE:America/Santiago}
+    batch-size: ${APP_APPLICATION_REMINDERS_BATCH_SIZE:50}
+    dispatcher-delay-ms: ${APP_APPLICATION_REMINDERS_DISPATCHER_DELAY_MS:60000}
+    lease-minutes: ${APP_APPLICATION_REMINDERS_LEASE_MINUTES:10}
+    # 1 envío inicial + hasta 5 reintentos.
+    max-attempts: ${APP_APPLICATION_REMINDERS_MAX_ATTEMPTS:6}
   cors:
     allowed-origins: ${APP_CORS_ALLOWED_ORIGINS:http://localhost:5173,http://127.0.0.1:5173}
   # URL base para redirecciones (debe ser la URL pública del frontend)

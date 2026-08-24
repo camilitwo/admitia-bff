@@ -140,6 +140,9 @@ public class NotificationService {
         response.put("templateData", entity.getTemplateData());
         response.put("status", entity.getStatus().name());
         response.put("createdAt", entity.getCreatedAt());
+        if (entity.getProviderMessageId() != null) {
+            response.put("providerMessageId", entity.getProviderMessageId());
+        }
         return response;
     }
 

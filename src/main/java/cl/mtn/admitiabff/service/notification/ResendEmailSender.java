@@ -41,6 +41,10 @@ public class ResendEmailSender {
     }
 
     public String send(String to, String subject, String body) {
+        return send(to, subject, body, null);
+    }
+
+    public String send(String to, String subject, String body, String idempotencyKey) {
         if (apiKey == null || apiKey.isBlank()) {
             throw new IllegalStateException(
                     "Resend API key no configurada. Define app.email.resend.api-key (RESEND_API_KEY).");
@@ -68,13 +72,18 @@ public class ResendEmailSender {
 
         try {
             @SuppressWarnings("unchecked")
-            Map<String, Object> response = restClient.post()
+            RestClient.RequestBodySpec request = restClient.post()
                     .uri("/emails")
-                    .header(HttpHeaders.AUTHORIZATION, "Bearer " + apiKey)
+                    .header(HttpHeaders.AUTHORIZATION, "Bearer " + apiKey);
+            if (idempotencyKey != null && !idempotencyKey.isBlank()) {
+                request.header("Idempotency-Key", idempotencyKey);
+            }
+            Map<String, Object> response = request
                     .body(payload)
                     .retrieve()
                     .body(Map.class);
-            String messageId = response == null ? null : String.valueOf(response.get("id"));
+            Object rawMessageId = response == null ? null : response.get("id");
+            String messageId = rawMessageId == null ? null : String.valueOf(rawMessageId);
             log.info("Resend email enviado from={} to={} messageId={}", from, to, messageId);
             return messageId;
         } catch (RestClientResponseException ex) {
@@ -98,4 +107,3 @@ public class ResendEmailSender {
         return body == null ? "" : body.replaceAll("<[^>]+>", "");
     }
 }
-

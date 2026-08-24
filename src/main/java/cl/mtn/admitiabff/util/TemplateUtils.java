@@ -47,6 +47,8 @@ public final class TemplateUtils {
             case "document_reminder"                 -> DOCUMENT_REMINDER_BODY;
             case "status_update"                     -> STATUS_UPDATE_BODY;
             case "admission_result"                  -> ADMISSION_RESULT_BODY;
+            case "payment_reminder"                  -> PAYMENT_REMINDER_BODY;
+            case "family_registration_reminder"      -> FAMILY_REGISTRATION_REMINDER_BODY;
 
             // Interview
             case "interview", "interview_invitation" -> INTERVIEW_INVITATION_BODY;
@@ -555,6 +557,69 @@ public final class TemplateUtils {
                   Pueden revisar el detalle completo en su panel. Cualquier
                   consulta, escríbannos a
                   <a href="mailto:admisiones@mtn.cl" style="color:#273b7a;">admisiones@mtn.cl</a>.
+                </p>
+                <p style="margin:24px 0 0 0;">
+                  Un cordial saludo,<br/>
+                  <strong>Equipo de Admisión</strong><br/>
+                  Colegio Monte Tabor y Nazaret
+                </p>
+              </td>
+            </tr>
+            """;
+
+    private static final String PAYMENT_REMINDER_BODY = """
+            <tr>
+              <td class="content" style="padding:40px 30px;color:#333;line-height:1.7;font-family:'Segoe UI',Arial,sans-serif;font-size:15px;">
+                <h2 style="color:#273b7a;margin:0 0 16px 0;font-size:22px;">Hola {{guardianName}}</h2>
+                <p style="margin:0 0 14px 0;">
+                  Te recordamos que el pago de la postulación de
+                  <strong>{{studentName}}</strong> a <strong>{{gradeApplied}}</strong>
+                  para el año académico <strong>{{academicYear}}</strong> aún está pendiente.
+                </p>
+                <div class="info-box" style="background:#fff7ec;padding:15px 20px;border-radius:6px;margin:0 0 20px 0;border-left:4px solid #ff9e18;">
+                  <strong>N° de postulación:</strong> {{applicationId}}<br/>
+                  <strong>Estado:</strong> Pago pendiente
+                </div>
+                <p style="margin:0 0 20px 0;">
+                  Para continuar con el proceso de admisión, ingresa a tu portal de familia y completa el pago pendiente.
+                </p>
+                <p style="margin:0 0 24px 0;text-align:center;">
+                  <a href="{{portalUrl}}" style="display:inline-block;background:#273b7a;color:#fff;text-decoration:none;padding:13px 24px;border-radius:6px;font-weight:bold;">
+                    Ir al portal de familia
+                  </a>
+                </p>
+                <p style="margin:24px 0 0 0;">
+                  Un cordial saludo,<br/>
+                  <strong>Equipo de Admisión</strong><br/>
+                  Colegio Monte Tabor y Nazaret
+                </p>
+              </td>
+            </tr>
+            """;
+
+    private static final String FAMILY_REGISTRATION_REMINDER_BODY = """
+            <tr>
+              <td class="content" style="padding:40px 30px;color:#333;line-height:1.7;font-family:'Segoe UI',Arial,sans-serif;font-size:15px;">
+                <h2 style="color:#273b7a;margin:0 0 16px 0;font-size:22px;">Hola {{guardianName}}</h2>
+                <p style="margin:0 0 14px 0;">
+                  El formulario de registro familiar de la postulación de
+                  <strong>{{studentName}}</strong> a <strong>{{gradeApplied}}</strong>
+                  para el año académico <strong>{{academicYear}}</strong> todavía no ha sido enviado.
+                </p>
+                <div class="info-box" style="background:#f8f9fa;padding:15px 20px;border-radius:6px;margin:0 0 20px 0;border-left:4px solid #ff9e18;">
+                  <strong>N° de postulación:</strong> {{applicationId}}<br/>
+                  <strong>Estado:</strong> Formulario pendiente
+                </div>
+                <p style="margin:0 0 20px 0;">
+                  Ingresa a tu portal de familia para completar y enviar el formulario antes de la entrevista familiar.
+                </p>
+                <div style="background:#fff7ec;border:1px solid #f6d7aa;border-radius:6px;padding:14px 16px;margin:0 0 20px 0;color:#5f4a2d;font-size:14px;">
+                  <strong>Importante:</strong> Si estás postulando a más de un hijo, debes completar y enviar el formulario de registro familiar en cada uno de sus procesos de postulación.
+                </div>
+                <p style="margin:0 0 24px 0;text-align:center;">
+                  <a href="{{portalUrl}}" style="display:inline-block;background:#273b7a;color:#fff;text-decoration:none;padding:13px 24px;border-radius:6px;font-weight:bold;">
+                    Completar registro familiar
+                  </a>
                 </p>
                 <p style="margin:24px 0 0 0;">
                   Un cordial saludo,<br/>

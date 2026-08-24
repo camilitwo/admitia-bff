@@ -41,4 +41,23 @@ class EmailNotificationStrategyTest {
         assertThat(notification.getMessage()).doesNotContain("Secreta9!");
         assertThat(notification.getTemplateData()).doesNotContain("Secreta9!");
     }
+
+    @Test
+    void forwardsIdempotencyKeyAndCapturesProviderMessageId() {
+        when(jsonSupport.write(Map.of())).thenReturn("{}");
+        when(resendEmailSender.send("familia@example.cl", "Recordatorio", "<p>Pago</p>",
+            "application-reminder/2026-08-24/10/PAYMENT_REMINDER")).thenReturn("resend-123");
+        EmailNotificationStrategy strategy = new EmailNotificationStrategy(resendEmailSender, jsonSupport, false);
+        NotificationEntity notification = strategy.createNotification(Map.of(
+            "to", "familia@example.cl",
+            "subject", "Recordatorio",
+            "message", "<p>Pago</p>",
+            "idempotencyKey", "application-reminder/2026-08-24/10/PAYMENT_REMINDER"));
+
+        strategy.dispatch(notification);
+
+        assertThat(notification.getProviderMessageId()).isEqualTo("resend-123");
+        verify(resendEmailSender).send("familia@example.cl", "Recordatorio", "<p>Pago</p>",
+            "application-reminder/2026-08-24/10/PAYMENT_REMINDER");
+    }
 }

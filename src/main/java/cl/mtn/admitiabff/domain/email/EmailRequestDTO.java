@@ -21,6 +21,7 @@ public class EmailRequestDTO {
         public final Map<String, Object> data;
         public final boolean sensitive;
         public final String templateName;
+        public final String idempotencyKey;
 
 
         /*public static Builder builder() { return new Builder(); }*/

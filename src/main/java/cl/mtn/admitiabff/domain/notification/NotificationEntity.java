@@ -65,4 +65,12 @@ public class NotificationEntity {
     /** Contenido sólo en memoria para despachar correos sensibles; nunca se persiste. */
     @Transient
     private String dispatchMessage;
+
+    /** Clave enviada al proveedor para hacer seguro un reintento del mismo correo. */
+    @Transient
+    private String idempotencyKey;
+
+    /** Identificador devuelto por el proveedor; se copia al registro durable del job. */
+    @Transient
+    private String providerMessageId;
 }

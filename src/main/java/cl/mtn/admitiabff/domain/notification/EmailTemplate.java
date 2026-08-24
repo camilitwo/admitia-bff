@@ -36,6 +36,8 @@ public enum EmailTemplate {
     DOCUMENT_REMINDER("Recordatorio: documentos pendientes", Category.APPLICATION),
     STATUS_UPDATE("Actualización de tu postulación", Category.APPLICATION),
     ADMISSION_RESULT("Resultado de admisión", Category.APPLICATION),
+    PAYMENT_REMINDER("Recordatorio: pago pendiente de tu postulación", Category.APPLICATION),
+    FAMILY_REGISTRATION_REMINDER("Recordatorio: completa el formulario de registro familiar", Category.APPLICATION),
 
     // ---------- Interview ----------
     INTERVIEW_INVITATION("Invitación a entrevista", Category.INTERVIEW),

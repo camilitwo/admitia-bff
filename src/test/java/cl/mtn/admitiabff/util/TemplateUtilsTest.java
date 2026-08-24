@@ -76,4 +76,32 @@ class TemplateUtilsTest {
         assertFalse(html.contains("APPROVED"));
         assertFalse(html.contains("{{"));
     }
+
+    @Test
+    void paymentReminderContainsOnlyPaymentCallToAction() {
+        String html = TemplateUtils.generateTemplate("payment_reminder", Map.of(
+            "guardianName", "Camila Pérez", "studentName", "Ana Pérez",
+            "gradeApplied", "1° Básico", "academicYear", 2027,
+            "applicationId", 10, "portalUrl", "https://admitia.cl/familia"));
+
+        assertTrue(html.contains("Pago pendiente"));
+        assertTrue(html.contains("https://admitia.cl/familia"));
+        assertFalse(html.contains("Completar registro familiar"));
+        assertFalse(html.contains("más de un hijo"));
+        assertFalse(html.contains("{{"));
+    }
+
+    @Test
+    void familyRegistrationReminderContainsFormCallToAction() {
+        String html = TemplateUtils.generateTemplate("family_registration_reminder", Map.of(
+            "guardianName", "Camila Pérez", "studentName", "Ana Pérez",
+            "gradeApplied", "1° Básico", "academicYear", 2027,
+            "applicationId", 10, "portalUrl", "https://admitia.cl/familia"));
+
+        assertTrue(html.contains("Formulario pendiente"));
+        assertTrue(html.contains("Completar registro familiar"));
+        assertTrue(html.contains("Si estás postulando a más de un hijo"));
+        assertTrue(html.contains("cada uno de sus procesos de postulación"));
+        assertFalse(html.contains("{{"));
+    }
 }
