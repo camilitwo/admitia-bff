@@ -28,4 +28,16 @@ class PrekinderEvaluatorControllerTest {
         assertThat(response.get("success")).isEqualTo(true);
         assertThat(response.get("data")).isEqualTo(workspace);
     }
+
+    @Test
+    void exposesOnlyRubricsResolvedByTheEvaluatorService() {
+        UUID processId = UUID.randomUUID();
+        when(evaluators.rubrics(processId)).thenReturn(List.of());
+
+        Map<String, Object> response = controller.rubrics(processId);
+
+        verify(evaluators).rubrics(processId);
+        assertThat(response.get("success")).isEqualTo(true);
+        assertThat(response.get("data")).isEqualTo(List.of());
+    }
 }

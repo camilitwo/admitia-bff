@@ -5,6 +5,7 @@ import cl.mtn.admitiabff.prekinder.crypto.EnvelopeEncryptionService;
 import cl.mtn.admitiabff.prekinder.domain.PrekinderActor;
 import cl.mtn.admitiabff.prekinder.realtime.PrekinderRealtimeNotifier;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import java.math.BigDecimal;
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.time.LocalDate;
@@ -136,6 +137,89 @@ public class PrekinderEvaluatorService {
              WHERE aggregate_type = 'EVALUATOR_WORKSPACE' AND aggregate_id = :actorId
             """, Map.of("actorId", actor.id()), Long.class);
         return new EvaluatorWorkspace(actor.id(), effectiveDate, sequence == null ? 0 : sequence, instruments);
+    }
+
+    public List<EvaluatorRubricView> rubrics(UUID processId) {
+        PrekinderActor actor = access.requireEvaluator();
+        return jdbc.query("""
+            SELECT assignment.assignment_id, assignment.process_id, process.name AS process_name,
+                   process.academic_year, assignment.instrument_code, instrument.display_name,
+                   instrument.capture_mode, instrument.sensitive, instrument.position,
+                   template.evaluation_template_id, version.evaluation_template_version_id,
+                   version.name, version.version AS rubric_version, version.maximum_score,
+                   version.published_at
+              FROM process_rubric_assignments assignment
+              JOIN admission_processes process ON process.process_id = assignment.process_id
+              JOIN evaluation_template_versions version
+                ON version.evaluation_template_version_id = assignment.evaluation_template_version_id
+              JOIN evaluation_templates template
+                ON template.evaluation_template_id = version.evaluation_template_id
+              JOIN evaluation_instruments instrument
+                ON instrument.instrument_code = assignment.instrument_code
+             WHERE assignment.active = true
+               AND process.status = 'PUBLISHED'
+               AND (process.starts_at IS NULL OR process.starts_at <= now())
+               AND (process.ends_at IS NULL OR process.ends_at >= now())
+               AND template.status = 'ACTIVE'
+               AND version.status = 'PUBLISHED'
+               AND instrument.active = true
+               AND (CAST(:processId AS uuid) IS NULL OR assignment.process_id = CAST(:processId AS uuid))
+               AND (
+                    EXISTS (
+                        SELECT 1 FROM professional_instrument_authorizations authorization
+                         WHERE authorization.process_id = assignment.process_id
+                           AND authorization.professional_id = :actorId
+                           AND authorization.instrument_code = assignment.instrument_code
+                           AND authorization.active = true
+                           AND authorization.valid_from <= now()
+                           AND (authorization.valid_until IS NULL OR authorization.valid_until > now())
+                    )
+                    OR EXISTS (
+                        SELECT 1 FROM group_instrument_assignments group_assignment
+                        JOIN evaluation_groups assigned_group
+                          ON assigned_group.group_id = group_assignment.group_id
+                         WHERE assigned_group.process_id = assignment.process_id
+                           AND group_assignment.evaluator_id = :actorId
+                           AND group_assignment.instrument_code = assignment.instrument_code
+                           AND group_assignment.status NOT IN ('REPLACED','CANCELLED')
+                    )
+               )
+             ORDER BY process.academic_year DESC, instrument.position
+            """, new MapSqlParameterSource().addValue("actorId", actor.id()).addValue("processId", processId),
+            (rs, row) -> new EvaluatorRubricView(
+                rs.getObject("assignment_id", UUID.class), rs.getObject("process_id", UUID.class),
+                rs.getString("process_name"), rs.getInt("academic_year"),
+                new InstrumentView(rs.getString("instrument_code"), rs.getString("display_name"),
+                    rs.getString("capture_mode"), rs.getBoolean("sensitive"), true,
+                    rs.getInt("position")),
+                rs.getObject("evaluation_template_id", UUID.class),
+                rs.getObject("evaluation_template_version_id", UUID.class), rs.getString("name"),
+                rs.getInt("rubric_version"), rs.getBigDecimal("maximum_score"),
+                rs.getTimestamp("published_at").toInstant(), List.<EvaluatorCriterionView>of()))
+            .stream()
+            .filter(rubric -> roleAllowsInstrument(actor, rubric.instrument().instrumentCode()))
+            .map(rubric -> rubric.withCriteria(evaluatorCriteria(rubric.versionId())))
+            .toList();
+    }
+
+    private List<EvaluatorCriterionView> evaluatorCriteria(UUID versionId) {
+        return jdbc.query("""
+            SELECT criterion_id, code, name, descriptor, position, required
+              FROM evaluation_criteria
+             WHERE evaluation_template_version_id = :versionId
+             ORDER BY position
+            """, Map.of("versionId", versionId), (rs, row) -> {
+            UUID criterionId = rs.getObject("criterion_id", UUID.class);
+            List<EvaluatorOptionView> options = jdbc.query("""
+                SELECT option_id, value, label, descriptor, professionally_validated, position
+                  FROM evaluation_options WHERE criterion_id = :criterionId ORDER BY position
+                """, Map.of("criterionId", criterionId), (ors, optionRow) -> new EvaluatorOptionView(
+                    ors.getObject("option_id", UUID.class), ors.getBigDecimal("value"),
+                    ors.getString("label"), ors.getString("descriptor"),
+                    ors.getBoolean("professionally_validated"), ors.getInt("position")));
+            return new EvaluatorCriterionView(criterionId, rs.getString("code"), rs.getString("name"),
+                rs.getString("descriptor"), rs.getInt("position"), rs.getBoolean("required"), options);
+        });
     }
 
     public AssignmentView assign(UUID groupId, String requestedInstrument, UUID evaluatorId, UUID templateVersionId,
@@ -394,6 +478,19 @@ public class PrekinderEvaluatorService {
     public record InstrumentAgenda(InstrumentView instrument, List<AssignmentView> assignments) {}
     public record EvaluatorWorkspace(UUID actorId, LocalDate date, long serverSequence,
                                      List<InstrumentAgenda> instruments) {}
+    public record EvaluatorRubricView(UUID assignmentId, UUID processId, String processName, int academicYear,
+                                      InstrumentView instrument, UUID rubricId, UUID versionId, String name,
+                                      int rubricVersion, BigDecimal maximumScore, Instant publishedAt,
+                                      List<EvaluatorCriterionView> criteria) {
+        EvaluatorRubricView withCriteria(List<EvaluatorCriterionView> nextCriteria) {
+            return new EvaluatorRubricView(assignmentId, processId, processName, academicYear, instrument,
+                rubricId, versionId, name, rubricVersion, maximumScore, publishedAt, nextCriteria);
+        }
+    }
+    public record EvaluatorCriterionView(UUID criterionId, String code, String name, String descriptor,
+                                         int position, boolean required, List<EvaluatorOptionView> options) {}
+    public record EvaluatorOptionView(UUID optionId, BigDecimal value, String label, String descriptor,
+                                      boolean professionallyValidated, int position) {}
     public record Profile(UUID actorId, String instrumentCode, String instrumentName) {}
     public record EvaluatorAgenda(Profile profile, List<AssignmentView> assignments) {}
     public record AssignmentView(UUID assignmentId, String instrumentCode, String status, long version,

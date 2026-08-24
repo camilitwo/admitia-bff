@@ -18,6 +18,7 @@ import java.util.Map;
 import java.util.Optional;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
@@ -43,6 +44,7 @@ public class ApplicationReminderService {
     private final String portalUrl;
     private final Clock clock;
 
+    @Autowired
     public ApplicationReminderService(ApplicationReminderRepository repository,
             EmailComposerService emailComposer,
             @Value("${app.application-reminders.academic-year:2027}") int academicYear,

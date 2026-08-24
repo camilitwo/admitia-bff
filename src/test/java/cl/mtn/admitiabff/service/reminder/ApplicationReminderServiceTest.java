@@ -28,9 +28,26 @@ import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mockito;
+import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 
 class ApplicationReminderServiceTest {
     private static final ZoneId CHILE = ZoneId.of("America/Santiago");
+
+    @Test
+    void reminderBeanStartsWhenFeatureIsEnabled() {
+        new ApplicationContextRunner()
+            .withBean(ApplicationReminderRepository.class,
+                () -> Mockito.mock(ApplicationReminderRepository.class))
+            .withBean(EmailComposerService.class, () -> Mockito.mock(EmailComposerService.class))
+            .withBean(ApplicationReminderService.class)
+            .withPropertyValues(
+                "app.application-reminders.enabled=true",
+                "app.frontend.base-url=https://admitia.cl")
+            .run(context -> {
+                assertThat(context).hasNotFailed();
+                assertThat(context).hasSingleBean(ApplicationReminderService.class);
+            });
+    }
 
     @ParameterizedTest
     @MethodSource("classificationCases")

@@ -4,6 +4,8 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -93,7 +95,7 @@ class ApplicationReminderRepository {
             """, new MapSqlParameterSource()
                 .addValue("applicationId", state.applicationId())
                 .addValue("reminderType", reminderType)
-                .addValue("slot", slot)
+                .addValue("slot", dbTimestamp(slot))
                 .addValue("slotDate", slotDate)
                 .addValue("recipient", state.recipient())
                 .addValue("status", status)
@@ -103,7 +105,7 @@ class ApplicationReminderRepository {
     boolean isSlotMaterialized(Instant slot) {
         Integer count = jdbc.queryForObject("""
             SELECT COUNT(*) FROM application_reminder_runs WHERE scheduled_slot = :slot
-            """, Map.of("slot", slot), Integer.class);
+            """, Map.of("slot", dbTimestamp(slot)), Integer.class);
         return count != null && count > 0;
     }
 
@@ -112,7 +114,7 @@ class ApplicationReminderRepository {
             INSERT INTO application_reminder_runs(scheduled_slot, scheduled_date, academic_year)
             VALUES (:slot, :slotDate, :academicYear)
             ON CONFLICT (scheduled_slot) DO NOTHING
-            """, Map.of("slot", slot, "slotDate", slotDate, "academicYear", academicYear));
+            """, Map.of("slot", dbTimestamp(slot), "slotDate", slotDate, "academicYear", academicYear));
     }
 
     Optional<Delivery> claimNext(LocalDate today, int maxAttempts, int leaseMinutes) {
@@ -171,7 +173,7 @@ class ApplicationReminderRepository {
         parameters.put("id", id);
         parameters.put("recipient", recipient == null ? "" : recipient);
         parameters.put("error", error);
-        parameters.put("nextAttemptAt", nextAttemptAt);
+        parameters.put("nextAttemptAt", nextAttemptAt == null ? null : dbTimestamp(nextAttemptAt));
         jdbc.update("""
             UPDATE application_reminder_deliveries
                SET status = 'FAILED', recipient = :recipient, last_error = :error,
@@ -187,6 +189,10 @@ class ApplicationReminderRepository {
             rs.getBoolean("form_submitted"), rs.getString("recipient"),
             rs.getString("guardian_name"), rs.getString("student_name"),
             rs.getString("grade_applied"), (Integer) rs.getObject("academic_year"));
+    }
+
+    private static OffsetDateTime dbTimestamp(Instant instant) {
+        return OffsetDateTime.ofInstant(instant, ZoneOffset.UTC);
     }
 
     record ApplicationState(long applicationId, boolean active, boolean paymentRequired,

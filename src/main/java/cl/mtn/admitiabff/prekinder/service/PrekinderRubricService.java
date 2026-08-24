@@ -1,6 +1,7 @@
 package cl.mtn.admitiabff.prekinder.service;
 
 import cl.mtn.admitiabff.prekinder.domain.PrekinderActor;
+import cl.mtn.admitiabff.prekinder.realtime.PrekinderRealtimeNotifier;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -22,13 +23,15 @@ public class PrekinderRubricService {
     private final NamedParameterJdbcTemplate jdbc;
     private final TransactionTemplate transactions;
     private final PrekinderAccessService access;
+    private final PrekinderRealtimeNotifier realtime;
 
     public PrekinderRubricService(@Qualifier("prekinderJdbc") NamedParameterJdbcTemplate jdbc,
         @Qualifier("prekinderTransactionManager") PlatformTransactionManager manager,
-        PrekinderAccessService access) {
+        PrekinderAccessService access, PrekinderRealtimeNotifier realtime) {
         this.jdbc = jdbc;
         this.transactions = new TransactionTemplate(manager);
         this.access = access;
+        this.realtime = realtime;
     }
 
     public List<RubricSummary> catalog() {
@@ -343,7 +346,56 @@ public class PrekinderRubricService {
                 VALUES (:id, :processId, :instrument, :versionId, :actorId)
                 """, Map.of("id", assignmentId, "processId", processId, "instrument", instrument,
                 "versionId", versionId, "actorId", actor.id()));
-            audit(actor.id(), "PROCESS_RUBRIC_ASSIGNED", assignmentId);
+            List<UUID> affectedEvaluators = jdbc.queryForList("""
+                SELECT DISTINCT group_assignment.evaluator_id
+                  FROM group_instrument_assignments group_assignment
+                  JOIN evaluation_groups evaluation_group
+                    ON evaluation_group.group_id = group_assignment.group_id
+                 WHERE evaluation_group.process_id = :processId
+                   AND group_assignment.instrument_code = :instrument
+                   AND group_assignment.status NOT IN ('REPLACED','CANCELLED','COMPLETED')
+                """, Map.of("processId", processId, "instrument", instrument), UUID.class);
+            jdbc.update("""
+                UPDATE group_instrument_assignments group_assignment
+                   SET template_version_id = :versionId, version = version + 1
+                  FROM evaluation_groups evaluation_group
+                 WHERE evaluation_group.group_id = group_assignment.group_id
+                   AND evaluation_group.process_id = :processId
+                   AND group_assignment.instrument_code = :instrument
+                   AND group_assignment.status NOT IN ('REPLACED','CANCELLED','COMPLETED')
+                """, Map.of("processId", processId, "instrument", instrument, "versionId", versionId));
+            int migratedReports = jdbc.update("""
+                UPDATE evaluator_reports report
+                   SET evaluation_template_version_id = :versionId,
+                       raw_score = NULL, maximum_score = NULL,
+                       version = version + 1, updated_at = now()
+                  FROM evaluation_groups evaluation_group
+                 WHERE evaluation_group.group_id = report.group_id
+                   AND evaluation_group.process_id = :processId
+                   AND report.instrument_code = :instrument
+                   AND report.evaluation_template_version_id <> :versionId
+                   AND report.status = 'PENDING'
+                   AND NOT EXISTS (
+                       SELECT 1 FROM evaluator_report_responses response
+                        WHERE response.report_id = report.report_id
+                   )
+                   AND NOT EXISTS (
+                       SELECT 1 FROM evaluator_report_notes note
+                        WHERE note.report_id = report.report_id
+                   )
+                """, Map.of("processId", processId, "instrument", instrument, "versionId", versionId));
+            Long preservedValue = jdbc.queryForObject("""
+                SELECT count(*)
+                  FROM evaluator_reports report
+                  JOIN evaluation_groups evaluation_group ON evaluation_group.group_id = report.group_id
+                 WHERE evaluation_group.process_id = :processId
+                   AND report.instrument_code = :instrument
+                   AND report.evaluation_template_version_id <> :versionId
+                """, Map.of("processId", processId, "instrument", instrument, "versionId", versionId), Long.class);
+            long preservedReports = preservedValue == null ? 0 : preservedValue;
+            auditAssignment(actor.id(), assignmentId, processId, instrument, migratedReports, preservedReports);
+            affectedEvaluators.forEach(evaluatorId ->
+                realtime.notifyAfterCommit(evaluatorId, processId, "EVALUATOR_RUBRIC_CHANGED"));
             return assignments(processId).stream().filter(value -> value.assignmentId().equals(assignmentId)).findFirst().orElseThrow();
         });
     }
@@ -461,6 +513,21 @@ public class PrekinderRubricService {
             VALUES (:id, :actorId, :action, 'RUBRIC', :aggregateId, 'SUCCESS')
             """, Map.of("id", UUID.randomUUID(), "actorId", actorId,
                 "action", action, "aggregateId", aggregateId));
+    }
+
+    private void auditAssignment(UUID actorId, UUID assignmentId, UUID processId, String instrument,
+                                 int migratedReports, long preservedReports) {
+        jdbc.update("""
+            INSERT INTO audit_events(audit_id, actor_id, action, aggregate_type, aggregate_id, result, metadata)
+            VALUES (:id, :actorId, 'PROCESS_RUBRIC_ASSIGNED', 'RUBRIC', :assignmentId, 'SUCCESS',
+                    jsonb_build_object('processId', CAST(:processId AS text),
+                                       'instrumentCode', :instrument,
+                                       'migratedReports', :migratedReports,
+                                       'preservedReports', :preservedReports))
+            """, new MapSqlParameterSource().addValue("id", UUID.randomUUID()).addValue("actorId", actorId)
+            .addValue("assignmentId", assignmentId).addValue("processId", processId)
+            .addValue("instrument", instrument).addValue("migratedReports", migratedReports)
+            .addValue("preservedReports", preservedReports));
     }
 
     private static Instant instant(java.sql.Timestamp value) { return value == null ? null : value.toInstant(); }

@@ -44,6 +44,11 @@ public class PrekinderEvaluatorController {
         return ok(evaluators.workspace(processId, date));
     }
 
+    @GetMapping("/me/rubrics")
+    public Map<String, Object> rubrics(@RequestParam(required = false) UUID processId) {
+        return ok(evaluators.rubrics(processId));
+    }
+
     @PutMapping("/groups/{groupId}/instruments/{instrumentCode}/assignment")
     public Map<String, Object> assign(@PathVariable UUID groupId, @PathVariable String instrumentCode,
                                       @Valid @RequestBody AssignmentCommand command) {

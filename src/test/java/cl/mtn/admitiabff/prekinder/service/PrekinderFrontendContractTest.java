@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import cl.mtn.admitiabff.prekinder.domain.PrekinderActor;
+import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 
@@ -22,6 +23,24 @@ class PrekinderFrontendContractTest {
 
         assertThat(PrekinderEvaluatorService.roleAllowsInstrument(actor, "ACADEMIC")).isTrue();
         assertThat(PrekinderEvaluatorService.roleAllowsInstrument(actor, "PSYCHOLOGY")).isTrue();
+    }
+
+    @Test
+    void specializedEvaluatorRolesOnlyAllowTheirOwnInstrument() {
+        List<String> roles = List.of(
+            "PK_EVALUATOR_ACADEMIC", "PK_EVALUATOR_PSYCHOMOTOR", "PK_EVALUATOR_PSYCHOLOGY",
+            "PK_EVALUATOR_ENTRY_INDICATORS", "PK_EVALUATOR_GROUP_OBSERVATION",
+            "PK_EVALUATOR_LEARNING_SUPPORT", "PK_EVALUATOR_DAP");
+        List<String> instruments = List.of(
+            "ACADEMIC", "PSYCHOMOTOR", "PSYCHOLOGY", "ENTRY_INDICATORS",
+            "GROUP_OBSERVATION", "LEARNING_SUPPORT", "DAP");
+
+        for (int index = 0; index < roles.size(); index++) {
+            var actor = new PrekinderActor(UUID.randomUUID(), 100L + index, roles.get(index));
+            assertThat(PrekinderEvaluatorService.roleAllowsInstrument(actor, instruments.get(index))).isTrue();
+            assertThat(PrekinderEvaluatorService.roleAllowsInstrument(
+                actor, instruments.get((index + 1) % instruments.size()))).isFalse();
+        }
     }
 
     @Test
