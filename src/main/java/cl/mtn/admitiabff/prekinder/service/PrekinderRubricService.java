@@ -356,32 +356,34 @@ public class PrekinderRubricService {
                    AND group_assignment.status NOT IN ('REPLACED','CANCELLED','COMPLETED')
                 """, Map.of("processId", processId, "instrument", instrument), UUID.class);
             jdbc.update("""
-                UPDATE group_instrument_assignments group_assignment
+                UPDATE group_instrument_assignments
                    SET template_version_id = :versionId, version = version + 1
-                  FROM evaluation_groups evaluation_group
-                 WHERE evaluation_group.group_id = group_assignment.group_id
-                   AND evaluation_group.process_id = :processId
-                   AND group_assignment.instrument_code = :instrument
-                   AND group_assignment.status NOT IN ('REPLACED','CANCELLED','COMPLETED')
+                 WHERE group_id IN (
+                     SELECT eg.group_id FROM evaluation_groups eg
+                      WHERE eg.process_id = :processId
+                 )
+                   AND instrument_code = :instrument
+                   AND status NOT IN ('REPLACED','CANCELLED','COMPLETED')
                 """, Map.of("processId", processId, "instrument", instrument, "versionId", versionId));
             int migratedReports = jdbc.update("""
-                UPDATE evaluator_reports report
+                UPDATE evaluator_reports
                    SET evaluation_template_version_id = :versionId,
                        raw_score = NULL, maximum_score = NULL,
                        version = version + 1, updated_at = now()
-                  FROM evaluation_groups evaluation_group
-                 WHERE evaluation_group.group_id = report.group_id
-                   AND evaluation_group.process_id = :processId
-                   AND report.instrument_code = :instrument
-                   AND report.evaluation_template_version_id <> :versionId
-                   AND report.status = 'PENDING'
+                 WHERE group_id IN (
+                     SELECT eg.group_id FROM evaluation_groups eg
+                      WHERE eg.process_id = :processId
+                 )
+                   AND instrument_code = :instrument
+                   AND evaluation_template_version_id <> :versionId
+                   AND status = 'PENDING'
                    AND NOT EXISTS (
                        SELECT 1 FROM evaluator_report_responses response
-                        WHERE response.report_id = report.report_id
+                        WHERE response.report_id = evaluator_reports.report_id
                    )
                    AND NOT EXISTS (
                        SELECT 1 FROM evaluator_report_notes note
-                        WHERE note.report_id = report.report_id
+                        WHERE note.report_id = evaluator_reports.report_id
                    )
                 """, Map.of("processId", processId, "instrument", instrument, "versionId", versionId));
             Long preservedValue = jdbc.queryForObject("""
