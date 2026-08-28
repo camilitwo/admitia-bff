@@ -52,11 +52,13 @@ public final class TemplateUtils {
 
             // Interview
             case "interview", "interview_invitation" -> INTERVIEW_INVITATION_BODY;
+            case "interview_invitation_cycle_director" -> INTERVIEW_INVITATION_CYCLE_DIRECTOR_BODY;
             case "interview_rescheduled"             -> INTERVIEW_RESCHEDULED_BODY;
             case "interview_cancelled"               -> INTERVIEW_CANCELLED_BODY;
             case "interview_confirmed"               -> INTERVIEW_CONFIRMED_BODY;
             case "interview_rejected_by_family"      -> INTERVIEW_REJECTED_BY_FAMILY_BODY;
             case "interview_confirmed_for_interviewer" -> INTERVIEW_CONFIRMED_FOR_INTERVIEWER_BODY;
+            case "interview_assignment_notification"  -> INTERVIEW_ASSIGNMENT_NOTIFICATION_BODY;
 
             // Evaluation
             case "evaluation_assignment", "evaluation" -> EVALUATION_ASSIGNMENT_BODY;
@@ -839,6 +841,83 @@ public final class TemplateUtils {
                 <p style="margin:0 0 14px 0;">
                   La familia asistirá según lo programado. Si necesita
                   coordinar algo adicional, puede escribir a
+                  <a href="mailto:admisiones@mtn.cl" style="color:#273b7a;">admisiones@mtn.cl</a>.
+                </p>
+                <p style="margin:24px 0 0 0;">
+                  Un cordial saludo,<br/>
+                  <strong>Equipo de Admisión</strong><br/>
+                  Colegio Monte Tabor y Nazaret
+                </p>
+              </td>
+            </tr>
+            """;
+
+    private static final String INTERVIEW_INVITATION_CYCLE_DIRECTOR_BODY = """
+            <tr>
+              <td class="content" style="padding:40px 30px;color:#333;line-height:1.7;font-family:'Segoe UI',Arial,sans-serif;font-size:15px;">
+                <h2 style="color:#273b7a;margin:0 0 16px 0;font-size:22px;">Estimados {{parentNames}}</h2>
+                <p style="margin:0 0 14px 0;">
+                  Junto con saludarles, les informamos que
+                  <strong>{{studentName}}</strong> ha sido citado/a a una entrevista
+                  de <strong>{{interviewType}}</strong> como parte del proceso de
+                  admisión de nuestro colegio.
+                </p>
+                <div class="info-box" style="background:#f8f9fa;padding:15px 20px;border-radius:6px;margin:0 0 18px 0;border-left:4px solid #ff9e18;">
+                  <strong>Tipo de entrevista:</strong> {{interviewType}}<br/>
+                  <strong>Fecha:</strong> {{scheduledDate}}<br/>
+                  <strong>Hora:</strong> {{scheduledTime}}<br/>
+                  <strong>Modalidad:</strong> {{mode}}<br/>
+                  <strong>Lugar:</strong> {{location}}<br/>
+                  <strong>A cargo de:</strong> {{interviewerName}}
+                </div>
+                <div style="background:#e8f5e9;padding:20px;border-radius:6px;margin:25px 0;text-align:center;">
+                  <p style="margin:0 0 15px 0;font-weight:bold;color:#2e7d32;">
+                    ¿Puede asistir a la entrevista?
+                  </p>
+                  <div style="display:inline-block;margin:5px;">
+                    <a href="{{confirmUrl}}" style="display:inline-block;padding:12px 30px;background:#4caf50;color:#fff;text-decoration:none;border-radius:5px;font-weight:bold;">✓ Confirmar asistencia</a>
+                  </div>
+                  <div style="display:inline-block;margin:5px;">
+                    <a href="{{rejectUrl}}" style="display:inline-block;padding:12px 30px;background:#f44336;color:#fff;text-decoration:none;border-radius:5px;font-weight:bold;">✗ No puedo asistir</a>
+                  </div>
+                  <p style="margin:10px 0 0 0;font-size:12px;color:#666;">
+                    Haga clic en uno de los botones para confirmar o rechazar la entrevista.
+                  </p>
+                </div>
+                <p style="margin:0 0 14px 0;">
+                  Si la fecha u horario presenta inconvenientes, escríbannos
+                  a <a href="mailto:admisiones@mtn.cl" style="color:#273b7a;">admisiones@mtn.cl</a>
+                  o respondan este correo y coordinaremos una nueva instancia.
+                </p>
+                <p style="margin:24px 0 0 0;">
+                  Un cordial saludo,<br/>
+                  <strong>Equipo de Admisión</strong><br/>
+                  Colegio Monte Tabor y Nazaret
+                </p>
+              </td>
+            </tr>
+            """;
+
+    private static final String INTERVIEW_ASSIGNMENT_NOTIFICATION_BODY = """
+            <tr>
+              <td class="content" style="padding:40px 30px;color:#333;line-height:1.7;font-family:'Segoe UI',Arial,sans-serif;font-size:15px;">
+                <h2 style="color:#273b7a;margin:0 0 16px 0;font-size:22px;">Nueva entrevista asignada</h2>
+                <p style="margin:0 0 14px 0;">Estimado/a <strong>{{interviewerName}}</strong>,</p>
+                <p style="margin:0 0 14px 0;">
+                  Se le ha asignado una nueva entrevista dentro del proceso de admisión.
+                  A continuación los datos correspondientes:
+                </p>
+                <div class="info-box" style="background:#ecfdf5;padding:15px 20px;border-radius:6px;margin:0 0 18px 0;border-left:4px solid #10b981;">
+                  <strong>Estudiante:</strong> {{studentName}}<br/>
+                  <strong>Tipo de entrevista:</strong> {{interviewType}}<br/>
+                  <strong>Fecha:</strong> {{scheduledDate}}<br/>
+                  <strong>Hora:</strong> {{scheduledTime}}<br/>
+                  <strong>Modalidad:</strong> {{mode}}<br/>
+                  <strong>Lugar:</strong> {{location}}
+                </div>
+                <p style="margin:0 0 14px 0;">
+                  La familia ha sido notificada y confirmará su asistencia.
+                  Si necesita coordinar algo adicional, puede escribir a
                   <a href="mailto:admisiones@mtn.cl" style="color:#273b7a;">admisiones@mtn.cl</a>.
                 </p>
                 <p style="margin:24px 0 0 0;">
