@@ -230,6 +230,54 @@ public final class EmailTemplateRenderers {
     }
 
     @Component
+    public static class InterviewInvitationCycleDirectorRenderer implements EmailTemplateRenderer {
+        @Override public EmailTemplate template() { return EmailTemplate.INTERVIEW_INVITATION_CYCLE_DIRECTOR; }
+        @Override public String render(Map<String, Object> data) {
+            String parentNames = EmailLayout.str(data, "parentNames", "Estimados");
+            String studentName = EmailLayout.str(data, "studentName", "el/la estudiante");
+            String interviewType = EmailLayout.str(data, "interviewType", "Entrevista");
+            String date = EmailLayout.str(data, "scheduledDate", "");
+            String time = EmailLayout.str(data, "scheduledTime", "");
+            String mode = EmailLayout.str(data, "mode", "");
+            String location = EmailLayout.str(data, "location", "");
+            String interviewer = EmailLayout.str(data, "interviewerName", "");
+            String body = EmailLayout.paragraph("<strong>Estimados " + EmailLayout.escape(parentNames) + "</strong>")
+                    + EmailLayout.paragraph("<strong>" + EmailLayout.escape(studentName) + "</strong> ha sido citado/a a una entrevista de <strong>" + EmailLayout.escape(interviewType) + "</strong> como parte del proceso de admisión de nuestro colegio.")
+                    + EmailLayout.callout(
+                        (date.isBlank() ? "" : "<strong>Fecha:</strong> " + EmailLayout.escape(date) + "<br/>")
+                        + (time.isBlank() ? "" : "<strong>Hora:</strong> " + EmailLayout.escape(time) + "<br/>")
+                        + (mode.isBlank() ? "" : "<strong>Modalidad:</strong> " + EmailLayout.escape(mode) + "<br/>")
+                        + (location.isBlank() ? "" : "<strong>Lugar:</strong> " + EmailLayout.escape(location) + "<br/>")
+                        + (interviewer.isBlank() ? "" : "<strong>A cargo de:</strong> " + EmailLayout.escape(interviewer)));
+            return EmailLayout.wrap(template().getDefaultSubject(), body);
+        }
+    }
+
+    @Component
+    public static class InterviewAssignmentNotificationRenderer implements EmailTemplateRenderer {
+        @Override public EmailTemplate template() { return EmailTemplate.INTERVIEW_ASSIGNMENT_NOTIFICATION; }
+        @Override public String render(Map<String, Object> data) {
+            String interviewerName = EmailLayout.str(data, "interviewerName", "Entrevistador");
+            String studentName = EmailLayout.str(data, "studentName", "el/la estudiante");
+            String interviewType = EmailLayout.str(data, "interviewType", "");
+            String date = EmailLayout.str(data, "scheduledDate", "");
+            String time = EmailLayout.str(data, "scheduledTime", "");
+            String mode = EmailLayout.str(data, "mode", "");
+            String location = EmailLayout.str(data, "location", "");
+            String body = EmailLayout.heading("Nueva entrevista asignada")
+                    + EmailLayout.paragraph("Estimado/a <strong>" + EmailLayout.escape(interviewerName) + "</strong>, se le ha asignado una nueva entrevista dentro del proceso de admisión.")
+                    + EmailLayout.callout(
+                        "<strong>Estudiante:</strong> " + EmailLayout.escape(studentName) + "<br/>"
+                        + (interviewType.isBlank() ? "" : "<strong>Tipo de entrevista:</strong> " + EmailLayout.escape(interviewType) + "<br/>")
+                        + (date.isBlank() ? "" : "<strong>Fecha:</strong> " + EmailLayout.escape(date) + "<br/>")
+                        + (time.isBlank() ? "" : "<strong>Hora:</strong> " + EmailLayout.escape(time) + "<br/>")
+                        + (mode.isBlank() ? "" : "<strong>Modalidad:</strong> " + EmailLayout.escape(mode) + "<br/>")
+                        + (location.isBlank() ? "" : "<strong>Lugar:</strong> " + EmailLayout.escape(location)));
+            return EmailLayout.wrap(template().getDefaultSubject(), body);
+        }
+    }
+
+    @Component
     public static class InterviewRescheduledRenderer implements EmailTemplateRenderer {
         @Override public EmailTemplate template() { return EmailTemplate.INTERVIEW_RESCHEDULED; }
         @Override public String render(Map<String, Object> data) {

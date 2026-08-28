@@ -454,17 +454,77 @@ public class InterviewService {
         data.put("confirmUrl", confirmUrl);
         data.put("rejectUrl", rejectUrl);
 
-        // Enviar email con template INTERVIEW_INVITATION
+        // Seleccionar template según tipo de entrevista
+        String interviewType = interview.getInterviewType();
+        boolean isCycleDirector = "CYCLE_DIRECTOR".equalsIgnoreCase(interviewType);
+        String templateKey = isCycleDirector ? "interview_invitation_cycle_director" : "interview_invitation";
+        String subject = isCycleDirector
+                ? "Entrevista de Director de Ciclo - " + toTitleCase(studentName)
+                : "Invitación a entrevista - " + toTitleCase(studentName);
+
+        // Enviar email a los padres
         emailComposerService.send(EmailRequestDTO.builder()
-                .template(TemplateUtils.generateTemplate("interview_invitation", data))
+                .template(TemplateUtils.generateTemplate(templateKey, data))
                 .to(to)
-                .subject("Invitación a entrevista - " + toTitleCase(studentName))
+                .subject(subject)
                 .recipientType("APPLICATION")
                 .recipientId(application.getId())
                 .data(data)
                 .build());
 
+        // Notificar al entrevistador de la asignación
+        notifyInterviewerOfAssignment(interview, toTitleCase(studentName));
+
         return Map.of("success", true, "message", "Invitación enviada con confirmación", "data", toResponse(interview));
+    }
+
+    /**
+     * Notifica al entrevistador principal y segundo entrevistador que tienen
+     * una nueva entrevista asignada (antes de que la familia confirme).
+     */
+    private void notifyInterviewerOfAssignment(InterviewEntity interview, String studentName) {
+        try {
+            Map<String, Object> data = new LinkedHashMap<>();
+            data.put("interviewerName", interview.getInterviewer() != null
+                    ? interview.getInterviewer().getFirstName() + " " + interview.getInterviewer().getLastName()
+                    : "Entrevistador");
+            data.put("studentName", studentName);
+            data.put("interviewType", prettyInterviewType(interview.getInterviewType()));
+            data.put("scheduledDate", interview.getScheduledDate() != null ? interview.getScheduledDate().toString() : "");
+            data.put("scheduledTime", interview.getScheduledTime() != null ? interview.getScheduledTime().toString() : "");
+            data.put("mode", prettyMode(interview.getMode()));
+            data.put("location", interview.getLocation() != null ? interview.getLocation() : "");
+
+            // Notificar al entrevistador principal
+            if (interview.getInterviewer() != null && interview.getInterviewer().getEmail() != null) {
+                emailComposerService.send(EmailRequestDTO.builder()
+                        .template(TemplateUtils.generateTemplate("interview_assignment_notification", data))
+                        .to(interview.getInterviewer().getEmail())
+                        .subject("Nueva entrevista asignada - " + studentName)
+                        .recipientType("INTERVIEWER")
+                        .recipientId(interview.getInterviewer().getId())
+                        .data(data)
+                        .build());
+            }
+
+            // Notificar al segundo entrevistador (si existe)
+            if (interview.getSecondInterviewer() != null && interview.getSecondInterviewer().getEmail() != null) {
+                data.put("interviewerName", interview.getSecondInterviewer().getFirstName() + " " + interview.getSecondInterviewer().getLastName());
+                emailComposerService.send(EmailRequestDTO.builder()
+                        .template(TemplateUtils.generateTemplate("interview_assignment_notification", data))
+                        .to(interview.getSecondInterviewer().getEmail())
+                        .subject("Nueva entrevista asignada - " + studentName)
+                        .recipientType("INTERVIEWER")
+                        .recipientId(interview.getSecondInterviewer().getId())
+                        .data(data)
+                        .build());
+            }
+        } catch (Exception e) {
+            // Loguear error pero no fallar el envío al padre
+            org.slf4j.LoggerFactory.getLogger(InterviewService.class)
+                    .error("Error enviando notificación de asignación a entrevistador para entrevista {}: {}",
+                            interview.getId(), e.getMessage(), e);
+        }
     }
 
     private void merge(InterviewEntity entity, Map<String, Object> payload) {
