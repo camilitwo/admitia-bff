@@ -226,7 +226,17 @@ public class UserService {
         user.setSubject(stringValue(payload.getOrDefault("subject", user.getSubject())));
         user.setEducationalLevel(stringValue(payload.getOrDefault("educationalLevel", user.getEducationalLevel())));
         user.setActive(Boolean.parseBoolean(String.valueOf(payload.getOrDefault("active", user.isActive() || creating))));
-        user.setEmailVerified(Boolean.parseBoolean(String.valueOf(payload.getOrDefault("emailVerified", user.isEmailVerified()))));
+
+        // Solo actualizar emailVerified si el payload contiene un valor booleano explícito.
+        // Boolean.parseBoolean() devuelve false para cualquier valor que no sea "true",
+        // lo que causaba que campos vacíos o no booleanos sobreescribieran el valor real.
+        Object emailVerifiedRaw = payload.get("emailVerified");
+        if (emailVerifiedRaw != null) {
+            String val = String.valueOf(emailVerifiedRaw);
+            if (!val.isBlank() && !"null".equals(val)) {
+                user.setEmailVerified(Boolean.parseBoolean(val));
+            }
+        }
 
         // Enlace Firebase opcional (cirugía mínima):
         // Si el cliente envía `firebaseIdToken` en la creación, validamos contra Firebase
