@@ -3,6 +3,7 @@ package cl.mtn.admitiabff.prekinder.service;
 import cl.mtn.admitiabff.prekinder.crypto.EncryptedPayload;
 import cl.mtn.admitiabff.prekinder.crypto.EnvelopeEncryptionService;
 import cl.mtn.admitiabff.prekinder.domain.PrekinderActor;
+import cl.mtn.admitiabff.prekinder.realtime.PrekinderRealtimeNotifier;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.math.BigDecimal;
@@ -56,19 +57,22 @@ public class PrekinderFlowService {
     private final PrekinderProfessionalAccountService professionalAccounts;
     private final EnvelopeEncryptionService encryption;
     private final ObjectMapper mapper;
+    private final PrekinderRealtimeNotifier realtime;
 
     public PrekinderFlowService(@Qualifier("prekinderJdbc") NamedParameterJdbcTemplate jdbc,
                                 @Qualifier("prekinderTransactionManager") PlatformTransactionManager manager,
                                 PrekinderAccessService access,
                                 PrekinderProfessionalAccountService professionalAccounts,
                                 EnvelopeEncryptionService encryption,
-                                ObjectMapper mapper) {
+                                ObjectMapper mapper,
+                                PrekinderRealtimeNotifier realtime) {
         this.jdbc = jdbc;
         this.transactions = new TransactionTemplate(manager);
         this.access = access;
         this.professionalAccounts = professionalAccounts;
         this.encryption = encryption;
         this.mapper = mapper;
+        this.realtime = realtime;
     }
 
     public List<WaveView> waves(UUID processId) {
@@ -565,6 +569,81 @@ public class PrekinderFlowService {
             audit(actor.id(), "ROOM_DELETED", "ROOM", roomId, Map.of());
             return room(roomId);
         });
+    }
+
+    public List<EvaluationDayView> evaluationDays(UUID processId) {
+        access.requireAdmin();
+        return jdbc.query("""
+            SELECT day_id, process_id, day_date, name, version
+              FROM evaluation_days WHERE process_id = :processId ORDER BY day_date
+            """, Map.of("processId", processId), (rs, row) -> new EvaluationDayView(rs.getObject("day_id", UUID.class),
+                rs.getObject("process_id", UUID.class), rs.getString("name"), rs.getObject("day_date", LocalDate.class),
+                SANTIAGO.getId(), rs.getLong("version")));
+    }
+
+    public EvaluationDayView createEvaluationDay(UUID processId, String name, LocalDate date) {
+        PrekinderActor actor = access.requireAdmin();
+        UUID id = UUID.randomUUID();
+        try {
+            jdbc.update("""
+                INSERT INTO evaluation_days(day_id, process_id, day_date, name)
+                VALUES (:id, :processId, :date, :name)
+                """, Map.of("id", id, "processId", processId, "date", date, "name", clean(name)));
+        } catch (DataIntegrityViolationException exception) {
+            throw PrekinderDomainException.conflict("EVALUATION_DAY_DATE_TAKEN", "Ya existe una jornada para esa fecha");
+        }
+        audit(actor.id(), "EVALUATION_DAY_CREATED", "EVALUATION_DAY", id, Map.of());
+        realtime.notifyAfterCommit(actor.id(), processId, "EVALUATION_DAY_CREATED");
+        return evaluationDay(id);
+    }
+
+    public EvaluationDayView updateEvaluationDay(UUID dayId, String name, LocalDate date, long expectedVersion) {
+        PrekinderActor actor = access.requireAdmin();
+        return transactions.execute(status -> {
+            EvaluationDayView current = evaluationDay(dayId);
+            if (current.version() != expectedVersion) throw new VersionConflictException("La jornada cambió");
+            try {
+                int updated = jdbc.update("""
+                    UPDATE evaluation_days SET day_date = :date, name = :name,
+                        version = version + 1, updated_at = now()
+                     WHERE day_id = :dayId AND version = :version
+                    """, Map.of("dayId", dayId, "version", expectedVersion, "date", date, "name", clean(name)));
+                if (updated != 1) throw new VersionConflictException("La jornada cambió");
+            } catch (DataIntegrityViolationException exception) {
+                throw PrekinderDomainException.conflict("EVALUATION_DAY_DATE_TAKEN", "Ya existe una jornada para esa fecha");
+            }
+            audit(actor.id(), "EVALUATION_DAY_UPDATED", "EVALUATION_DAY", dayId, Map.of());
+            realtime.notifyAfterCommit(actor.id(), current.processId(), "EVALUATION_DAY_UPDATED");
+            return evaluationDay(dayId);
+        });
+    }
+
+    public EvaluationDayView deleteEvaluationDay(UUID dayId, long expectedVersion) {
+        PrekinderActor actor = access.requireAdmin();
+        return transactions.execute(status -> {
+            EvaluationDayView current = evaluationDay(dayId);
+            if (current.version() != expectedVersion) throw new VersionConflictException("La jornada cambió");
+            Long groups = jdbc.queryForObject("SELECT count(*) FROM evaluation_groups WHERE day_id = :dayId",
+                Map.of("dayId", dayId), Long.class);
+            if (groups != null && groups > 0) {
+                throw PrekinderDomainException.conflict("EVALUATION_DAY_HAS_GROUPS",
+                    "No puedes eliminar la jornada mientras tenga grupos asociados; reasígnalos primero");
+            }
+            jdbc.update("DELETE FROM evaluation_blocks WHERE day_id = :dayId", Map.of("dayId", dayId));
+            int updated = jdbc.update("DELETE FROM evaluation_days WHERE day_id = :dayId AND version = :version",
+                Map.of("dayId", dayId, "version", expectedVersion));
+            if (updated != 1) throw new VersionConflictException("La jornada cambió");
+            audit(actor.id(), "EVALUATION_DAY_DELETED", "EVALUATION_DAY", dayId, Map.of());
+            realtime.notifyAfterCommit(actor.id(), current.processId(), "EVALUATION_DAY_DELETED");
+            return current;
+        });
+    }
+
+    private EvaluationDayView evaluationDay(UUID id) {
+        return jdbc.queryForObject("""
+            SELECT day_id, process_id, day_date, name, version FROM evaluation_days WHERE day_id = :id
+            """, Map.of("id", id), (rs, row) -> new EvaluationDayView(id, rs.getObject("process_id", UUID.class),
+                rs.getString("name"), rs.getObject("day_date", LocalDate.class), SANTIAGO.getId(), rs.getLong("version")));
     }
 
     public GroupView createGroup(GroupCommand command) {
@@ -2102,6 +2181,8 @@ public class PrekinderFlowService {
                                     UUID blockId, Instant startsAt, Instant endsAt, int durationMinutes, long blockVersion) {}
     public record RoomView(UUID roomId, UUID processId, String code, String name, int capacity,
                            boolean active, long version) {}
+    public record EvaluationDayView(UUID dayId, UUID processId, String name, LocalDate date,
+                                    String timezone, long version) {}
     public record GroupCommand(UUID processId, UUID roomId, String stage, String code, Instant startsAt,
                                Integer durationMinutes, Integer capacity, Integer requiredEvaluators) {}
     public record GroupView(UUID groupId, UUID processId, UUID roomId, String roomName, String stage,

@@ -19,6 +19,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
@@ -122,6 +123,26 @@ public class PrekinderFlowController {
     @DeleteMapping("/rooms/{roomId}")
     public Map<String, Object> deleteRoom(@PathVariable UUID roomId, @RequestParam @Min(0) long expectedVersion) {
         return ok(flow.deleteRoom(roomId, expectedVersion));
+    }
+
+    @GetMapping("/processes/{processId}/evaluation-days")
+    public Map<String, Object> evaluationDays(@PathVariable UUID processId) { return ok(flow.evaluationDays(processId)); }
+
+    @PostMapping("/processes/{processId}/evaluation-days")
+    public Map<String, Object> evaluationDay(@PathVariable UUID processId, @Valid @RequestBody EvaluationDayCommand command) {
+        return ok(flow.createEvaluationDay(processId, command.name(), command.date()));
+    }
+
+    @PatchMapping("/evaluation-days/{evaluationDayId}")
+    public Map<String, Object> updateEvaluationDay(@PathVariable UUID evaluationDayId,
+        @Valid @RequestBody UpdateEvaluationDayCommand command) {
+        return ok(flow.updateEvaluationDay(evaluationDayId, command.name(), command.date(), command.expectedVersion()));
+    }
+
+    @DeleteMapping("/evaluation-days/{evaluationDayId}")
+    public Map<String, Object> deleteEvaluationDay(@PathVariable UUID evaluationDayId,
+        @RequestParam @Min(0) long expectedVersion) {
+        return ok(flow.deleteEvaluationDay(evaluationDayId, expectedVersion));
     }
 
     @GetMapping("/processes/{processId}/groups")
@@ -307,6 +328,9 @@ public class PrekinderFlowController {
                                @Max(30) int capacity) {}
     public record UpdateRoomCommand(@NotBlank @Size(max = 64) String code, @NotBlank @Size(max = 160) String name,
                                     @Max(30) int capacity, @Min(0) long expectedVersion) {}
+    public record EvaluationDayCommand(@NotBlank @Size(max = 160) String name, @NotNull LocalDate date) {}
+    public record UpdateEvaluationDayCommand(@NotBlank @Size(max = 160) String name, @NotNull LocalDate date,
+                                             @Min(0) long expectedVersion) {}
     public record GroupCommand(@NotNull UUID processId, @NotNull UUID roomId, @NotBlank String stage,
                                @NotBlank @Size(max = 64) String code, @NotNull Instant startsAt,
                                @Min(10) @Max(240) Integer durationMinutes,
