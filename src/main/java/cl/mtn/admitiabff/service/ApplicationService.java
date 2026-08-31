@@ -668,6 +668,9 @@ public class ApplicationService {
         }).toList();
         response.put("documents", documentsArray);
 
+        // Complementary form status
+        response.put("hasComplementaryForm", complementaryFormRepository.existsByApplicationIdAndSubmittedTrue(entity.getId()));
+
         // Applicant user
         if (entity.getApplicantUser() != null) {
             response.put("applicantUser", Map.of("email", entity.getApplicantUser().getEmail()));
