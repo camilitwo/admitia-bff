@@ -132,6 +132,21 @@ class InterviewServiceManualEntryTest {
         verify(interviewRepository).save(savedInterview.capture());
         assertEquals(InterviewStatus.CONFIRMED, savedInterview.getValue().getStatus());
         assertEquals(InterviewStatus.CONFIRMED, savedInterview.getValue().getConfirmationStatus());
+
+        when(interviewRepository.findByApplicationIdOrderByScheduledDateDesc(120L))
+            .thenReturn(List.of(savedInterview.getValue()));
+        when(interviewRepository.findForCalendar(
+            LocalDate.of(2026, 8, 31), LocalDate.of(2026, 8, 31), false
+        )).thenReturn(List.of(savedInterview.getValue()));
+
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> applicationInterviews = (List<Map<String, Object>>) service.byApplication(120L).get("data");
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> calendarInterviews = (List<Map<String, Object>>) service.calendar(
+            "2026-08-31", "2026-08-31", false
+        ).get("data");
+        assertEquals(List.of(901L), applicationInterviews.stream().map(item -> item.get("id")).toList());
+        assertEquals(List.of(901L), calendarInterviews.stream().map(item -> item.get("id")).toList());
         verify(evaluationRepository).save(any(EvaluationEntity.class));
         verifyNoInteractions(emailComposerService);
     }
