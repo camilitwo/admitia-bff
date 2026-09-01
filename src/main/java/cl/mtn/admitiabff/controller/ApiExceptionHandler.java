@@ -2,6 +2,7 @@ package cl.mtn.admitiabff.controller;
 
 import cl.mtn.admitiabff.service.TokenService;
 import cl.mtn.admitiabff.service.InterviewerPairException;
+import cl.mtn.admitiabff.service.ManualInterviewConfirmationException;
 import cl.mtn.admitiabff.service.SecurityWorkflowException;
 import cl.mtn.admitiabff.service.payments.PaymentIntegrationException;
 import cl.mtn.admitiabff.util.ApiResponse;
@@ -23,6 +24,15 @@ public class ApiExceptionHandler {
     @ExceptionHandler(InterviewerPairException.class)
     ResponseEntity<Map<String, Object>> handleInterviewerPair(InterviewerPairException ex) {
         return ResponseEntity.badRequest().body(ApiResponse.error(ex.getCode(), ex.getMessage()));
+    }
+
+    @ExceptionHandler(ManualInterviewConfirmationException.class)
+    ResponseEntity<Map<String, Object>> handleManualInterviewConfirmation(ManualInterviewConfirmationException ex) {
+        Map<String, Object> body = ApiResponse.error("MANUAL_CONFIRMATION_REQUIRED", ex.getMessage());
+        @SuppressWarnings("unchecked")
+        Map<String, Object> error = (Map<String, Object>) body.get("error");
+        error.put("details", Map.of("warnings", ex.getWarnings()));
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(body);
     }
 
     @ExceptionHandler(IllegalArgumentException.class)

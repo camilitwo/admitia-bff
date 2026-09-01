@@ -3,17 +3,21 @@ package cl.mtn.admitiabff.service;
 import cl.mtn.admitiabff.domain.common.EvaluationStatus;
 import cl.mtn.admitiabff.domain.common.InterviewStatus;
 import cl.mtn.admitiabff.domain.common.Role;
+import cl.mtn.admitiabff.domain.common.ApplicationStatus;
 import cl.mtn.admitiabff.domain.email.EmailRequestDTO;
 import cl.mtn.admitiabff.domain.evaluation.EvaluationEntity;
 import cl.mtn.admitiabff.domain.interview.InterviewEntity;
+import cl.mtn.admitiabff.domain.interview.ManualInterviewCreateRequest;
 import cl.mtn.admitiabff.domain.interview.InterviewerScheduleEntity;
 import cl.mtn.admitiabff.domain.interview.InterviewerPairEntity;
+import cl.mtn.admitiabff.domain.user.UserEntity;
 import cl.mtn.admitiabff.repository.ApplicationRepository;
 import cl.mtn.admitiabff.repository.EvaluationRepository;
 import cl.mtn.admitiabff.repository.InterviewRepository;
 import cl.mtn.admitiabff.repository.InterviewerScheduleRepository;
 import cl.mtn.admitiabff.repository.UserRepository;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
@@ -23,6 +27,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Locale;
+import java.util.Set;
 
 import cl.mtn.admitiabff.util.TemplateUtils;
 import org.springframework.stereotype.Service;
@@ -31,6 +36,16 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 @Transactional(readOnly = true)
 public class InterviewService {
+    private static final Set<ApplicationStatus> MANUAL_ENTRY_APPLICATION_STATUSES = Set.of(
+        ApplicationStatus.PENDING,
+        ApplicationStatus.UNDER_REVIEW,
+        ApplicationStatus.DOCUMENTS_REQUESTED,
+        ApplicationStatus.PENDING_DOCUMENTS,
+        ApplicationStatus.INCOMPLETE,
+        ApplicationStatus.EXAM_SCHEDULED
+    );
+    private static final Set<String> INTERVIEW_MODES = Set.of("IN_PERSON", "VIRTUAL", "HYBRID");
+
     private final InterviewRepository interviewRepository;
     private final InterviewerScheduleRepository scheduleRepository;
     private final ApplicationRepository applicationRepository;
@@ -301,6 +316,65 @@ public class InterviewService {
     }
 
     @Transactional
+    public Map<String, Object> createManual(ManualInterviewCreateRequest payload, Long createdByUserId) {
+        String reason = payload.reason().trim();
+        if (reason.length() < 5 || reason.length() > 1000) {
+            throw new IllegalArgumentException("El motivo debe tener entre 5 y 1000 caracteres");
+        }
+        var application = applicationRepository.findActiveById(payload.applicationId())
+            .orElseThrow(() -> new IllegalArgumentException("Postulación no encontrada"));
+        if (application.isArchived() || !MANUAL_ENTRY_APPLICATION_STATUSES.contains(application.getStatus())) {
+            throw new IllegalArgumentException("La postulación ya no está pendiente y no admite un ingreso excepcional");
+        }
+        if (payload.interviewerId().equals(payload.secondInterviewerId())) {
+            throw new IllegalArgumentException("Selecciona dos entrevistadores distintos");
+        }
+
+        UserEntity firstInterviewer = loadManualInterviewer(payload.interviewerId(), "Primer entrevistador");
+        UserEntity secondInterviewer = loadManualInterviewer(payload.secondInterviewerId(), "Segundo entrevistador");
+        String mode = payload.mode().trim().toUpperCase(Locale.ROOT);
+        if (!INTERVIEW_MODES.contains(mode)) {
+            throw new IllegalArgumentException("La modalidad seleccionada no es válida");
+        }
+
+        ensureNoDuplicateInterview(application.getId(), "FAMILY", null);
+
+        List<Map<String, Object>> warnings = manualEntryWarnings(payload, firstInterviewer, secondInterviewer);
+        if (!warnings.isEmpty() && !payload.confirmWarnings()) {
+            throw new ManualInterviewConfirmationException(warnings);
+        }
+
+        InterviewEntity entity = new InterviewEntity();
+        entity.setApplication(application);
+        entity.setInterviewer(firstInterviewer);
+        entity.setSecondInterviewer(secondInterviewer);
+        entity.setInterviewType("FAMILY");
+        entity.setScheduledDate(payload.scheduledDate());
+        entity.setScheduledTime(payload.scheduledTime());
+        entity.setDuration(payload.duration());
+        entity.setLocation(blankToNull(payload.location()));
+        entity.setMode(mode);
+        entity.setStatus(InterviewStatus.SCHEDULED);
+        entity.setSummarySent(false);
+        entity.setEntrySource("MANUAL");
+        entity.setManualReason(reason);
+        entity.setNotes("Ingreso excepcional: " + reason);
+        entity.setCreatedByUser(userRepository.findById(createdByUserId)
+            .orElseThrow(() -> new IllegalArgumentException("Administrador no encontrado")));
+
+        InterviewEntity saved = interviewRepository.save(entity);
+        createEvaluationForInterview(saved);
+
+        Map<String, Object> data = toResponse(saved);
+        data.put("warnings", warnings);
+        return Map.of(
+            "success", true,
+            "message", "Entrevista excepcional guardada sin enviar correos",
+            "data", data
+        );
+    }
+
+    @Transactional
     public Map<String, Object> update(Long id, Map<String, Object> payload) {
         InterviewEntity entity = load(id);
         merge(entity, payload);
@@ -568,6 +642,84 @@ public class InterviewService {
         return true;
     }
 
+    private UserEntity loadManualInterviewer(Long interviewerId, String label) {
+        UserEntity interviewer = userRepository.findById(interviewerId)
+            .orElseThrow(() -> new IllegalArgumentException(label + " no encontrado"));
+        if (!interviewer.isActive()) {
+            throw new IllegalArgumentException(label + " está inactivo");
+        }
+        if (!isFamilyInterviewerRole(interviewer.getRole())) {
+            throw new IllegalArgumentException(label + " no tiene un rol habilitado para entrevistas familiares");
+        }
+        return interviewer;
+    }
+
+    private List<Map<String, Object>> manualEntryWarnings(ManualInterviewCreateRequest payload,
+                                                           UserEntity firstInterviewer,
+                                                           UserEntity secondInterviewer) {
+        List<Map<String, Object>> warnings = new ArrayList<>();
+        LocalDateTime scheduledAt = payload.scheduledDate().atTime(payload.scheduledTime());
+        if (scheduledAt.isBefore(LocalDateTime.now())) {
+            warnings.add(manualWarning("PAST_DATE", "La fecha y hora ya pasaron."));
+        }
+        if (blankToNull(payload.location()) == null) {
+            warnings.add(manualWarning(
+                "LOCATION_MISSING",
+                "La entrevista se guardará sin ubicación ni enlace de reunión."
+            ));
+        }
+
+        addManualInterviewerWarnings(warnings, payload, firstInterviewer);
+        addManualInterviewerWarnings(warnings, payload, secondInterviewer);
+        return warnings;
+    }
+
+    private void addManualInterviewerWarnings(List<Map<String, Object>> warnings,
+                                              ManualInterviewCreateRequest payload,
+                                              UserEntity interviewer) {
+        LocalTime end = payload.scheduledTime().plusMinutes(payload.duration());
+        String interviewerName = (interviewer.getFirstName() + " " + interviewer.getLastName()).trim();
+        boolean coveredBySchedule = scheduleRepository.findAvailableTemplates(
+            interviewer.getId(),
+            payload.scheduledDate(),
+            dayName(payload.scheduledDate()),
+            payload.scheduledDate().getYear()
+        ).stream().anyMatch(schedule ->
+            !payload.scheduledTime().isBefore(schedule.getStartTime()) && !end.isAfter(schedule.getEndTime())
+        );
+        if (!coveredBySchedule) {
+            warnings.add(manualWarning(
+                "OUTSIDE_AVAILABILITY",
+                interviewerName + " no tiene disponibilidad configurada para todo este bloque."
+            ));
+        }
+
+        boolean hasConflict = interviewRepository.findBlockingForInterviewer(
+            interviewer.getId(),
+            payload.scheduledDate(),
+            List.of(InterviewStatus.CANCELLED, InterviewStatus.RESCHEDULED, InterviewStatus.REJECTED_BY_FAMILY)
+        ).stream().anyMatch(interview -> overlaps(
+            payload.scheduledTime(),
+            end,
+            interview.getScheduledTime(),
+            interview.getScheduledTime().plusMinutes(interview.getDuration() == null ? 60 : interview.getDuration())
+        ));
+        if (hasConflict) {
+            warnings.add(manualWarning(
+                "SCHEDULE_CONFLICT",
+                interviewerName + " ya tiene una entrevista que se cruza con este horario."
+            ));
+        }
+    }
+
+    private Map<String, Object> manualWarning(String code, String message) {
+        return Map.of("code", code, "message", message);
+    }
+
+    private String blankToNull(String value) {
+        return value == null || value.isBlank() ? null : value.trim();
+    }
+
     private void validateInterviewerComposition(InterviewEntity entity) {
         if (!"FAMILY".equals(entity.getInterviewType())) return;
         if (entity.getInterviewer() == null || entity.getSecondInterviewer() == null) {
@@ -788,6 +940,7 @@ public class InterviewService {
         response.put("location", entity.getLocation());
         response.put("mode", entity.getMode());
         response.put("status", entity.getStatus().name());
+        response.put("entrySource", entity.getEntrySource());
         response.put("notes", entity.getNotes());
         response.put("studentName", entity.getApplication().getStudent() == null ? null : entity.getApplication().getStudent().getFirstName() + " " + entity.getApplication().getStudent().getPaternalLastName() + " " + entity.getApplication().getStudent().getMaternalLastName());
         response.put("parentNames", resolveParentNames(entity));
@@ -866,6 +1019,7 @@ public class InterviewService {
                 item.put("interviewType", i.getInterviewType());
                 item.put("mode", i.getMode());
                 item.put("status", i.getStatus().name());
+                item.put("entrySource", i.getEntrySource());
                 item.put("interviewer1", Map.of(
                     "id", i.getInterviewer() != null ? i.getInterviewer().getId() : 0,
                     "name", i.getInterviewer() != null ? i.getInterviewer().getFirstName() + " " + i.getInterviewer().getLastName() : "Sin asignar",

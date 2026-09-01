@@ -76,4 +76,14 @@ public class InterviewEntity extends BaseEntity {
 
     @Column(name = "summary_sent", nullable = false)
     private boolean summarySent;
+
+    @Column(name = "entry_source", nullable = false)
+    private String entrySource = "STANDARD";
+
+    @Column(name = "manual_reason", columnDefinition = "text")
+    private String manualReason;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "created_by_user_id")
+    private UserEntity createdByUser;
 }
