@@ -49,6 +49,7 @@ public final class TemplateUtils {
             case "admission_result"                  -> ADMISSION_RESULT_BODY;
             case "payment_reminder"                  -> PAYMENT_REMINDER_BODY;
             case "family_registration_reminder"      -> FAMILY_REGISTRATION_REMINDER_BODY;
+            case "assessment_start_reminder"         -> ASSESSMENT_START_REMINDER_BODY;
 
             // Interview
             case "interview", "interview_invitation" -> INTERVIEW_INVITATION_BODY;
@@ -622,6 +623,36 @@ public final class TemplateUtils {
                   <a href="{{portalUrl}}" style="display:inline-block;background:#273b7a;color:#fff;text-decoration:none;padding:13px 24px;border-radius:6px;font-weight:bold;">
                     Completar registro familiar
                   </a>
+                </p>
+                <p style="margin:24px 0 0 0;">
+                  Un cordial saludo,<br/>
+                  <strong>Equipo de Admisión</strong><br/>
+                  Colegio Monte Tabor y Nazaret
+                </p>
+              </td>
+            </tr>
+            """;
+
+    private static final String ASSESSMENT_START_REMINDER_BODY = """
+            <tr>
+              <td class="content" style="padding:40px 30px;color:#333;line-height:1.7;font-family:'Segoe UI',Arial,sans-serif;font-size:15px;">
+                <h2 style="color:#273b7a;margin:0 0 16px 0;font-size:22px;">Hola {{guardianName}}</h2>
+                <p style="margin:0 0 14px 0;">
+                  Te recordamos que <strong>{{dayReference}}</strong>, {{assessmentDate}}, comienzan las pruebas
+                  correspondientes al proceso de admisión de <strong>{{studentName}}</strong> a
+                  <strong>{{gradeApplied}}</strong> para el año académico <strong>{{academicYear}}</strong>.
+                </p>
+                <div class="info-box" style="background:#f8f9fa;padding:15px 20px;border-radius:6px;margin:0 0 18px 0;border-left:4px solid #ff9e18;">
+                  <strong>N° de postulación:</strong> {{applicationId}}<br/>
+                  <strong>Inicio de las pruebas:</strong> {{assessmentDate}}
+                </div>
+                <p style="margin:0 0 14px 0;">
+                  Tu postulación registra el pago y el formulario familiar correctamente. Te recomendamos
+                  revisar las indicaciones recibidas y presentarte con la debida anticipación.
+                </p>
+                <p style="margin:18px 0 0 0;">
+                  Ante cualquier duda, escríbenos a
+                  <a href="mailto:admisiones@mtn.cl" style="color:#273b7a;">admisiones@mtn.cl</a>.
                 </p>
                 <p style="margin:24px 0 0 0;">
                   Un cordial saludo,<br/>

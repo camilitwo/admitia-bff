@@ -145,6 +145,16 @@ app:
     lease-minutes: ${APP_APPLICATION_REMINDERS_LEASE_MINUTES:10}
     # 1 envío inicial + hasta 5 reintentos.
     max-attempts: ${APP_APPLICATION_REMINDERS_MAX_ATTEMPTS:6}
+  assessment-start-reminder:
+    enabled: ${APP_ASSESSMENT_START_REMINDER_ENABLED:false}
+    assessment-date: ${APP_ASSESSMENT_START_REMINDER_DATE:}
+    academic-year: ${APP_ASSESSMENT_START_REMINDER_ACADEMIC_YEAR:2027}
+    zone: ${APP_ASSESSMENT_START_REMINDER_ZONE:America/Santiago}
+    dispatcher-delay-ms: ${APP_ASSESSMENT_START_REMINDER_DISPATCHER_DELAY_MS:30000}
+    batch-size: ${APP_ASSESSMENT_START_REMINDER_BATCH_SIZE:50}
+    lease-minutes: ${APP_ASSESSMENT_START_REMINDER_LEASE_MINUTES:10}
+    max-attempts: ${APP_ASSESSMENT_START_REMINDER_MAX_ATTEMPTS:6}
+    catch-up-window-hours: ${APP_ASSESSMENT_START_REMINDER_CATCH_UP_WINDOW_HOURS:24}
   cors:
     allowed-origins: ${APP_CORS_ALLOWED_ORIGINS:http://localhost:5173,http://127.0.0.1:5173}
   # URL base para redirecciones (debe ser la URL pública del frontend)
