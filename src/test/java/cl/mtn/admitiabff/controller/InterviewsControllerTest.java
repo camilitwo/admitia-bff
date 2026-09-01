@@ -1,6 +1,7 @@
 package cl.mtn.admitiabff.controller;
 
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -10,6 +11,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.security.access.prepost.PreAuthorize;
 
 @ExtendWith(MockitoExtension.class)
 class InterviewsControllerTest {
@@ -27,5 +29,14 @@ class InterviewsControllerTest {
 
         assertSame(expected, controller.sendInvitation(84L));
         verify(interviewService).sendInterviewInvitation(84L, publicBaseUrl);
+    }
+
+    @Test
+    void manualEntryIsRestrictedToAdministrators() throws NoSuchMethodException {
+        PreAuthorize annotation = InterviewsController.class
+            .getMethod("createManual", cl.mtn.admitiabff.domain.interview.ManualInterviewCreateRequest.class)
+            .getAnnotation(PreAuthorize.class);
+
+        assertEquals("hasRole('ADMIN')", annotation.value());
     }
 }

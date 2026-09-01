@@ -1,8 +1,12 @@
 package cl.mtn.admitiabff.controller;
 
+import cl.mtn.admitiabff.config.AuthContext;
+import cl.mtn.admitiabff.domain.interview.ManualInterviewCreateRequest;
 import cl.mtn.admitiabff.service.InterviewService;
+import jakarta.validation.Valid;
 import java.util.Map;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
 @RestController
@@ -31,6 +35,13 @@ public class InterviewsController {
     @GetMapping("/next-available-slots") public Map<String, Object> nextAvailableSlots(@RequestParam(required = false) String date, @RequestParam(required = false) Integer days, @RequestParam(required = false) Integer duration) { return interviewService.nextAvailableSlots(date, days, duration); }
     @GetMapping("/{id}") public Map<String, Object> get(@PathVariable Long id) { return interviewService.get(id); }
     @PostMapping public Map<String, Object> create(@RequestBody Map<String, Object> payload) { return interviewService.create(payload); }
+    @PostMapping("/manual")
+    @PreAuthorize("hasRole('ADMIN')")
+    public Map<String, Object> createManual(@Valid @RequestBody ManualInterviewCreateRequest payload) {
+        var auth = AuthContext.get();
+        if (auth == null) throw new IllegalStateException("No se pudo identificar al administrador autenticado");
+        return interviewService.createManual(payload, auth.id());
+    }
     @PutMapping("/{id}") public Map<String, Object> update(@PathVariable Long id, @RequestBody Map<String, Object> payload) { return interviewService.update(id, payload); }
     @DeleteMapping("/{id}") public Map<String, Object> delete(@PathVariable Long id) { return interviewService.delete(id); }
     @PatchMapping("/{id}/cancel") public Map<String, Object> cancel(@PathVariable Long id, @RequestBody(required = false) Map<String, Object> payload) { return interviewService.cancel(id, payload == null ? Map.of() : payload); }
