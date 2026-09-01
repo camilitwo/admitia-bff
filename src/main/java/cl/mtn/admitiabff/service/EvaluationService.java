@@ -26,6 +26,7 @@ import java.util.Map;
 import java.util.stream.Collectors;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -163,6 +164,56 @@ public class EvaluationService {
     public Map<String, Object> get(Long id) { return toResponse(load(id)); }
     public Map<String, Object> familyInterviewData(Long evaluationId) { EvaluationEntity entity = load(evaluationId); return Map.of("success", true, "data", jsonSupport.readMap(entity.getInterviewData()), "score", entity.getFamilyInterviewScore()); }
 
+    /**
+     * Repara de forma idempotente las evaluaciones que normalmente se crean al agendar una
+     * entrevista. Este endpoint cubre entrevistas históricas insertadas directamente por SQL.
+     * No envía correos ni notificaciones.
+     */
+    @Transactional
+    public Map<String, Object> ensureInterviewEvaluations(Long interviewId) {
+        AuthService.AuthContextHolder auth = authService.requireAuth();
+        var interview = interviewRepository.findById(interviewId)
+            .orElseThrow(() -> new IllegalArgumentException("Entrevista no encontrada"));
+
+        boolean assigned = (interview.getInterviewer() != null && interview.getInterviewer().getId().equals(auth.id()))
+            || (interview.getSecondInterviewer() != null && interview.getSecondInterviewer().getId().equals(auth.id()));
+        if (!assigned && !authService.isAdminContext(auth)) {
+            throw new AccessDeniedException("La entrevista no está asignada al usuario autenticado");
+        }
+        if (interview.getApplication() == null) {
+            throw new IllegalArgumentException("La entrevista no tiene una postulación asociada");
+        }
+        if (interview.getStatus() == InterviewStatus.CANCELLED || interview.getStatus() == InterviewStatus.RESCHEDULED) {
+            throw new IllegalArgumentException("No se pueden generar evaluaciones para una entrevista inactiva");
+        }
+
+        List<Map<String, Object>> data = mapInterviewTypesToEvaluationTypes(interview.getInterviewType()).stream()
+            .map(evaluationType -> {
+                EvaluationEntity evaluation = evaluationRepository
+                    .findByApplicationIdAndEvaluationType(interview.getApplication().getId(), evaluationType)
+                    .orElseGet(() -> {
+                        EvaluationEntity created = new EvaluationEntity();
+                        created.setApplication(interview.getApplication());
+                        created.setEvaluationType(evaluationType);
+                        created.setStatus(EvaluationStatus.PENDING);
+                        created.setEvaluator(interview.getInterviewer());
+                        if (interview.getScheduledDate() != null && interview.getScheduledTime() != null) {
+                            created.setEvaluationDate(interview.getScheduledDate().atTime(interview.getScheduledTime()));
+                        }
+                        return evaluationRepository.save(created);
+                    });
+                Map<String, Object> response = new LinkedHashMap<>(toResponse(evaluation));
+                applyInterviewMetadata(response, interview, evaluationType);
+                return response;
+            })
+            .toList();
+
+        if (data.isEmpty()) {
+            throw new IllegalArgumentException("El tipo de entrevista no genera una evaluación realizable");
+        }
+        return Map.of("success", true, "data", data, "count", data.size());
+    }
+
     @Transactional
     public Map<String, Object> create(Map<String, Object> payload) {
         EvaluationEntity entity = new EvaluationEntity();
@@ -193,6 +244,7 @@ public class EvaluationService {
         entity.setRecommendations(stringValue(payload.get("recommendations")));
         entity.setObservations(stringValue(payload.getOrDefault("observations", payload.get("comments"))));
         entity.setAreasForImprovement(stringValue(payload.get("areasForImprovement")));
+        persistInterviewData(entity, payload);
         entity.setCompletedAt(LocalDateTime.now());
         return Map.of("success", true, "message", "Evaluación completada", "data", toResponse(evaluationRepository.save(entity)));
     }
@@ -329,6 +381,7 @@ public class EvaluationService {
         entity.setRecommendations(stringValue(payload.getOrDefault("recommendations", entity.getRecommendations())));
         entity.setObservations(stringValue(payload.getOrDefault("observations", entity.getObservations())));
         entity.setAreasForImprovement(stringValue(payload.getOrDefault("areasForImprovement", entity.getAreasForImprovement())));
+        persistInterviewData(entity, payload);
 
         if (entity.getEvaluator() != null) {
             validateEvaluatorSubject(entity, entity.getEvaluator());
@@ -359,6 +412,7 @@ public class EvaluationService {
         response.put("recommendations", entity.getRecommendations());
         response.put("observations", entity.getObservations());
         response.put("areasForImprovement", entity.getAreasForImprovement());
+        response.put("interviewData", jsonSupport.readMap(entity.getInterviewData()));
         response.put("createdAt", entity.getCreatedAt());
         response.put("updatedAt", entity.getUpdatedAt());
         response.put("completedAt", entity.getCompletedAt());
@@ -457,6 +511,13 @@ public class EvaluationService {
     }
 
     private String stringValue(Object value) { return value == null ? null : String.valueOf(value); }
+
+    @SuppressWarnings("unchecked")
+    private void persistInterviewData(EvaluationEntity entity, Map<String, Object> payload) {
+        if (payload.get("interviewData") instanceof Map<?, ?> interviewData) {
+            entity.setInterviewData(jsonSupport.write((Map<String, Object>) interviewData));
+        }
+    }
 
     private String evaluationKey(Long applicationId, String evaluationType) {
         if (applicationId == null || evaluationType == null || evaluationType.isBlank()) return null;

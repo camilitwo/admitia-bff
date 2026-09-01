@@ -26,6 +26,7 @@ public class EvaluationsController {
     @GetMapping("/family-interview-template/{grade}") public Map<String, Object> familyInterviewTemplate(@PathVariable String grade) { return evaluationService.familyInterviewTemplate(grade); }
     @GetMapping("/{id}") public Map<String, Object> get(@PathVariable Long id) { return evaluationService.get(id); }
     @GetMapping("/{evaluationId}/family-interview-data") public Map<String, Object> familyInterviewData(@PathVariable Long evaluationId) { return evaluationService.familyInterviewData(evaluationId); }
+    @PostMapping("/interview/{interviewId}/ensure") public Map<String, Object> ensureInterviewEvaluations(@PathVariable Long interviewId) { return evaluationService.ensureInterviewEvaluations(interviewId); }
     @PostMapping public Map<String, Object> create(@RequestBody Map<String, Object> payload) { return evaluationService.create(payload); }
     @PutMapping("/{id}") public Map<String, Object> update(@PathVariable Long id, @RequestBody Map<String, Object> payload) { return evaluationService.update(id, payload); }
     @DeleteMapping("/{id}") public Map<String, Object> delete(@PathVariable Long id) { return evaluationService.delete(id); }
