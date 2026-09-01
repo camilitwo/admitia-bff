@@ -193,6 +193,7 @@ class InterviewServiceManualEntryTest {
             "IN_PERSON",
             null,
             "Corrección de una entrevista realizada fuera de agenda",
+            false,
             confirmWarnings
         );
     }

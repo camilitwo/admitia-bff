@@ -22,6 +22,7 @@ public record ManualInterviewCreateRequest(
     String location,
     @NotBlank(message = "Explica el motivo del ingreso excepcional")
     @Size(min = 5, max = 1000, message = "El motivo debe tener entre 5 y 1000 caracteres") String reason,
+    boolean sendEmail,
     boolean confirmWarnings
 ) {
 }

@@ -4,7 +4,10 @@ import cl.mtn.admitiabff.config.AuthContext;
 import cl.mtn.admitiabff.domain.interview.ManualInterviewCreateRequest;
 import cl.mtn.admitiabff.service.InterviewService;
 import jakarta.validation.Valid;
+import java.util.LinkedHashMap;
 import java.util.Map;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
@@ -12,6 +15,7 @@ import org.springframework.web.bind.annotation.*;
 @RestController
 @RequestMapping("/api/interviews")
 public class InterviewsController {
+    private static final Logger log = LoggerFactory.getLogger(InterviewsController.class);
     private final InterviewService interviewService;
     private final String bffPublicBaseUrl;
 
@@ -40,7 +44,47 @@ public class InterviewsController {
     public Map<String, Object> createManual(@Valid @RequestBody ManualInterviewCreateRequest payload) {
         var auth = AuthContext.get();
         if (auth == null) throw new IllegalStateException("No se pudo identificar al administrador autenticado");
-        return interviewService.createManual(payload, auth.id());
+        Map<String, Object> result = interviewService.createManual(payload, auth.id());
+        Object rawData = result.get("data");
+        if (!(rawData instanceof Map<?, ?> rawDataMap)) {
+            return result;
+        }
+
+        Map<String, Object> data = new LinkedHashMap<>();
+        rawDataMap.forEach((key, value) -> data.put(String.valueOf(key), value));
+        data.put("emailRequested", payload.sendEmail());
+
+        boolean emailSent = false;
+        String emailMessage = "No se enviaron correos.";
+        if (payload.sendEmail()) {
+            try {
+                Object rawId = data.get("id");
+                if (!(rawId instanceof Number interviewId)) {
+                    throw new IllegalStateException("La entrevista guardada no devolvió un identificador válido");
+                }
+                Map<String, Object> emailResult = interviewService.sendInterviewInvitation(
+                    interviewId.longValue(), bffPublicBaseUrl);
+                emailSent = Boolean.TRUE.equals(emailResult.get("success"));
+                emailMessage = String.valueOf(emailResult.getOrDefault(
+                    "message", emailSent ? "Correos enviados correctamente." : "No se pudieron enviar los correos."));
+            } catch (Exception exception) {
+                emailMessage = "La entrevista quedó guardada, pero no se pudieron enviar los correos.";
+                log.error("Entrevista manual guardada, pero falló el envío de correos para entrevista {}: {}",
+                    data.get("id"), exception.getMessage(), exception);
+            }
+        }
+
+        data.put("emailSent", emailSent);
+        data.put("emailMessage", emailMessage);
+        return Map.of(
+            "success", true,
+            "message", payload.sendEmail() && emailSent
+                ? "Entrevista excepcional guardada y correos enviados"
+                : payload.sendEmail()
+                    ? "Entrevista excepcional guardada, con error en el envío de correos"
+                    : "Entrevista excepcional guardada sin enviar correos",
+            "data", data
+        );
     }
     @PutMapping("/{id}") public Map<String, Object> update(@PathVariable Long id, @RequestBody Map<String, Object> payload) { return interviewService.update(id, payload); }
     @DeleteMapping("/{id}") public Map<String, Object> delete(@PathVariable Long id) { return interviewService.delete(id); }
