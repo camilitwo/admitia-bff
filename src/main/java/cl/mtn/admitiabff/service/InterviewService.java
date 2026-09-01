@@ -373,7 +373,13 @@ public class InterviewService {
         entity.setDuration(payload.duration());
         entity.setLocation(blankToNull(payload.location()));
         entity.setMode(mode);
-        entity.setStatus(InterviewStatus.SCHEDULED);
+        InterviewStatus initialStatus = payload.sendEmail()
+            ? InterviewStatus.SCHEDULED
+            : InterviewStatus.CONFIRMED;
+        entity.setStatus(initialStatus);
+        if (!payload.sendEmail()) {
+            entity.setConfirmationStatus(InterviewStatus.CONFIRMED);
+        }
         entity.setSummarySent(false);
         entity.setEntrySource("MANUAL");
         entity.setManualReason(reason);

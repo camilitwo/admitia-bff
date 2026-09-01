@@ -1,6 +1,7 @@
 package cl.mtn.admitiabff.service;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
@@ -13,6 +14,7 @@ import static org.mockito.Mockito.when;
 
 import cl.mtn.admitiabff.domain.application.ApplicationEntity;
 import cl.mtn.admitiabff.domain.common.ApplicationStatus;
+import cl.mtn.admitiabff.domain.common.InterviewStatus;
 import cl.mtn.admitiabff.domain.common.Role;
 import cl.mtn.admitiabff.domain.evaluation.EvaluationEntity;
 import cl.mtn.admitiabff.domain.interview.InterviewEntity;
@@ -125,8 +127,36 @@ class InterviewServiceManualEntryTest {
         Map<String, Object> data = (Map<String, Object>) response.get("data");
         assertEquals("MANUAL", data.get("entrySource"));
         assertEquals(901L, data.get("id"));
+        assertEquals("CONFIRMED", data.get("status"));
+        ArgumentCaptor<InterviewEntity> savedInterview = ArgumentCaptor.forClass(InterviewEntity.class);
+        verify(interviewRepository).save(savedInterview.capture());
+        assertEquals(InterviewStatus.CONFIRMED, savedInterview.getValue().getStatus());
+        assertEquals(InterviewStatus.CONFIRMED, savedInterview.getValue().getConfirmationStatus());
         verify(evaluationRepository).save(any(EvaluationEntity.class));
         verifyNoInteractions(emailComposerService);
+    }
+
+    @Test
+    void keepsManualInterviewPendingGuardianConfirmationWhenEmailIsRequested() {
+        when(userRepository.findById(99L)).thenReturn(Optional.of(admin));
+        when(interviewRepository.save(any(InterviewEntity.class))).thenAnswer(invocation -> {
+            InterviewEntity interview = invocation.getArgument(0);
+            interview.setId(903L);
+            return interview;
+        });
+        when(evaluationRepository.findByApplicationIdAndEvaluationType(120L, "FAMILY_INTERVIEW"))
+            .thenReturn(Optional.empty());
+        when(evaluationRepository.save(any(EvaluationEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        Map<String, Object> response = service.createManual(request("FAMILY", true, true), 99L);
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> data = (Map<String, Object>) response.get("data");
+        assertEquals("SCHEDULED", data.get("status"));
+        ArgumentCaptor<InterviewEntity> savedInterview = ArgumentCaptor.forClass(InterviewEntity.class);
+        verify(interviewRepository).save(savedInterview.capture());
+        assertEquals(InterviewStatus.SCHEDULED, savedInterview.getValue().getStatus());
+        assertNull(savedInterview.getValue().getConfirmationStatus());
     }
 
     @Test
@@ -182,6 +212,10 @@ class InterviewServiceManualEntryTest {
     }
 
     private ManualInterviewCreateRequest request(String interviewType, boolean confirmWarnings) {
+        return request(interviewType, false, confirmWarnings);
+    }
+
+    private ManualInterviewCreateRequest request(String interviewType, boolean sendEmail, boolean confirmWarnings) {
         return new ManualInterviewCreateRequest(
             120L,
             interviewType,
@@ -193,7 +227,7 @@ class InterviewServiceManualEntryTest {
             "IN_PERSON",
             null,
             "Corrección de una entrevista realizada fuera de agenda",
-            false,
+            sendEmail,
             confirmWarnings
         );
     }
