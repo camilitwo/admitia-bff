@@ -647,8 +647,7 @@ public final class TemplateUtils {
                   <strong>Inicio de las pruebas:</strong> {{assessmentDate}}
                 </div>
                 <p style="margin:0 0 14px 0;">
-                  Tu postulación registra el pago y el formulario familiar correctamente. Te recomendamos
-                  revisar las indicaciones recibidas y presentarte con la debida anticipación.
+                  Te recomendamos revisar las indicaciones recibidas y presentarte con la debida anticipación.
                 </p>
                 <p style="margin:18px 0 0 0;">
                   Ante cualquier duda, escríbenos a
