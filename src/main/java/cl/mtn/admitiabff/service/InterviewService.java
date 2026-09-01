@@ -330,14 +330,33 @@ public class InterviewService {
             throw new IllegalArgumentException("Selecciona dos entrevistadores distintos");
         }
 
-        UserEntity firstInterviewer = loadManualInterviewer(payload.interviewerId(), "Primer entrevistador");
-        UserEntity secondInterviewer = loadManualInterviewer(payload.secondInterviewerId(), "Segundo entrevistador");
+        String interviewType = payload.interviewType() == null || payload.interviewType().isBlank()
+            ? "FAMILY"
+            : payload.interviewType().trim().toUpperCase(Locale.ROOT);
+        if (!Set.of("FAMILY", "CYCLE_DIRECTOR").contains(interviewType)) {
+            throw new IllegalArgumentException("El tipo de entrevista excepcional no es válido");
+        }
+
+        UserEntity selectedFirst = loadActiveManualInterviewer(payload.interviewerId(), "Primer entrevistador");
+        UserEntity selectedSecond = loadActiveManualInterviewer(payload.secondInterviewerId(), "Segundo entrevistador");
+        UserEntity firstInterviewer;
+        UserEntity secondInterviewer;
+        if ("FAMILY".equals(interviewType)) {
+            validateManualFamilyInterviewers(selectedFirst, selectedSecond);
+            firstInterviewer = selectedFirst;
+            secondInterviewer = selectedSecond;
+        } else {
+            firstInterviewer = resolveManualInterviewerByRole(
+                selectedFirst, selectedSecond, Role.CYCLE_DIRECTOR, "Selecciona un director de ciclo activo");
+            secondInterviewer = resolveManualInterviewerByRole(
+                selectedFirst, selectedSecond, Role.PSYCHOLOGIST, "Selecciona un psicólogo/a activo");
+        }
         String mode = payload.mode().trim().toUpperCase(Locale.ROOT);
         if (!INTERVIEW_MODES.contains(mode)) {
             throw new IllegalArgumentException("La modalidad seleccionada no es válida");
         }
 
-        ensureNoDuplicateInterview(application.getId(), "FAMILY", null);
+        ensureNoDuplicateInterview(application.getId(), interviewType, null);
 
         List<Map<String, Object>> warnings = manualEntryWarnings(payload, firstInterviewer, secondInterviewer);
         if (!warnings.isEmpty() && !payload.confirmWarnings()) {
@@ -348,7 +367,7 @@ public class InterviewService {
         entity.setApplication(application);
         entity.setInterviewer(firstInterviewer);
         entity.setSecondInterviewer(secondInterviewer);
-        entity.setInterviewType("FAMILY");
+        entity.setInterviewType(interviewType);
         entity.setScheduledDate(payload.scheduledDate());
         entity.setScheduledTime(payload.scheduledTime());
         entity.setDuration(payload.duration());
@@ -642,16 +661,29 @@ public class InterviewService {
         return true;
     }
 
-    private UserEntity loadManualInterviewer(Long interviewerId, String label) {
+    private UserEntity loadActiveManualInterviewer(Long interviewerId, String label) {
         UserEntity interviewer = userRepository.findById(interviewerId)
             .orElseThrow(() -> new IllegalArgumentException(label + " no encontrado"));
         if (!interviewer.isActive()) {
             throw new IllegalArgumentException(label + " está inactivo");
         }
-        if (!isFamilyInterviewerRole(interviewer.getRole())) {
-            throw new IllegalArgumentException(label + " no tiene un rol habilitado para entrevistas familiares");
-        }
         return interviewer;
+    }
+
+    private void validateManualFamilyInterviewers(UserEntity first, UserEntity second) {
+        if (!isFamilyInterviewerRole(first.getRole()) || !isFamilyInterviewerRole(second.getRole())) {
+            throw new IllegalArgumentException(
+                "La entrevista familiar requiere dos usuarios activos con rol Entrevistador o Coordinador");
+        }
+    }
+
+    private UserEntity resolveManualInterviewerByRole(UserEntity first,
+                                                       UserEntity second,
+                                                       Role requiredRole,
+                                                       String errorMessage) {
+        if (first.getRole() == requiredRole) return first;
+        if (second.getRole() == requiredRole) return second;
+        throw new IllegalArgumentException(errorMessage);
     }
 
     private List<Map<String, Object>> manualEntryWarnings(ManualInterviewCreateRequest payload,
@@ -805,9 +837,10 @@ public class InterviewService {
         switch (interview.getInterviewType()) {
             case "FAMILY" -> createEvaluationIfNotExists(interview, "FAMILY_INTERVIEW");
             case "CYCLE_DIRECTOR" -> {
-                // CYCLE_DIRECTOR necesita DOS evaluaciones: la entrevista y el informe
-                createEvaluationIfNotExists(interview, "CYCLE_DIRECTOR_INTERVIEW");
-                createEvaluationIfNotExists(interview, "CYCLE_DIRECTOR_REPORT");
+                // El par trabaja el mismo caso desde sus dos portales.
+                createEvaluationIfNotExists(interview, "CYCLE_DIRECTOR_INTERVIEW", interview.getInterviewer());
+                createEvaluationIfNotExists(interview, "CYCLE_DIRECTOR_REPORT", interview.getInterviewer());
+                createEvaluationIfNotExists(interview, "PSYCHOLOGICAL_INTERVIEW", interview.getSecondInterviewer());
             }
             case "PSYCHOLOGICAL" -> createEvaluationIfNotExists(interview, "PSYCHOLOGICAL_INTERVIEW");
             default -> { /* no-op */ }
@@ -815,11 +848,17 @@ public class InterviewService {
     }
 
     private void createEvaluationIfNotExists(InterviewEntity interview, String evaluationType) {
+        createEvaluationIfNotExists(interview, evaluationType, interview.getInterviewer());
+    }
+
+    private void createEvaluationIfNotExists(InterviewEntity interview,
+                                             String evaluationType,
+                                             UserEntity assignedEvaluator) {
         var existing = evaluationRepository.findByApplicationIdAndEvaluationType(
             interview.getApplication().getId(), evaluationType);
         if (existing.isPresent()) {
             EvaluationEntity evaluation = existing.get();
-            boolean changed = applyInterviewAssignment(evaluation, interview);
+            boolean changed = applyInterviewAssignment(evaluation, interview, assignedEvaluator);
             if (changed) evaluationRepository.save(evaluation);
             return;
         }
@@ -828,14 +867,16 @@ public class InterviewService {
         evaluation.setApplication(interview.getApplication());
         evaluation.setEvaluationType(evaluationType);
         evaluation.setStatus(EvaluationStatus.PENDING);
-        applyInterviewAssignment(evaluation, interview);
+        applyInterviewAssignment(evaluation, interview, assignedEvaluator);
         evaluationRepository.save(evaluation);
     }
 
-    private boolean applyInterviewAssignment(EvaluationEntity evaluation, InterviewEntity interview) {
+    private boolean applyInterviewAssignment(EvaluationEntity evaluation,
+                                             InterviewEntity interview,
+                                             UserEntity assignedEvaluator) {
         boolean changed = false;
-        if (evaluation.getEvaluator() == null && interview.getInterviewer() != null) {
-            evaluation.setEvaluator(interview.getInterviewer());
+        if (evaluation.getEvaluator() == null && assignedEvaluator != null) {
+            evaluation.setEvaluator(assignedEvaluator);
             changed = true;
         }
         if (evaluation.getEvaluationDate() == null && interview.getScheduledDate() != null && interview.getScheduledTime() != null) {

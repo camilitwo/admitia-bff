@@ -10,6 +10,7 @@ import java.time.LocalTime;
 
 public record ManualInterviewCreateRequest(
     @NotNull(message = "Selecciona una postulación") Long applicationId,
+    String interviewType,
     @NotNull(message = "Selecciona el primer entrevistador") Long interviewerId,
     @NotNull(message = "Selecciona el segundo entrevistador") Long secondInterviewerId,
     @NotNull(message = "Selecciona una fecha") LocalDate scheduledDate,

@@ -4,7 +4,9 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -32,6 +34,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
+import org.mockito.ArgumentCaptor;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 @ExtendWith(MockitoExtension.class)
@@ -85,9 +88,9 @@ class InterviewServiceManualEntryTest {
         when(applicationRepository.findActiveById(120L)).thenReturn(Optional.of(application));
         when(userRepository.findById(10L)).thenReturn(Optional.of(firstInterviewer));
         when(userRepository.findById(11L)).thenReturn(Optional.of(secondInterviewer));
-        when(interviewRepository.findByApplicationIdOrderByScheduledDateDesc(120L)).thenReturn(List.of());
-        when(scheduleRepository.findAvailableTemplates(any(), any(), any(), any())).thenReturn(List.of());
-        when(interviewRepository.findBlockingForInterviewer(any(), any(), anyList())).thenReturn(List.of());
+        lenient().when(interviewRepository.findByApplicationIdOrderByScheduledDateDesc(120L)).thenReturn(List.of());
+        lenient().when(scheduleRepository.findAvailableTemplates(any(), any(), any(), any())).thenReturn(List.of());
+        lenient().when(interviewRepository.findBlockingForInterviewer(any(), any(), anyList())).thenReturn(List.of());
     }
 
     @Test
@@ -126,9 +129,62 @@ class InterviewServiceManualEntryTest {
         verifyNoInteractions(emailComposerService);
     }
 
+    @Test
+    void createsCompleteCycleDirectorFlowWithRoleBasedAssignmentsAndNoEmail() {
+        firstInterviewer.setRole(Role.PSYCHOLOGIST);
+        secondInterviewer.setRole(Role.CYCLE_DIRECTOR);
+        when(userRepository.findById(99L)).thenReturn(Optional.of(admin));
+        when(interviewRepository.save(any(InterviewEntity.class))).thenAnswer(invocation -> {
+            InterviewEntity interview = invocation.getArgument(0);
+            interview.setId(902L);
+            return interview;
+        });
+        when(evaluationRepository.findByApplicationIdAndEvaluationType(any(), anyString()))
+            .thenReturn(Optional.empty());
+        when(evaluationRepository.save(any(EvaluationEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        Map<String, Object> response = service.createManual(request("CYCLE_DIRECTOR", true), 99L);
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> data = (Map<String, Object>) response.get("data");
+        assertEquals("CYCLE_DIRECTOR", data.get("interviewType"));
+        assertEquals(secondInterviewer.getId(), data.get("interviewerId"));
+        assertEquals(firstInterviewer.getId(), data.get("secondInterviewerId"));
+
+        ArgumentCaptor<EvaluationEntity> evaluations = ArgumentCaptor.forClass(EvaluationEntity.class);
+        verify(evaluationRepository, org.mockito.Mockito.times(3)).save(evaluations.capture());
+        Map<String, Long> evaluatorByType = evaluations.getAllValues().stream().collect(
+            java.util.stream.Collectors.toMap(
+                EvaluationEntity::getEvaluationType,
+                evaluation -> evaluation.getEvaluator().getId()
+            )
+        );
+        assertEquals(secondInterviewer.getId(), evaluatorByType.get("CYCLE_DIRECTOR_INTERVIEW"));
+        assertEquals(secondInterviewer.getId(), evaluatorByType.get("CYCLE_DIRECTOR_REPORT"));
+        assertEquals(firstInterviewer.getId(), evaluatorByType.get("PSYCHOLOGICAL_INTERVIEW"));
+        verifyNoInteractions(emailComposerService);
+    }
+
+    @Test
+    void rejectsCycleDirectorEntryWithoutRequiredRoles() {
+        IllegalArgumentException error = assertThrows(
+            IllegalArgumentException.class,
+            () -> service.createManual(request("CYCLE_DIRECTOR", true), 99L)
+        );
+
+        assertEquals("Selecciona un director de ciclo activo", error.getMessage());
+        verify(interviewRepository, never()).save(any());
+        verifyNoInteractions(emailComposerService);
+    }
+
     private ManualInterviewCreateRequest request(boolean confirmWarnings) {
+        return request("FAMILY", confirmWarnings);
+    }
+
+    private ManualInterviewCreateRequest request(String interviewType, boolean confirmWarnings) {
         return new ManualInterviewCreateRequest(
             120L,
+            interviewType,
             10L,
             11L,
             LocalDate.of(2026, 8, 31),
