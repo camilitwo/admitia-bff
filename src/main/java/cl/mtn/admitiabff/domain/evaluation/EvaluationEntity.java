@@ -61,6 +61,12 @@ public class EvaluationEntity extends BaseEntity {
     @Column(name = "max_score", precision = 10, scale = 2)
     private BigDecimal maxScore;
 
+    @Column
+    private String grade;
+
+    @Column(columnDefinition = "text")
+    private String strengths;
+
     @Column(columnDefinition = "text")
     private String recommendations;
 

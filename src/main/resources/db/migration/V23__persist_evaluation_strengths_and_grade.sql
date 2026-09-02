@@ -1,0 +1,3 @@
+ALTER TABLE evaluations
+    ADD COLUMN IF NOT EXISTS grade VARCHAR(20),
+    ADD COLUMN IF NOT EXISTS strengths TEXT;

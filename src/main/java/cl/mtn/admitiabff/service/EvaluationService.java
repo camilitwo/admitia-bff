@@ -33,6 +33,26 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 @Transactional(readOnly = true)
 public class EvaluationService {
+    private static final Map<String, String> STRUCTURED_FIELD_ALIASES = Map.ofEntries(
+        Map.entry("academicReadiness", "academicReadiness"),
+        Map.entry("academic_readiness", "academicReadiness"),
+        Map.entry("behavioralAssessment", "behavioralAssessment"),
+        Map.entry("behavioral_assessment", "behavioralAssessment"),
+        Map.entry("emotionalMaturity", "emotionalMaturity"),
+        Map.entry("emotional_maturity", "emotionalMaturity"),
+        Map.entry("socialSkillsAssessment", "socialSkillsAssessment"),
+        Map.entry("social_skills_assessment", "socialSkillsAssessment"),
+        Map.entry("socialSkills", "socialSkillsAssessment"),
+        Map.entry("motivationAssessment", "motivationAssessment"),
+        Map.entry("motivation_assessment", "motivationAssessment"),
+        Map.entry("familySupportAssessment", "familySupportAssessment"),
+        Map.entry("family_support_assessment", "familySupportAssessment"),
+        Map.entry("familySupport", "familySupportAssessment"),
+        Map.entry("integrationPotential", "integrationPotential"),
+        Map.entry("integration_potential", "integrationPotential"),
+        Map.entry("finalRecommendation", "finalRecommendation"),
+        Map.entry("final_recommendation", "finalRecommendation")
+    );
     private final EvaluationRepository evaluationRepository;
     private final ApplicationRepository applicationRepository;
     private final InterviewRepository interviewRepository;
@@ -106,21 +126,26 @@ public class EvaluationService {
             );
             if (key != null) addedKeys.add(key);
         });
-        List<InterviewStatus> excluded = List.of(InterviewStatus.CANCELLED, InterviewStatus.RESCHEDULED);
+        List<InterviewStatus> excluded = List.of(
+            InterviewStatus.CANCELLED,
+            InterviewStatus.RESCHEDULED,
+            InterviewStatus.REJECTED_BY_FAMILY
+        );
         interviewRepository.findVisibleForInterviewer(userId, excluded).stream()
-            .forEach(interview -> addLinkedInterviewEvaluations(evaluations, addedKeys, interview));
+            .forEach(interview -> addLinkedInterviewEvaluations(evaluations, addedKeys, interview, userId));
         return Map.of("success", true, "data", evaluations, "count", evaluations.size());
     }
 
     private void addLinkedInterviewEvaluations(
         List<Map<String, Object>> evaluations,
         java.util.Set<String> addedKeys,
-        cl.mtn.admitiabff.domain.interview.InterviewEntity interview
+        cl.mtn.admitiabff.domain.interview.InterviewEntity interview,
+        Long userId
     ) {
         Long applicationId = interview.getApplication() == null ? null : interview.getApplication().getId();
         if (applicationId == null) return;
 
-        for (String evaluationType : mapInterviewTypesToEvaluationTypes(interview.getInterviewType())) {
+        for (String evaluationType : evaluationTypesForUser(interview, userId)) {
             String key = evaluationKey(applicationId, evaluationType);
             if (key == null || addedKeys.contains(key)) continue;
 
@@ -150,9 +175,10 @@ public class EvaluationService {
         if (response.get("observations") == null) {
             response.put("observations", interview.getNotes());
         }
-        if (interview.getInterviewer() != null) {
-            response.put("evaluatorId", interview.getInterviewer().getId());
-            response.put("evaluator", evaluatorMap(interview.getInterviewer()));
+        UserEntity responsibleEvaluator = expectedEvaluator(interview, evaluationType);
+        if (response.get("evaluatorId") == null && responsibleEvaluator != null) {
+            response.put("evaluatorId", responsibleEvaluator.getId());
+            response.put("evaluator", evaluatorMap(responsibleEvaluator));
         }
         if (interview.getApplication() != null && interview.getApplication().getStudent() != null) {
             var student = interview.getApplication().getStudent();
@@ -161,8 +187,8 @@ public class EvaluationService {
         }
     }
     public Map<String, Object> familyInterviewTemplate(String grade) { return Map.of("success", true, "data", Map.of("grade", grade, "sections", List.of("Historia familiar", "Motivación", "Rutinas", "Observaciones"))); }
-    public Map<String, Object> get(Long id) { return toResponse(load(id)); }
-    public Map<String, Object> familyInterviewData(Long evaluationId) { EvaluationEntity entity = load(evaluationId); return Map.of("success", true, "data", jsonSupport.readMap(entity.getInterviewData()), "score", entity.getFamilyInterviewScore()); }
+    public Map<String, Object> get(Long id) { return toResponse(loadAccessible(id)); }
+    public Map<String, Object> familyInterviewData(Long evaluationId) { EvaluationEntity entity = loadAccessible(evaluationId); return Map.of("success", true, "data", jsonSupport.readMap(entity.getInterviewData()), "score", entity.getFamilyInterviewScore() == null ? BigDecimal.ZERO : entity.getFamilyInterviewScore()); }
 
     /**
      * Repara de forma idempotente las evaluaciones que normalmente se crean al agendar una
@@ -183,12 +209,16 @@ public class EvaluationService {
         if (interview.getApplication() == null) {
             throw new IllegalArgumentException("La entrevista no tiene una postulación asociada");
         }
-        if (interview.getStatus() == InterviewStatus.CANCELLED || interview.getStatus() == InterviewStatus.RESCHEDULED) {
+        if (!isActiveInterview(interview)) {
             throw new IllegalArgumentException("No se pueden generar evaluaciones para una entrevista inactiva");
         }
 
-        List<Map<String, Object>> data = mapInterviewTypesToEvaluationTypes(interview.getInterviewType()).stream()
+        List<String> accessibleTypes = authService.isAdminContext(auth)
+            ? mapInterviewTypesToEvaluationTypes(interview.getInterviewType())
+            : evaluationTypesForUser(interview, auth.id());
+        List<Map<String, Object>> data = accessibleTypes.stream()
             .map(evaluationType -> {
+                UserEntity expectedEvaluator = expectedEvaluator(interview, evaluationType);
                 EvaluationEntity evaluation = evaluationRepository
                     .findByApplicationIdAndEvaluationType(interview.getApplication().getId(), evaluationType)
                     .orElseGet(() -> {
@@ -196,12 +226,18 @@ public class EvaluationService {
                         created.setApplication(interview.getApplication());
                         created.setEvaluationType(evaluationType);
                         created.setStatus(EvaluationStatus.PENDING);
-                        created.setEvaluator(interview.getInterviewer());
+                        created.setEvaluator(expectedEvaluator);
                         if (interview.getScheduledDate() != null && interview.getScheduledTime() != null) {
                             created.setEvaluationDate(interview.getScheduledDate().atTime(interview.getScheduledTime()));
                         }
                         return evaluationRepository.save(created);
                     });
+                if (evaluation.getStatus() != EvaluationStatus.COMPLETED
+                    && expectedEvaluator != null && (evaluation.getEvaluator() == null
+                    || !expectedEvaluator.getId().equals(evaluation.getEvaluator().getId()))) {
+                    evaluation.setEvaluator(expectedEvaluator);
+                    evaluationRepository.save(evaluation);
+                }
                 Map<String, Object> response = new LinkedHashMap<>(toResponse(evaluation));
                 applyInterviewMetadata(response, interview, evaluationType);
                 return response;
@@ -218,13 +254,17 @@ public class EvaluationService {
     public Map<String, Object> create(Map<String, Object> payload) {
         EvaluationEntity entity = new EvaluationEntity();
         merge(entity, payload);
+        syncCompletionTimestamp(entity);
         return Map.of("success", true, "message", "Evaluación creada correctamente", "data", toResponse(evaluationRepository.save(entity)));
     }
 
     @Transactional
     public Map<String, Object> update(Long id, Map<String, Object> payload) {
-        EvaluationEntity entity = load(id);
+        AuthService.AuthContextHolder auth = authService.requireAuth();
+        EvaluationEntity entity = loadAccessible(id, auth);
+        validateProfessionalPayload(auth, payload);
         merge(entity, payload);
+        syncCompletionTimestamp(entity);
         return Map.of("success", true, "message", "Evaluación actualizada", "data", toResponse(evaluationRepository.save(entity)));
     }
 
@@ -234,18 +274,14 @@ public class EvaluationService {
         return Map.of("success", true, "message", "Evaluación eliminada correctamente");
     }
 
-    // Fix: persistir areasForImprovement al completar evaluacion
     @Transactional
     public Map<String, Object> complete(Long id, Map<String, Object> payload) {
-        EvaluationEntity entity = load(id);
+        AuthService.AuthContextHolder auth = authService.requireAuth();
+        EvaluationEntity entity = loadAccessible(id, auth);
+        validateProfessionalPayload(auth, payload);
+        merge(entity, payload);
         entity.setStatus(EvaluationStatus.COMPLETED);
-        entity.setScore(decimalValue(payload.get("score")));
-        entity.setMaxScore(decimalValue(payload.get("maxScore")));
-        entity.setRecommendations(stringValue(payload.get("recommendations")));
-        entity.setObservations(stringValue(payload.getOrDefault("observations", payload.get("comments"))));
-        entity.setAreasForImprovement(stringValue(payload.get("areasForImprovement")));
-        persistInterviewData(entity, payload);
-        entity.setCompletedAt(LocalDateTime.now());
+        syncCompletionTimestamp(entity);
         return Map.of("success", true, "message", "Evaluación completada", "data", toResponse(evaluationRepository.save(entity)));
     }
 
@@ -315,13 +351,14 @@ public class EvaluationService {
 
     @Transactional
     public Map<String, Object> saveFamilyInterviewData(Long evaluationId, Map<String, Object> payload) {
-        EvaluationEntity entity = load(evaluationId);
+        EvaluationEntity entity = loadAccessible(evaluationId);
         Map<String, Object> interviewData = payload.get("interviewData") instanceof Map<?, ?> map ? (Map<String, Object>) map : payload;
         BigDecimal score = calculateInterviewScore(interviewData);
         entity.setInterviewData(jsonSupport.write(interviewData));
         entity.setFamilyInterviewScore(score);
         entity.setStatus(EvaluationStatus.COMPLETED);
         entity.setCompletedAt(LocalDateTime.now());
+        evaluationRepository.save(entity);
         return Map.of("success", true, "message", "Entrevista familiar guardada", "data", interviewData, "score", score);
     }
 
@@ -378,9 +415,11 @@ public class EvaluationService {
         entity.setEvaluationDate(parseDateTime(payload.getOrDefault("evaluationDate", entity.getEvaluationDate())));
         entity.setScore(decimalValue(payload.getOrDefault("score", entity.getScore())));
         entity.setMaxScore(decimalValue(payload.getOrDefault("maxScore", entity.getMaxScore())));
+        entity.setGrade(stringValue(payload.getOrDefault("grade", entity.getGrade())));
+        entity.setStrengths(stringValue(payload.getOrDefault("strengths", entity.getStrengths())));
         entity.setRecommendations(stringValue(payload.getOrDefault("recommendations", entity.getRecommendations())));
-        entity.setObservations(stringValue(payload.getOrDefault("observations", entity.getObservations())));
-        entity.setAreasForImprovement(stringValue(payload.getOrDefault("areasForImprovement", entity.getAreasForImprovement())));
+        entity.setObservations(stringValue(payload.getOrDefault("observations", payload.getOrDefault("comments", entity.getObservations()))));
+        entity.setAreasForImprovement(stringValue(payload.getOrDefault("areasForImprovement", payload.getOrDefault("areas_for_improvement", entity.getAreasForImprovement()))));
         persistInterviewData(entity, payload);
 
         if (entity.getEvaluator() != null) {
@@ -397,6 +436,47 @@ public class EvaluationService {
         return evaluationRepository.findById(id).orElseThrow(() -> new IllegalArgumentException("Evaluación no encontrada"));
     }
 
+    private EvaluationEntity loadAccessible(Long id) {
+        return loadAccessible(id, authService.requireAuth());
+    }
+
+    private EvaluationEntity loadAccessible(Long id, AuthService.AuthContextHolder auth) {
+        EvaluationEntity entity = load(id);
+        if (authService.isAdminContext(auth)) return entity;
+        if (entity.getEvaluator() != null && entity.getEvaluator().getId().equals(auth.id())) return entity;
+
+        Long applicationId = entity.getApplication() == null ? null : entity.getApplication().getId();
+        boolean linkedToUser = applicationId != null
+            && interviewRepository.findByApplicationIdOrderByScheduledDateDesc(applicationId).stream()
+                .filter(this::isActiveInterview)
+                .filter(interview -> mapInterviewTypesToEvaluationTypes(interview.getInterviewType())
+                    .contains(entity.getEvaluationType()))
+                .findFirst()
+                .map(interview -> evaluationTypesForUser(interview, auth.id()).contains(entity.getEvaluationType()))
+                .orElse(false);
+        if (!linkedToUser) {
+            throw new AccessDeniedException("La evaluación no está asignada al usuario autenticado");
+        }
+        return entity;
+    }
+
+    private void validateProfessionalPayload(AuthService.AuthContextHolder auth, Map<String, Object> payload) {
+        if (authService.isAdminContext(auth)) return;
+        List<String> protectedFields = List.of(
+            "applicationId", "evaluatorId", "type", "evaluationType",
+            "subject", "educationalLevel", "evaluationDate"
+        );
+        if (protectedFields.stream().anyMatch(payload::containsKey)) {
+            throw new AccessDeniedException("La asignación y el tipo de evaluación sólo pueden ser modificados por administración");
+        }
+        if (payload.containsKey("status")) {
+            EvaluationStatus requested = EvaluationStatus.valueOf(String.valueOf(payload.get("status")).toUpperCase());
+            if (requested != EvaluationStatus.IN_PROGRESS && requested != EvaluationStatus.COMPLETED) {
+                throw new AccessDeniedException("El profesional sólo puede guardar un borrador o completar su evaluación");
+            }
+        }
+    }
+
     private Map<String, Object> toResponse(EvaluationEntity entity) {
         Map<String, Object> response = new LinkedHashMap<>();
         response.put("id", entity.getId());
@@ -409,10 +489,14 @@ public class EvaluationService {
         response.put("evaluationDate", entity.getEvaluationDate());
         response.put("score", entity.getScore());
         response.put("maxScore", entity.getMaxScore());
+        response.put("grade", entity.getGrade());
+        response.put("strengths", entity.getStrengths());
         response.put("recommendations", entity.getRecommendations());
         response.put("observations", entity.getObservations());
         response.put("areasForImprovement", entity.getAreasForImprovement());
-        response.put("interviewData", jsonSupport.readMap(entity.getInterviewData()));
+        Map<String, Object> structuredData = jsonSupport.readMap(entity.getInterviewData());
+        response.put("interviewData", structuredData);
+        structuredData.forEach(response::putIfAbsent);
         response.put("createdAt", entity.getCreatedAt());
         response.put("updatedAt", entity.getUpdatedAt());
         response.put("completedAt", entity.getCompletedAt());
@@ -486,10 +570,22 @@ public class EvaluationService {
     private String value(String value) { return value == null ? "" : value; }
 
     private BigDecimal calculateInterviewScore(Map<String, Object> interviewData) {
-        List<BigDecimal> values = interviewData.values().stream().filter(Number.class::isInstance).map(Number.class::cast).map(value -> BigDecimal.valueOf(value.doubleValue())).toList();
-        if (values.isEmpty()) return BigDecimal.ZERO;
-        BigDecimal sum = values.stream().reduce(BigDecimal.ZERO, BigDecimal::add);
-        return sum.divide(BigDecimal.valueOf(values.size()), 2, java.math.RoundingMode.HALF_UP);
+        return sumInterviewScores(interviewData, false);
+    }
+
+    private BigDecimal sumInterviewScores(Object value, boolean scoreField) {
+        if (scoreField && value instanceof Number number) {
+            return BigDecimal.valueOf(number.doubleValue());
+        }
+        if (value instanceof Boolean booleanValue) {
+            return booleanValue ? BigDecimal.ONE : BigDecimal.ZERO;
+        }
+        if (value instanceof Map<?, ?> map) {
+            return map.entrySet().stream()
+                .map(entry -> sumInterviewScores(entry.getValue(), "score".equals(String.valueOf(entry.getKey()))))
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        }
+        return BigDecimal.ZERO;
     }
 
     private BigDecimal decimalValue(Object value) {
@@ -516,6 +612,25 @@ public class EvaluationService {
     private void persistInterviewData(EvaluationEntity entity, Map<String, Object> payload) {
         if (payload.get("interviewData") instanceof Map<?, ?> interviewData) {
             entity.setInterviewData(jsonSupport.write((Map<String, Object>) interviewData));
+            return;
+        }
+
+        Map<String, Object> merged = new LinkedHashMap<>(jsonSupport.readMap(entity.getInterviewData()));
+        boolean changed = false;
+        for (Map.Entry<String, String> alias : STRUCTURED_FIELD_ALIASES.entrySet()) {
+            if (payload.containsKey(alias.getKey())) {
+                merged.put(alias.getValue(), payload.get(alias.getKey()));
+                changed = true;
+            }
+        }
+        if (changed) {
+            entity.setInterviewData(jsonSupport.write(merged));
+        }
+    }
+
+    private void syncCompletionTimestamp(EvaluationEntity entity) {
+        if (entity.getStatus() == EvaluationStatus.COMPLETED && entity.getCompletedAt() == null) {
+            entity.setCompletedAt(LocalDateTime.now());
         }
     }
 
@@ -528,10 +643,44 @@ public class EvaluationService {
         if (interviewType == null) return List.of();
         return switch (interviewType) {
             case "FAMILY" -> List.of("FAMILY_INTERVIEW");
-            case "CYCLE_DIRECTOR" -> List.of("CYCLE_DIRECTOR_INTERVIEW", "CYCLE_DIRECTOR_REPORT");
+            case "CYCLE_DIRECTOR" -> List.of("CYCLE_DIRECTOR_INTERVIEW", "CYCLE_DIRECTOR_REPORT", "PSYCHOLOGICAL_INTERVIEW");
             case "PSYCHOLOGICAL" -> List.of("PSYCHOLOGICAL_INTERVIEW");
             default -> List.of(interviewType);
         };
+    }
+
+    private List<String> evaluationTypesForUser(
+        cl.mtn.admitiabff.domain.interview.InterviewEntity interview,
+        Long userId
+    ) {
+        if (userId == null || interview.getInterviewType() == null) return List.of();
+        boolean primary = interview.getInterviewer() != null && userId.equals(interview.getInterviewer().getId());
+        boolean secondary = interview.getSecondInterviewer() != null && userId.equals(interview.getSecondInterviewer().getId());
+        return switch (interview.getInterviewType()) {
+            case "FAMILY" -> primary || secondary ? List.of("FAMILY_INTERVIEW") : List.of();
+            case "CYCLE_DIRECTOR" -> primary
+                ? List.of("CYCLE_DIRECTOR_INTERVIEW", "CYCLE_DIRECTOR_REPORT")
+                : secondary ? List.of("PSYCHOLOGICAL_INTERVIEW") : List.of();
+            case "PSYCHOLOGICAL" -> primary || secondary ? List.of("PSYCHOLOGICAL_INTERVIEW") : List.of();
+            default -> primary || secondary ? List.of(interview.getInterviewType()) : List.of();
+        };
+    }
+
+    private boolean isActiveInterview(cl.mtn.admitiabff.domain.interview.InterviewEntity interview) {
+        return interview.getStatus() != InterviewStatus.CANCELLED
+            && interview.getStatus() != InterviewStatus.RESCHEDULED
+            && interview.getStatus() != InterviewStatus.REJECTED_BY_FAMILY;
+    }
+
+    private UserEntity expectedEvaluator(
+        cl.mtn.admitiabff.domain.interview.InterviewEntity interview,
+        String evaluationType
+    ) {
+        if ("CYCLE_DIRECTOR".equals(interview.getInterviewType())
+            && "PSYCHOLOGICAL_INTERVIEW".equals(evaluationType)) {
+            return interview.getSecondInterviewer();
+        }
+        return interview.getInterviewer();
     }
 
 }
