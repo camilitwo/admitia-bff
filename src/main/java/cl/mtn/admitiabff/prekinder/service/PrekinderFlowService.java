@@ -785,6 +785,15 @@ public class PrekinderFlowService {
             }
             Instant endsAt = startsAt.plus(Duration.ofMinutes(duration));
             ScheduleSlot slot = ensureScheduleSlot(current.processId(), startsAt, endsAt);
+            List<UUID> mismatchedClusters = jdbc.queryForList("""
+                SELECT c.cluster_id FROM evaluation_group_cluster_members m
+                  JOIN evaluation_group_clusters c ON c.cluster_id = m.cluster_id
+                 WHERE m.group_id = :groupId AND c.status = 'ACTIVE' AND c.evaluation_day_id <> :dayId
+                """, Map.of("groupId", groupId, "dayId", slot.dayId()), UUID.class);
+            if (!mismatchedClusters.isEmpty()) {
+                throw PrekinderDomainException.conflict("CLUSTER_GROUP_DAY_MISMATCH",
+                    "Quita el grupo de su agrupación antes de moverlo a otra jornada");
+            }
             if (alreadyStarted) return cloneForReschedule(actor, current, roomId, startsAt, endsAt, reason);
             jdbc.update("""
                 UPDATE applicant_group_bookings SET active = false
@@ -1808,7 +1817,7 @@ public class PrekinderFlowService {
         return values.isEmpty() ? null : values.get(0);
     }
 
-    private GroupView group(UUID id) {
+    GroupView group(UUID id) {
         return jdbc.queryForObject("""
             SELECT g.group_id, g.process_id, g.room_id, r.name AS room_name, g.stage, g.code,
                    g.starts_at, g.ends_at, coalesce(g.admin_capacity_override, g.capacity) AS effective_capacity,
@@ -1823,7 +1832,12 @@ public class PrekinderFlowService {
                 jdbc.queryForList("SELECT application_id FROM evaluation_group_members WHERE group_id = :id AND status IN ('ASSIGNED','ATTENDED') ORDER BY assigned_at",
                     Map.of("id", id), UUID.class),
                 jdbc.queryForList("SELECT evaluator_id FROM group_evaluator_assignments WHERE group_id = :id AND status = 'ACTIVE' ORDER BY assigned_at",
-                    Map.of("id", id), UUID.class)));
+                    Map.of("id", id), UUID.class),
+                jdbc.query("""
+                    SELECT c.cluster_id, c.name FROM evaluation_group_cluster_members m
+                      JOIN evaluation_group_clusters c ON c.cluster_id = m.cluster_id
+                     WHERE m.group_id = :id AND c.status = 'ACTIVE' ORDER BY c.created_at
+                    """, Map.of("id", id), (crs, crow) -> new ClusterRef(crs.getObject("cluster_id", UUID.class), crs.getString("name")))));
     }
 
     private AgendaGroupView agendaGroup(UUID groupId, UUID evaluatorId, String instrumentCode, UUID assignmentId, long version) {
@@ -2188,7 +2202,9 @@ public class PrekinderFlowService {
                                Integer durationMinutes, Integer capacity, Integer requiredEvaluators) {}
     public record GroupView(UUID groupId, UUID processId, UUID roomId, String roomName, String stage,
                             String code, Instant startsAt, Instant endsAt, int capacity, int requiredEvaluators,
-                            String status, long version, List<UUID> memberIds, List<UUID> evaluatorIds) {}
+                            String status, long version, List<UUID> memberIds, List<UUID> evaluatorIds,
+                            List<ClusterRef> clusters) {}
+    public record ClusterRef(UUID clusterId, String name) {}
     public record ReportSummary(UUID reportId, UUID applicationId, String applicantName, String status,
                                 long version, java.math.BigDecimal rawScore, java.math.BigDecimal maximumScore) {}
     public record AgendaGroupView(UUID assignmentId, String instrumentCode, long version, GroupView group, boolean editableNow, List<ReportSummary> reports) {}

@@ -32,7 +32,7 @@ public class PrekinderErrorHandler {
     org.springframework.http.ResponseEntity<Map<String, Object>> domain(PrekinderDomainException exception,
                                                                         HttpServletRequest request) {
         return org.springframework.http.ResponseEntity.status(exception.status())
-            .body(error(exception.code(), exception.getMessage(), request));
+            .body(error(exception.code(), exception.getMessage(), exception.details(), request));
     }
 
     @ExceptionHandler({AccessDeniedException.class, SecurityException.class})
@@ -48,9 +48,13 @@ public class PrekinderErrorHandler {
     }
 
     private static Map<String, Object> error(String code, String message, HttpServletRequest request) {
+        return error(code, message, Map.of(), request);
+    }
+
+    private static Map<String, Object> error(String code, String message, Map<String, Object> details, HttpServletRequest request) {
         String requestId = request.getHeader("X-Request-ID");
         if (requestId == null || requestId.isBlank()) requestId = java.util.UUID.randomUUID().toString();
         return Map.of("success", false, "error", Map.of(
-            "code", code, "message", message, "requestId", requestId, "details", Map.of()));
+            "code", code, "message", message, "requestId", requestId, "details", details == null ? Map.of() : details));
     }
 }
