@@ -57,6 +57,21 @@ public class PrekinderControlTowerService {
                 rs.getString("status"), rs.getInt("capacity"), rs.getLong("version"), rs.getInt("member_count"),
                 rs.getInt("present_count"), rs.getInt("pending_count"), rs.getInt("absent_count")));
 
+        Map<UUID, List<PrekinderFlowService.ClusterRef>> clustersByGroup = new LinkedHashMap<>();
+        if (!groups.isEmpty()) {
+            jdbc.query("""
+                SELECT m.group_id, c.cluster_id, c.name FROM evaluation_group_cluster_members m
+                  JOIN evaluation_group_clusters c ON c.cluster_id = m.cluster_id
+                 WHERE m.group_id IN (:groupIds) AND c.status = 'ACTIVE'
+                 ORDER BY c.created_at
+                """, Map.of("groupIds", groups.stream().map(GroupRow::groupId).toList()), (rs, row) -> {
+                    UUID groupId = rs.getObject("group_id", UUID.class);
+                    clustersByGroup.computeIfAbsent(groupId, ignored -> new ArrayList<>())
+                        .add(new PrekinderFlowService.ClusterRef(rs.getObject("cluster_id", UUID.class), rs.getString("name")));
+                    return null;
+                });
+        }
+
         Map<UUID, Map<String, String>> progress = new LinkedHashMap<>();
         List<Map<String, Object>> progressRows = jdbc.queryForList("""
             SELECT ia.group_id, ia.instrument_code,
@@ -83,7 +98,8 @@ public class PrekinderControlTowerService {
                 .groups.add(new ControlTowerGroup(group.groupId(), group.code(), group.startsAt(), group.endsAt(),
                     operationalStatus(group), group.capacity(), group.memberCount(),
                     new Attendance(group.present(), group.pending(), group.absent()),
-                    progress.getOrDefault(group.groupId(), Map.of()), group.version()));
+                    progress.getOrDefault(group.groupId(), Map.of()), group.version(),
+                    clustersByGroup.getOrDefault(group.groupId(), List.of())));
         }
         int openIncidents = jdbc.queryForObject("""
             SELECT count(*) FROM prekinder_operational_incidents
@@ -95,8 +111,51 @@ public class PrekinderControlTowerService {
             groups.stream().mapToInt(GroupRow::present).sum(),
             (int) groups.stream().filter(group -> "IN_PROGRESS".equals(group.status())).count(),
             (int) groups.stream().filter(group -> "COMPLETED".equals(group.status())).count(), openIncidents);
+        List<ClusterAggregate> clusters = buildClusterAggregates(groups, clustersByGroup, progress, openIncidents);
         return new ControlTowerDay(processId, effectiveDate, SANTIAGO.getId(), sequence, summary,
-            rooms.values().stream().map(RoomBuilder::view).toList());
+            rooms.values().stream().map(RoomBuilder::view).toList(), clusters);
+    }
+
+    private List<ClusterAggregate> buildClusterAggregates(List<GroupRow> groups,
+        Map<UUID, List<PrekinderFlowService.ClusterRef>> clustersByGroup, Map<UUID, Map<String, String>> progress,
+        int openIncidents) {
+        Map<UUID, List<GroupRow>> membersByCluster = new LinkedHashMap<>();
+        for (GroupRow group : groups) {
+            for (PrekinderFlowService.ClusterRef ref : clustersByGroup.getOrDefault(group.groupId(), List.of())) {
+                membersByCluster.computeIfAbsent(ref.clusterId(), ignored -> new ArrayList<>()).add(group);
+            }
+        }
+        if (membersByCluster.isEmpty()) return List.of();
+        List<ClusterRow> clusterRows = jdbc.query("""
+            SELECT cluster_id, name, status, version FROM evaluation_group_clusters WHERE cluster_id IN (:clusterIds)
+            """, Map.of("clusterIds", membersByCluster.keySet()), (rs, row) -> new ClusterRow(
+                rs.getObject("cluster_id", UUID.class), rs.getString("name"), rs.getString("status"), rs.getLong("version")));
+        List<ClusterAggregate> aggregates = new ArrayList<>();
+        for (ClusterRow cluster : clusterRows) {
+            List<GroupRow> members = membersByCluster.get(cluster.clusterId());
+            int present = members.stream().mapToInt(GroupRow::present).sum();
+            int pending = members.stream().mapToInt(GroupRow::pending).sum();
+            int absent = members.stream().mapToInt(GroupRow::absent).sum();
+            Map<String, String> instrumentProgress = new LinkedHashMap<>();
+            members.forEach(group -> instrumentProgress.putAll(progress.getOrDefault(group.groupId(), Map.of())));
+            aggregates.add(new ClusterAggregate(cluster.clusterId(), cluster.name(),
+                "CANCELLED".equals(cluster.status()) ? "CANCELLED" : clusterStatus(members), cluster.version(),
+                members.stream().map(GroupRow::groupId).toList(),
+                members.stream().map(GroupRow::roomId).distinct().toList(),
+                members.stream().map(GroupRow::startsAt).min(Instant::compareTo).orElse(null),
+                members.stream().map(GroupRow::endsAt).max(Instant::compareTo).orElse(null),
+                new Attendance(present, pending, absent), instrumentProgress, openIncidents));
+        }
+        return aggregates;
+    }
+
+    private record ClusterRow(UUID clusterId, String name, String status, long version) {}
+
+    private static String clusterStatus(List<GroupRow> members) {
+        if (members.stream().anyMatch(group -> "DRAFT".equals(group.status()))) return "DRAFT";
+        if (members.stream().allMatch(group -> "COMPLETED".equals(group.status()))) return "COMPLETED";
+        if (members.stream().allMatch(group -> "CANCELLED".equals(group.status()))) return "CANCELLED";
+        return "CONFIRMED";
     }
 
     public AttendanceUpdate updateAttendance(UUID groupId, UUID applicationId, String requestedStatus,
@@ -192,12 +251,16 @@ public class PrekinderControlTowerService {
         private ControlTowerRoom view() { return new ControlTowerRoom(roomId, name, groups); }
     }
     public record ControlTowerDay(UUID processId, LocalDate date, String timezone, long serverSequence,
-                                  Summary summary, List<ControlTowerRoom> rooms) {}
+                                  Summary summary, List<ControlTowerRoom> rooms, List<ClusterAggregate> clusters) {}
     public record Summary(int applicants, int present, int groupsInProgress, int groupsValidated, int openIncidents) {}
     public record ControlTowerRoom(UUID roomId, String name, List<ControlTowerGroup> groups) {}
     public record ControlTowerGroup(UUID groupId, String code, Instant startsAt, Instant endsAt,
                                     String status, int capacity, int memberCount, Attendance attendance,
-                                    Map<String, String> instrumentProgress, long version) {}
+                                    Map<String, String> instrumentProgress, long version,
+                                    List<PrekinderFlowService.ClusterRef> clusters) {}
+    public record ClusterAggregate(UUID clusterId, String name, String status, long version, List<UUID> groupIds,
+                                   List<UUID> roomIds, Instant startsAt, Instant endsAt, Attendance attendance,
+                                   Map<String, String> instrumentProgress, int openIncidents) {}
     public record Attendance(int present, int pending, int absent) {}
     public record AttendanceUpdate(UUID groupId, UUID applicationId, String status, String reasonCode,
                                    long version, Instant recordedAt) {}
