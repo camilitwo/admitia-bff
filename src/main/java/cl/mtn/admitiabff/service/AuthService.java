@@ -254,23 +254,26 @@ public class AuthService {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Cuenta inactiva");
         }
 
-        // Sincronizar el flag local con el estado real de Firebase (puede haber cambiado).
-        boolean firebaseSaysVerified = decoded.isEmailVerified();
-        if (firebaseSaysVerified && !user.isEmailVerified()) {
-            user.setEmailVerified(true);
-        } else if (!firebaseSaysVerified && user.isEmailVerified()) {
-            // El usuario perdió la verificación en Firebase (raro, pero posible si se cambió el email).
-            user.setEmailVerified(false);
+        // Solo para APODERADO: sincronizar emailVerified con Firebase.
+        // Los usuarios administrativos (staff/admin) mantienen emailVerified como decisión
+        // administrativa, no de Firebase. Esto evita que firebaseLogin sobrescriba
+        // una verificación manual hecha por un admin.
+        if (user.getRole() == Role.APODERADO) {
+            boolean firebaseSaysVerified = decoded.isEmailVerified();
+            if (firebaseSaysVerified && !user.isEmailVerified()) {
+                user.setEmailVerified(true);
+            } else if (!firebaseSaysVerified && user.isEmailVerified()) {
+                user.setEmailVerified(false);
+            }
         }
 
         // 🔒 Bloqueo de login para apoderados con email no verificado.
         // Sin esto, un registro recién creado en Firebase (donde emailVerified arranca en false)
         // podría loguearse al portal antes de hacer clic en el correo de verificación.
-        // Sólo aplica al rol APODERADO; el staff/admin no usa este flujo de auto-registro.
-        if (user.getRole() == Role.APODERADO && !firebaseSaysVerified) {
+        // Solo aplica al rol APODERADO; el staff/admin no usa este flujo de auto-registro.
+        if (user.getRole() == Role.APODERADO && !user.isEmailVerified()) {
             log.warn("[Auth/Firebase] Login bloqueado por email no verificado: user id={} email={}",
                 user.getId(), email);
-            // Persistimos la sincronización del flag antes de salir.
             userRepository.save(user);
             throw new cl.mtn.admitiabff.controller.EmailNotVerifiedException(email,
                 "Debe verificar su correo electrónico antes de ingresar. "

@@ -40,6 +40,7 @@ public class UsersController {
     @PutMapping("/{id}/reset-password") public Map<String, Object> resetPasswordPut(@PathVariable Long id) { return temporaryPasswordService.reset(id); }
     @org.springframework.security.access.prepost.PreAuthorize("hasRole('ADMIN')")
     @PostMapping("/{id}/reset-password") public Map<String, Object> resetPasswordPost(@PathVariable Long id) { return temporaryPasswordService.reset(id); }
+    @org.springframework.security.access.prepost.PreAuthorize("hasRole('ADMIN')")
     @PostMapping("/{id}/verify-email") public Map<String, Object> verifyEmail(@PathVariable Long id) { return userService.verifyEmail(id); }
     @PatchMapping("/{id}/preferences") public Map<String, Object> preferences(@PathVariable Long id, @RequestBody Map<String, Object> payload) { return userService.preferences(id, payload); }
 }

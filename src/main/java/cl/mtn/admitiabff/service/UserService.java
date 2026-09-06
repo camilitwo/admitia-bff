@@ -176,12 +176,16 @@ public class UserService {
         return Map.of("success", true, "message", active ? "Usuario activado" : "Usuario desactivado", "data", toResponse(userRepository.save(user)));
     }
 
+    /**
+     * Verifica el email de un usuario. Solo admins.
+     * Esta es la ÚNICA vía para modificar emailVerified en usuarios del sistema.
+     */
     @Transactional
     public Map<String, Object> verifyEmail(Long id) {
         UserEntity user = userRepository.findById(id).orElseThrow(() -> new IllegalArgumentException("Usuario no encontrado"));
         user.setEmailVerified(true);
         userRepository.save(user);
-        return Map.of("success", true, "message", "Email verificado", "data", Map.of("id", user.getId(), "email", user.getEmail(), "email_verified", user.isEmailVerified()));
+        return Map.of("success", true, "message", "Email verificado", "data", Map.of("id", user.getId(), "email", user.getEmail(), "emailVerified", user.isEmailVerified()));
     }
 
     @Transactional
@@ -216,6 +220,10 @@ public class UserService {
         return pageResponse(result.map(this::toResponse));
     }
 
+    /**
+     * Fusiona datos del payload con la entidad. No permite modificar emailVerified
+     * vía profile update - solo via verifyEmail (admin only).
+     */
     private void merge(UserEntity user, Map<String, Object> payload, boolean creating) {
         user.setFirstName(stringValue(payload.getOrDefault("firstName", user.getFirstName())));
         user.setLastName(stringValue(payload.getOrDefault("lastName", user.getLastName())));
@@ -227,16 +235,10 @@ public class UserService {
         user.setEducationalLevel(stringValue(payload.getOrDefault("educationalLevel", user.getEducationalLevel())));
         user.setActive(Boolean.parseBoolean(String.valueOf(payload.getOrDefault("active", user.isActive() || creating))));
 
-        // Solo actualizar emailVerified si el payload contiene un valor booleano explícito.
-        // Boolean.parseBoolean() devuelve false para cualquier valor que no sea "true",
-        // lo que causaba que campos vacíos o no booleanos sobreescribieran el valor real.
-        Object emailVerifiedRaw = payload.get("emailVerified");
-        if (emailVerifiedRaw != null) {
-            String val = String.valueOf(emailVerifiedRaw);
-            if (!val.isBlank() && !"null".equals(val)) {
-                user.setEmailVerified(Boolean.parseBoolean(val));
-            }
-        }
+        // emailVerified NO se toca aquí. La única vía legítima es:
+        //   1. verifyEmail(id) — solo ADMIN
+        //   2. Firebase linking — solo durante creación con firebaseIdToken válido
+        // Esto bloquea que un usuario edite su perfil y des-verifique su propio email.
 
         // Enlace Firebase opcional (cirugía mínima):
         // Si el cliente envía `firebaseIdToken` en la creación, validamos contra Firebase
@@ -247,7 +249,7 @@ public class UserService {
         //   - firebase_uid extraído del token verificado (no del cliente, por seguridad)
         //   - email_verified según lo reportado por Firebase
         // Si NO viene el token, el comportamiento es idéntico al previo (bcrypt local),
-        // garantizando compatibilidad con cualquier integración existente.
+        // garantizando compatibilidad con cualquier integración existentes.
         Object firebaseIdTokenRaw = payload.get("firebaseIdToken");
         boolean firebaseLinked = false;
         if (creating && firebaseIdTokenRaw != null && !String.valueOf(firebaseIdTokenRaw).isBlank()) {
