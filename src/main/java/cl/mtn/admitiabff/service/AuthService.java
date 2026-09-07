@@ -278,6 +278,7 @@ public class AuthService {
         }
 
         user.setLastLoginAt(LocalDateTime.now());
+        user.setEmailVerified(true);
         userRepository.save(user);
         return issueAuthResponse(user, null, null, true);
     }
