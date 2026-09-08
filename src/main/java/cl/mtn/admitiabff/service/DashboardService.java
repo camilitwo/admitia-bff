@@ -572,22 +572,140 @@ public class DashboardService {
             return result;
         }
 
-        List<BigDecimal> scores = familyEvals.stream()
+        List<Long> evaluationIds = familyEvals.stream().map(EvaluationEntity::getId).toList();
+        List<BigDecimal> rawScores = familyEvals.stream()
             .map(EvaluationEntity::getFamilyInterviewScore)
             .filter(s -> s != null)
             .toList();
 
-        result.put("count", scores.size());
-        result.put("scores", scores);
+        result.put("count", rawScores.size());
+        result.put("scores", rawScores);
+        result.put("evaluationId", evaluationIds.isEmpty() ? null : evaluationIds.get(0));
+        result.put("evaluationIds", evaluationIds);
 
-        if (scores.isEmpty()) {
+        // Extract justification text from the first evaluation's interview data
+        String justification = extractJustification(familyEvals);
+        result.put("justification", justification);
+
+        if (rawScores.isEmpty()) {
             result.put("percentage", null);
         } else {
-            BigDecimal sum = scores.stream().reduce(BigDecimal.ZERO, BigDecimal::add);
-            BigDecimal avg = sum.divide(BigDecimal.valueOf(scores.size()), 2, java.math.RoundingMode.HALF_UP);
-            result.put("percentage", avg);
+            // Weighted formula: sections 90%/26 + checklist 5%/6 + opinion 5%/5
+            List<BigDecimal> percentages = familyEvals.stream()
+                .map(this::calculateFamilyInterviewPercentage)
+                .filter(p -> p != null)
+                .toList();
+
+            if (percentages.isEmpty()) {
+                result.put("percentage", null);
+            } else {
+                BigDecimal sum = percentages.stream().reduce(BigDecimal.ZERO, BigDecimal::add);
+                BigDecimal avg = sum.divide(BigDecimal.valueOf(percentages.size()), 2, java.math.RoundingMode.HALF_UP);
+                result.put("percentage", avg);
+            }
         }
         return result;
+    }
+
+    private BigDecimal calculateFamilyInterviewPercentage(EvaluationEntity evaluation) {
+        if (evaluation.getInterviewData() == null || evaluation.getInterviewData().isBlank()) {
+            return null;
+        }
+        try {
+            Map<String, Object> data = jsonSupport.readMap(evaluation.getInterviewData());
+            FamilyInterviewComponents components = extractFamilyInterviewComponents(data);
+
+            BigDecimal sectionsScore = components.sections;
+            BigDecimal checklistScore = components.checklist;
+            BigDecimal opinionScore = components.opinion;
+
+            // Weighted formula: (sections/26)*0.9 + (checklist/6)*0.05 + (opinion/5)*0.05) * 100
+            BigDecimal sectionsContribution = sectionsScore.divide(BigDecimal.valueOf(26), 6, java.math.RoundingMode.HALF_UP)
+                .multiply(BigDecimal.valueOf(0.9));
+            BigDecimal checklistContribution = checklistScore.divide(BigDecimal.valueOf(6), 6, java.math.RoundingMode.HALF_UP)
+                .multiply(BigDecimal.valueOf(0.05));
+            BigDecimal opinionContribution = opinionScore.divide(BigDecimal.valueOf(5), 6, java.math.RoundingMode.HALF_UP)
+                .multiply(BigDecimal.valueOf(0.05));
+
+            BigDecimal percentage = sectionsContribution.add(checklistContribution).add(opinionContribution)
+                .multiply(BigDecimal.valueOf(100))
+                .setScale(2, java.math.RoundingMode.HALF_UP);
+
+            return percentage;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private FamilyInterviewComponents extractFamilyInterviewComponents(Map<String, Object> data) {
+        BigDecimal sections = BigDecimal.ZERO;
+        BigDecimal checklist = BigDecimal.ZERO;
+        BigDecimal opinion = BigDecimal.ZERO;
+
+        // Extract sections 1-4 scores
+        for (int i = 1; i <= 4; i++) {
+            Object section = data.get("section" + i);
+            if (section instanceof Map<?, ?> sectionMap) {
+                sections = sections.add(extractScoreFromSection(sectionMap));
+            }
+        }
+
+        // Extract observations/checklist and overall opinion
+        Object observations = data.get("observations");
+        if (observations instanceof Map<?, ?> obsMap) {
+            Object checklistObj = obsMap.get("checklist");
+            if (checklistObj instanceof Map<?, ?> checklistMap) {
+                for (Object value : checklistMap.values()) {
+                    if (value instanceof Boolean bool && bool) {
+                        checklist = checklist.add(BigDecimal.ONE);
+                    }
+                }
+            }
+            Object opinionObj = obsMap.get("overallOpinion");
+            if (opinionObj instanceof Map<?, ?> opinionMap) {
+                Object score = opinionMap.get("score");
+                if (score instanceof Number num) {
+                    opinion = BigDecimal.valueOf(num.doubleValue());
+                }
+            }
+        }
+
+        return new FamilyInterviewComponents(sections, checklist, opinion);
+    }
+
+    private BigDecimal extractScoreFromSection(Map<?, ?> sectionMap) {
+        BigDecimal sum = BigDecimal.ZERO;
+        for (Object value : sectionMap.values()) {
+            if (value instanceof Map<?, ?> questionMap) {
+                Object score = questionMap.get("score");
+                if (score instanceof Number num) {
+                    sum = sum.add(BigDecimal.valueOf(num.doubleValue()));
+                }
+            }
+        }
+        return sum;
+    }
+
+    private record FamilyInterviewComponents(BigDecimal sections, BigDecimal checklist, BigDecimal opinion) {}
+
+    private String extractJustification(List<EvaluationEntity> evaluations) {
+        for (EvaluationEntity eval : evaluations) {
+            if (eval.getInterviewData() != null && !eval.getInterviewData().isBlank()) {
+                try {
+                    Map<String, Object> data = jsonSupport.readMap(eval.getInterviewData());
+                    Object observations = data.get("observations");
+                    if (observations instanceof Map<?, ?> obsMap) {
+                        Object justification = obsMap.get("justification");
+                        if (justification instanceof String text && !text.isBlank()) {
+                            return text;
+                        }
+                    }
+                } catch (Exception e) {
+                    // continue to next evaluation
+                }
+            }
+        }
+        return null;
     }
 
     private String cycleDirectorDecision(Long applicationId) {
