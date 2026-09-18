@@ -47,7 +47,8 @@ public class PrekinderReportService {
         ReportHeader header = header(reportId);
         List<CriterionView> criteria = jdbc.query("""
             SELECT c.criterion_id, c.code, c.name, c.descriptor, c.position,
-                   r.response_id, r.selected_option_id, r.not_observed, r.observed_value, coalesce(r.version, 0) AS response_version
+                   r.response_id, r.selected_option_id, r.not_observed, r.observation_state,
+                   r.observed_value, coalesce(r.version, 0) AS response_version
               FROM evaluation_criteria c
               LEFT JOIN evaluator_report_responses r ON r.criterion_id = c.criterion_id AND r.report_id = :reportId
              WHERE c.evaluation_template_version_id = :templateVersionId
@@ -63,13 +64,20 @@ public class PrekinderReportService {
                 return new CriterionView(criterionId, rs.getString("code"), rs.getString("name"),
                     rs.getString("descriptor"), rs.getInt("position"), options,
                     rs.getObject("response_id", UUID.class), rs.getObject("selected_option_id", UUID.class),
-                    rs.getBoolean("not_observed"), rs.getBigDecimal("observed_value"), rs.getLong("response_version"));
+                    rs.getBoolean("not_observed"), rs.getString("observation_state"),
+                    rs.getBigDecimal("observed_value"), rs.getLong("response_version"));
             });
         NoteView note = note(reportId);
         return new ReportView(header, editable(header, Instant.now()), criteria, note);
     }
 
     public ReportView saveResponse(UUID reportId, UUID criterionId, UUID optionId, boolean notObserved,
+                                   long expectedVersion, UUID operationId) {
+        return saveResponse(reportId, criterionId, optionId,
+            notObserved ? "NOT_OBSERVED" : "OBSERVED", expectedVersion, operationId);
+    }
+
+    public ReportView saveResponse(UUID reportId, UUID criterionId, UUID optionId, String observationState,
                                    long expectedVersion, UUID operationId) {
         PrekinderActor actor = access.requireEvaluator();
         assertReportAccess(reportId, actor);
@@ -79,27 +87,34 @@ public class PrekinderReportService {
             Long duplicate = jdbc.queryForObject("SELECT count(*) FROM evaluator_report_responses WHERE operation_id = :id",
                 Map.of("id", operationId), Long.class);
             if (duplicate != null && duplicate > 0) return report(reportId);
+            String normalizedState = observationState == null ? "OBSERVED" : observationState.trim().toUpperCase();
+            if (!List.of("OBSERVED", "NOT_OBSERVED", "NOT_APPLICABLE", "PENDING").contains(normalizedState))
+                throw new IllegalArgumentException("Estado de observación inválido");
+            boolean notObserved = !"OBSERVED".equals(normalizedState);
+            UUID effectiveOptionId = "OBSERVED".equals(normalizedState) ? optionId : null;
             BigDecimal value = null;
-            if (!notObserved) {
-                if (optionId == null) throw new IllegalArgumentException("Selecciona una alternativa");
+            if ("OBSERVED".equals(normalizedState)) {
+                if (effectiveOptionId == null) throw new IllegalArgumentException("Selecciona una alternativa");
                 List<BigDecimal> values = jdbc.queryForList("""
                     SELECT o.value FROM evaluation_options o JOIN evaluation_criteria c ON c.criterion_id = o.criterion_id
                      WHERE o.option_id = :optionId AND c.criterion_id = :criterionId
                        AND c.evaluation_template_version_id = :templateVersionId
-                    """, Map.of("optionId", optionId, "criterionId", criterionId,
+                    """, Map.of("optionId", effectiveOptionId, "criterionId", criterionId,
                     "templateVersionId", header.templateVersionId()), BigDecimal.class);
                 if (values.isEmpty()) throw new IllegalArgumentException("Alternativa inválida");
                 value = values.getFirst();
             }
+            BigDecimal observedValue = value;
             if (expectedVersion == 0) {
                 try {
                     jdbc.update("""
                         INSERT INTO evaluator_report_responses(response_id, report_id, criterion_id, selected_option_id,
-                            not_observed, observed_value, operation_id)
-                        VALUES (:id, :reportId, :criterionId, :optionId, :notObserved, :value, :operationId)
+                            not_observed, observation_state, observed_value, operation_id)
+                        VALUES (:id, :reportId, :criterionId, :optionId, :notObserved, :observationState, :value, :operationId)
                         """, new MapSqlParameterSource().addValue("id", UUID.randomUUID()).addValue("reportId", reportId)
-                        .addValue("criterionId", criterionId).addValue("optionId", optionId)
-                        .addValue("notObserved", notObserved).addValue("value", value).addValue("operationId", operationId));
+                        .addValue("criterionId", criterionId).addValue("optionId", effectiveOptionId)
+                        .addValue("notObserved", notObserved).addValue("observationState", normalizedState)
+                        .addValue("value", observedValue).addValue("operationId", operationId));
                 } catch (DataIntegrityViolationException exception) {
                     throw new VersionConflictException("La respuesta cambió");
                 }
@@ -107,11 +122,13 @@ public class PrekinderReportService {
                 int updated = jdbc.update("""
                     UPDATE evaluator_report_responses SET selected_option_id = :optionId,
                         not_observed = :notObserved, observed_value = :value, operation_id = :operationId,
+                        observation_state = :observationState,
                         version = version + 1, updated_at = now()
                      WHERE report_id = :reportId AND criterion_id = :criterionId AND version = :expectedVersion
                     """, new MapSqlParameterSource().addValue("reportId", reportId).addValue("criterionId", criterionId)
-                    .addValue("optionId", optionId).addValue("notObserved", notObserved).addValue("value", value)
-                    .addValue("operationId", operationId).addValue("expectedVersion", expectedVersion));
+                    .addValue("optionId", effectiveOptionId).addValue("notObserved", notObserved).addValue("value", observedValue)
+                    .addValue("observationState", normalizedState).addValue("operationId", operationId)
+                    .addValue("expectedVersion", expectedVersion));
                 if (updated != 1) throw new VersionConflictException("La respuesta cambió");
             }
             jdbc.update("""
@@ -174,27 +191,112 @@ public class PrekinderReportService {
                 SELECT count(*) FROM evaluation_criteria c
                  WHERE c.evaluation_template_version_id = :templateVersionId AND c.required = true
                    AND NOT EXISTS (SELECT 1 FROM evaluator_report_responses r
-                                    WHERE r.report_id = :reportId AND r.criterion_id = c.criterion_id)
+                                    WHERE r.report_id = :reportId AND r.criterion_id = c.criterion_id
+                                      AND r.observation_state <> 'PENDING')
                 """, Map.of("templateVersionId", header.templateVersionId(), "reportId", reportId), Long.class);
             if (missing != null && missing > 0) {
                 throw PrekinderDomainException.conflict("REPORT_INCOMPLETE", "Completa todos los criterios antes de finalizar");
             }
-            BigDecimal score = jdbc.queryForObject("""
+            Boolean scoring = jdbc.queryForObject("""
+                SELECT coalesce(policy.scoring, false)
+                  FROM evaluator_reports report
+                  JOIN evaluation_groups group_data ON group_data.group_id = report.group_id
+                  LEFT JOIN group_instrument_assignments assignment
+                    ON assignment.assignment_id = report.instrument_assignment_id
+                  LEFT JOIN process_instrument_policies policy
+                    ON policy.process_id = group_data.process_id
+                   AND policy.instrument_code = assignment.instrument_code
+                 WHERE report.report_id = :reportId
+                """, Map.of("reportId", reportId), Boolean.class);
+            BigDecimal calculatedScore = jdbc.queryForObject("""
                 SELECT coalesce(sum(observed_value), 0) FROM evaluator_report_responses WHERE report_id = :reportId
                 """, Map.of("reportId", reportId), BigDecimal.class);
-            BigDecimal maximum = jdbc.queryForObject("""
+            BigDecimal calculatedMaximum = jdbc.queryForObject("""
                 SELECT maximum_score FROM evaluation_template_versions WHERE evaluation_template_version_id = :id
                 """, Map.of("id", header.templateVersionId()), BigDecimal.class);
+            BigDecimal score = Boolean.TRUE.equals(scoring) ? calculatedScore : null;
+            BigDecimal maximum = Boolean.TRUE.equals(scoring) ? calculatedMaximum : null;
             int updated = jdbc.update("""
-                UPDATE evaluator_reports SET status = 'COMPLETED', raw_score = :score, maximum_score = :maximum,
-                    completed_at = now(), version = version + 1, updated_at = now()
-                 WHERE report_id = :reportId AND version = :version AND status IN ('PENDING','IN_PROGRESS','REOPENED')
+                UPDATE evaluator_reports SET status = 'SUBMITTED', raw_score = :score, maximum_score = :maximum,
+                    submitted_at = now(), completed_at = now(), version = version + 1, updated_at = now()
+                 WHERE report_id = :reportId AND version = :version
+                   AND status IN ('PENDING','IN_PROGRESS','REOPENED','RETURNED')
                 """, new MapSqlParameterSource().addValue("reportId", reportId).addValue("version", expectedVersion)
                 .addValue("score", score).addValue("maximum", maximum));
             if (updated != 1) throw new VersionConflictException("El informe cambió");
-            audit(actor.id(), "REPORT_COMPLETED", reportId, Map.of());
+            audit(actor.id(), "REPORT_SUBMITTED", reportId, Map.of());
             realtime.notifyAfterCommit(actor.id(), processId(header.groupId()), "EVALUATOR_REPORT_COMPLETED");
             return report(reportId);
+        });
+    }
+
+    public ReportView markPaperCapture(UUID reportId, Instant observedAt, long expectedVersion) {
+        PrekinderActor actor = access.requireOperations();
+        if (observedAt == null || observedAt.isAfter(Instant.now()))
+            throw new IllegalArgumentException("La fecha real de aplicación es obligatoria y no puede ser futura");
+        int updated = jdbc.update("""
+            UPDATE evaluator_reports SET capture_origin = 'PAPER', observed_at = :observedAt,
+                entered_by = :actorId, second_validated_by = NULL, second_validated_at = NULL,
+                version = version + 1, updated_at = now()
+             WHERE report_id = :reportId AND version = :version
+               AND status IN ('PENDING','IN_PROGRESS','RETURNED','REOPENED')
+            """, new MapSqlParameterSource().addValue("reportId", reportId)
+            .addValue("version", expectedVersion).addValue("observedAt", Timestamp.from(observedAt))
+            .addValue("actorId", actor.id()));
+        if (updated != 1) throw new VersionConflictException("El informe cambió o ya no admite digitación manual");
+        audit(actor.id(), "REPORT_PAPER_CAPTURE_DECLARED", reportId, Map.of("observedAt", observedAt.toString()));
+        return reportForReview(reportId);
+    }
+
+    public ReportView review(UUID reportId, String decision, String reason, long expectedVersion) {
+        PrekinderActor actor = access.requireAdmin();
+        String normalized = decision == null ? "" : decision.trim().toUpperCase();
+        if (!List.of("VALIDATED", "RETURNED").contains(normalized))
+            throw new IllegalArgumentException("La revisión debe ser VALIDATED o RETURNED");
+        if ("RETURNED".equals(normalized) && (reason == null || reason.isBlank()))
+            throw new IllegalArgumentException("La devolución requiere un motivo");
+        return transactions.execute(status -> {
+            ReportHeader header = header(reportId);
+            Map<String, Object> capture = jdbc.queryForMap("""
+                SELECT capture_origin, entered_by FROM evaluator_reports WHERE report_id = :reportId
+                """, Map.of("reportId", reportId));
+            if ("VALIDATED".equals(normalized) && "PAPER".equals(capture.get("capture_origin"))
+                && actor.id().equals(capture.get("entered_by")))
+                throw PrekinderDomainException.conflict("SECOND_VALIDATION_REQUIRED",
+                    "La digitación desde papel debe ser validada por una persona distinta");
+            EncryptedPayload encrypted = reason == null || reason.isBlank() ? null
+                : encryption.encrypt(reason.trim(), "prekinder|report-review|" + reportId + "|" + expectedVersion);
+            MapSqlParameterSource review = new MapSqlParameterSource()
+                .addValue("id", UUID.randomUUID()).addValue("reportId", reportId)
+                .addValue("decision", normalized).addValue("actorId", actor.id())
+                .addValue("ciphertext", encrypted == null ? null : encrypted.ciphertext())
+                .addValue("iv", encrypted == null ? null : encrypted.iv())
+                .addValue("wrappedDek", encrypted == null ? null : encrypted.wrappedDek())
+                .addValue("wrappedDekIv", encrypted == null ? null : encrypted.wrappedDekIv())
+                .addValue("keyVersion", encrypted == null ? null : encrypted.keyVersion());
+            int updated = jdbc.update("""
+                UPDATE evaluator_reports SET status = :decision,
+                    validated_at = CASE WHEN :decision = 'VALIDATED' THEN now() ELSE NULL END,
+                    validated_by = CASE WHEN :decision = 'VALIDATED' THEN :actorId ELSE NULL END,
+                    returned_at = CASE WHEN :decision = 'RETURNED' THEN now() ELSE NULL END,
+                    second_validated_by = CASE WHEN :decision = 'VALIDATED' AND capture_origin = 'PAPER'
+                        THEN :actorId ELSE second_validated_by END,
+                    second_validated_at = CASE WHEN :decision = 'VALIDATED' AND capture_origin = 'PAPER'
+                        THEN now() ELSE second_validated_at END,
+                    version = version + 1, updated_at = now()
+                 WHERE report_id = :reportId AND version = :version AND status = 'SUBMITTED'
+                """, new MapSqlParameterSource().addValue("decision", normalized).addValue("actorId", actor.id())
+                .addValue("reportId", reportId).addValue("version", expectedVersion));
+            if (updated != 1) throw new VersionConflictException("El informe cambió o no está enviado");
+            jdbc.update("""
+                INSERT INTO evaluator_report_reviews(review_id, report_id, decision, reason_ciphertext,
+                    reason_iv, reason_wrapped_dek, reason_wrapped_dek_iv, reason_key_version, reviewed_by)
+                VALUES (:id, :reportId, :decision, :ciphertext, :iv, :wrappedDek, :wrappedDekIv,
+                    :keyVersion, :actorId)
+                """, review);
+            audit(actor.id(), "REPORT_" + normalized, reportId, Map.of());
+            realtime.notifyAfterCommit(header.evaluatorId(), processId(header.groupId()), "EVALUATOR_REPORT_" + normalized);
+            return reportForAdmin(reportId);
         });
     }
 
@@ -211,7 +313,7 @@ public class PrekinderReportService {
             """, encryptedValues(payload).addValue("id", UUID.randomUUID()).addValue("reportId", reportId)
             .addValue("validUntil", Timestamp.from(validUntil)).addValue("actorId", actor.id()));
         jdbc.update("""
-            UPDATE evaluator_reports SET status = CASE WHEN status IN ('COMPLETED','LOCKED') THEN 'REOPENED' ELSE status END,
+            UPDATE evaluator_reports SET status = CASE WHEN status IN ('VALIDATED','LOCKED') THEN 'REOPENED' ELSE status END,
                 version = version + 1, updated_at = now() WHERE report_id = :id
             """, Map.of("id", reportId));
         audit(actor.id(), "REPORT_EXTENDED", reportId, Map.of("validUntil", validUntil.toString()));
@@ -223,10 +325,15 @@ public class PrekinderReportService {
 
     public ReportView reportForAdmin(UUID reportId) {
         access.requireAdmin();
+        return reportForReview(reportId);
+    }
+
+    private ReportView reportForReview(UUID reportId) {
         ReportHeader header = header(reportId);
         List<CriterionView> criteria = jdbc.query("""
             SELECT c.criterion_id, c.code, c.name, c.descriptor, c.position,
-                   r.response_id, r.selected_option_id, r.not_observed, r.observed_value, coalesce(r.version, 0) AS response_version
+                   r.response_id, r.selected_option_id, r.not_observed, r.observation_state,
+                   r.observed_value, coalesce(r.version, 0) AS response_version
               FROM evaluation_criteria c LEFT JOIN evaluator_report_responses r
                 ON r.criterion_id = c.criterion_id AND r.report_id = :reportId
              WHERE c.evaluation_template_version_id = :templateVersionId ORDER BY c.position
@@ -234,7 +341,7 @@ public class PrekinderReportService {
                 new CriterionView(rs.getObject("criterion_id", UUID.class), rs.getString("code"), rs.getString("name"),
                     rs.getString("descriptor"), rs.getInt("position"), List.of(), rs.getObject("response_id", UUID.class),
                     rs.getObject("selected_option_id", UUID.class), rs.getBoolean("not_observed"),
-                    rs.getBigDecimal("observed_value"), rs.getLong("response_version")));
+                    rs.getString("observation_state"), rs.getBigDecimal("observed_value"), rs.getLong("response_version")));
         return new ReportView(header, editable(header, Instant.now()), criteria, note(reportId));
     }
 
@@ -304,13 +411,16 @@ public class PrekinderReportService {
     }
 
     private void assertEditable(ReportHeader header) {
-        if (header.status().equals("COMPLETED")) throw PrekinderDomainException.conflict("REPORT_COMPLETED", "El informe ya fue finalizado");
+        if (List.of("SUBMITTED", "VALIDATED", "LOCKED", "COMPLETED").contains(header.status()))
+            throw PrekinderDomainException.conflict("REPORT_LOCKED", "El informe está enviado o validado");
         if (!editable(header, Instant.now())) {
             throw PrekinderDomainException.forbidden("EDIT_WINDOW_CLOSED", "La ventana de edición está cerrada");
         }
     }
 
     private boolean editable(ReportHeader header, Instant now) {
+        if (!List.of("PENDING", "IN_PROGRESS", "REOPENED", "RETURNED").contains(header.status())) return false;
+        if (List.of("REOPENED", "RETURNED").contains(header.status())) return true;
         if (!now.isBefore(header.startsAt().minus(Duration.ofMinutes(3)))
                 && !now.isAfter(header.endsAt().plus(Duration.ofMinutes(10)))) return true;
         Long extensions = jdbc.queryForObject("""
@@ -345,7 +455,8 @@ public class PrekinderReportService {
     public record OptionView(UUID optionId, BigDecimal value, String label, String descriptor, int position) {}
     public record CriterionView(UUID criterionId, String code, String name, String descriptor, int position,
                                 List<OptionView> options, UUID responseId, UUID selectedOptionId,
-                                boolean notObserved, BigDecimal observedValue, long responseVersion) {}
+                                boolean notObserved, String observationState,
+                                BigDecimal observedValue, long responseVersion) {}
     public record NoteView(UUID noteId, String content, long version) {}
     public record ReportView(ReportHeader header, boolean editableNow, List<CriterionView> criteria, NoteView note) {}
 }

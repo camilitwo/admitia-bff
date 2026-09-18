@@ -54,6 +54,7 @@ public class PrekinderPublicationWorker {
         due.forEach(this::publishBatch);
         dispatchPendingEmails();
         dispatchScheduleEmails();
+        dispatchWaitlistPromotions();
     }
 
     private void publishBatch(UUID batchId) {
@@ -84,6 +85,7 @@ public class PrekinderPublicationWorker {
                      WHERE application_id = :id
                     """, Map.of("id", applicationId, "status", applicationStatus(decision)));
                 if ("ACCEPTED".equals(decision)) createOffer(applicationId);
+                if ("WAITLIST".equals(decision)) createWaitlistEntry(applicationId);
                 String template = Boolean.TRUE.equals(item.get("rectification"))
                     ? "PREKINDER_RESULT_RECTIFICATION" : "PREKINDER_RESULT";
                 jdbc.update("""
@@ -209,6 +211,49 @@ public class PrekinderPublicationWorker {
         for (Map<String, Object> intent : intents) dispatchSchedule(intent);
     }
 
+    private void dispatchWaitlistPromotions() {
+        List<Map<String, Object>> intents = jdbc.queryForList("""
+            SELECT notification.notification_id, notification.application_id,
+                   application.applicant_id, application.process_id,
+                   applicant.identity_ciphertext, applicant.identity_iv, applicant.identity_wrapped_dek,
+                   applicant.identity_wrapped_dek_iv, applicant.identity_key_version,
+                   process.name AS process_name
+              FROM notification_intents notification
+              JOIN applications application ON application.application_id = notification.application_id
+              JOIN applicants applicant ON applicant.applicant_id = application.applicant_id
+              JOIN admission_processes process ON process.process_id = application.process_id
+             WHERE notification.template_code = 'PREKINDER_WAITLIST_PROMOTED'
+               AND notification.status IN ('PENDING','FAILED') AND notification.attempts < 5
+               AND coalesce(notification.next_attempt_at, now()) <= now()
+             ORDER BY notification.created_at LIMIT 25
+            """, Map.of());
+        for (Map<String, Object> row : intents) {
+            UUID notificationId = (UUID) row.get("notification_id");
+            try {
+                UUID applicationId = (UUID) row.get("application_id");
+                UUID applicantId = (UUID) row.get("applicant_id");
+                String plaintext = encryption.decrypt(new EncryptedPayload(String.valueOf(row.get("identity_ciphertext")),
+                    String.valueOf(row.get("identity_iv")), String.valueOf(row.get("identity_wrapped_dek")),
+                    String.valueOf(row.get("identity_wrapped_dek_iv")), String.valueOf(row.get("identity_key_version"))),
+                    "prekinder|applicants|" + applicantId + "|application:" + applicationId + "|identity");
+                @SuppressWarnings("unchecked")
+                Map<String, Object> identity = mapper.readValue(plaintext, Map.class);
+                Set<String> recipients = parentEmails(identity);
+                if (recipients.isEmpty()) throw new IllegalStateException("RECIPIENT_MISSING");
+                CommunicationContent content = communicationSnapshot(null, (UUID) row.get("process_id"), "WAITLIST_PROMOTED");
+                String name = applicantName(identity);
+                String processName = escapeHtml(String.valueOf(row.get("process_name")));
+                String subject = PrekinderCommunicationTemplateService.render(content.subject(), name, processName, portalUrl, "");
+                String body = PrekinderCommunicationTemplateService.render(content.bodyHtml(), name, processName, portalUrl, "");
+                if (!mockMode) for (String recipient : recipients) sender.send(recipient, subject, body);
+                markSent(notificationId);
+            } catch (Exception exception) {
+                markFailed(notificationId);
+                log.warn("Falló promoción de lista de espera notificationId={} code=WAITLIST_EMAIL_FAILED", notificationId);
+            }
+        }
+    }
+
     private void dispatchSchedule(Map<String, Object> row) {
         UUID notificationId = (UUID) row.get("notification_id");
         try {
@@ -293,23 +338,74 @@ public class PrekinderPublicationWorker {
 
     private static String applicationStatus(String decision) {
         return switch (decision) {
-            case "ACCEPTED" -> "ACCEPTED";
+            case "ACCEPTED" -> "OFFERED";
             case "WAITLIST" -> "WAITLISTED";
             default -> "NOT_ADMITTED";
         };
     }
 
     private void createOffer(UUID applicationId) {
+        List<Map<String, Object>> seats = jdbc.queryForList("""
+            UPDATE seat_ledger seat
+               SET status = 'RESERVED', application_id = :applicationId,
+                   reserved_until = now() + config.initial_offer_hours * interval '1 hour',
+                   version = seat.version + 1, updated_at = now()
+              FROM applications application
+              JOIN prekinder_process_configuration config ON config.process_id = application.process_id
+             WHERE application.application_id = :applicationId
+               AND seat.seat_id = (
+                   SELECT candidate.seat_id FROM seat_ledger candidate
+                    WHERE candidate.process_id = application.process_id
+                      AND candidate.sex = application.applicant_sex
+                      AND candidate.status = 'AVAILABLE'
+                    ORDER BY candidate.seat_number
+                    FOR UPDATE SKIP LOCKED LIMIT 1
+               )
+            RETURNING seat.seat_id, seat.reserved_until
+            """, Map.of("applicationId", applicationId));
+        if (seats.isEmpty()) throw PrekinderDomainException.conflict("NO_SEAT_AVAILABLE",
+            "No existe un cupo disponible para el sexo registrado");
         UUID offerId = UUID.randomUUID();
         int inserted = jdbc.update("""
-            INSERT INTO offers(offer_id, application_id, status, expires_at)
-            VALUES (:id, :applicationId, 'OFFERED', now() + interval '7 days')
+            INSERT INTO offers(offer_id, application_id, status, expires_at, offer_source, seat_id)
+            VALUES (:id, :applicationId, 'OFFERED', :expiresAt, 'INITIAL', :seatId)
             ON CONFLICT (application_id) WHERE status = 'OFFERED' DO NOTHING
-            """, Map.of("id", offerId, "applicationId", applicationId));
+            """, Map.of("id", offerId, "applicationId", applicationId,
+                "expiresAt", seats.getFirst().get("reserved_until"), "seatId", seats.getFirst().get("seat_id")));
+        if (inserted != 1) {
+            jdbc.update("""
+                UPDATE seat_ledger SET status = 'AVAILABLE', application_id = NULL,
+                    reserved_until = NULL, version = version + 1, updated_at = now()
+                 WHERE seat_id = :id AND application_id = :applicationId
+                """, Map.of("id", seats.getFirst().get("seat_id"), "applicationId", applicationId));
+        }
         if (inserted == 1) jdbc.update("""
             INSERT INTO offer_status_history(offer_history_id, offer_id, to_status, reason_code)
-            VALUES (:id, :offerId, 'OFFERED', 'RESULT_PUBLISHED')
+            VALUES (:id, :offerId, 'OFFERED', 'INITIAL_EMAIL_OFFER_CREATED')
             """, Map.of("id", UUID.randomUUID(), "offerId", offerId));
+    }
+
+    private void createWaitlistEntry(UUID applicationId) {
+        int inserted = jdbc.update("""
+            INSERT INTO waitlist_entries(entry_id, application_id, process_id, sex, score,
+                segment_priority, formal_submitted_at, folio)
+            SELECT :id, application.application_id, application.process_id, application.applicant_sex,
+                   score.integral_result,
+                   CASE application.eligibility_category WHEN 'STAFF_OR_ALUMNI' THEN 1 ELSE 2 END,
+                   application.formal_submitted_at, application.folio
+              FROM applications application
+              JOIN LATERAL (
+                  SELECT snapshot.integral_result FROM application_score_snapshots snapshot
+                   WHERE snapshot.application_id = application.application_id
+                   ORDER BY snapshot.snapshot_version DESC LIMIT 1
+              ) score ON true
+             WHERE application.application_id = :applicationId
+               AND application.eligibility_category <> 'SIBLINGS'
+            ON CONFLICT (application_id) DO UPDATE SET status = 'ACTIVE', score = EXCLUDED.score,
+                segment_priority = EXCLUDED.segment_priority, updated_at = now()
+            """, Map.of("id", UUID.randomUUID(), "applicationId", applicationId));
+        if (inserted != 1) throw PrekinderDomainException.conflict("WAITLIST_NOT_ELIGIBLE",
+            "La postulación no puede ingresar a lista de espera");
     }
 
     private CommunicationContent communicationSnapshot(UUID versionId, UUID processId, String eventCode) {

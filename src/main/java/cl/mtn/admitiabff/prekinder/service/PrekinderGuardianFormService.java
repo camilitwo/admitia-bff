@@ -29,24 +29,27 @@ public class PrekinderGuardianFormService {
     private final PrekinderAccessService access;
     private final EnvelopeEncryptionService encryption;
     private final ObjectMapper mapper;
+    private final PrekinderApplicationStateService applicationStates;
 
     public PrekinderGuardianFormService(@Qualifier("prekinderJdbc") NamedParameterJdbcTemplate jdbc,
                                         @Qualifier("prekinderTransactionManager") PlatformTransactionManager manager,
                                         PrekinderAccessService access,
                                         EnvelopeEncryptionService encryption,
-                                        ObjectMapper mapper) {
+                                        ObjectMapper mapper,
+                                        PrekinderApplicationStateService applicationStates) {
         this.jdbc = jdbc;
         this.transactions = new TransactionTemplate(manager);
         this.access = access;
         this.encryption = encryption;
         this.mapper = mapper;
+        this.applicationStates = applicationStates;
     }
 
     public Map<String, Object> get(UUID applicationId) {
         PrekinderActor actor = access.requireActor();
         assertOwned(applicationId, actor);
         List<Map<String, Object>> forms = jdbc.query("""
-            SELECT form_id, ciphertext, iv, wrapped_dek, wrapped_dek_iv, key_version,
+            SELECT form_id, template_version_id, ciphertext, iv, wrapped_dek, wrapped_dek_iv, key_version,
                    submitted, submitted_at, version, created_at, updated_at
               FROM prekinder_complementary_forms WHERE application_id = :applicationId
             """, Map.of("applicationId", applicationId), (rs, row) -> {
@@ -54,6 +57,7 @@ public class PrekinderGuardianFormService {
                     rs.getString("wrapped_dek"), rs.getString("wrapped_dek_iv"), rs.getString("key_version")));
                 data.put("id", rs.getObject("form_id", UUID.class));
                 data.put("applicationId", applicationId);
+                data.put("templateVersionId", rs.getObject("template_version_id", UUID.class));
                 data.put("isSubmitted", rs.getBoolean("submitted"));
                 data.put("submittedAt", instant(rs.getTimestamp("submitted_at")));
                 data.put("version", rs.getLong("version"));
@@ -75,22 +79,29 @@ public class PrekinderGuardianFormService {
             }
             ExistingForm existing = existing(applicationId);
             if (existing != null && existing.submitted()) {
-                throw new ResponseStatusException(HttpStatus.CONFLICT, "El formulario complementario ya fue enviado");
+                validateCorrectionScope(applicationId, payload);
             }
             boolean submitted = Boolean.parseBoolean(String.valueOf(payload.getOrDefault("isSubmitted", false)));
             UUID formId = existing == null ? UUID.randomUUID() : existing.formId();
+            UUID templateVersionId = existing == null ? publishedTemplateVersion(applicationId) : null;
             EncryptedPayload encrypted = encrypt(applicationId, payload);
             jdbc.update("""
-                INSERT INTO prekinder_complementary_forms(form_id, application_id, ciphertext, iv, wrapped_dek,
+                INSERT INTO prekinder_complementary_forms(form_id, application_id, template_version_id, ciphertext, iv, wrapped_dek,
                     wrapped_dek_iv, key_version, submitted, submitted_at)
-                VALUES (:formId, :applicationId, :ciphertext, :iv, :wrappedDek, :wrappedDekIv, :keyVersion,
+                VALUES (:formId, :applicationId, :templateVersionId, :ciphertext, :iv, :wrappedDek, :wrappedDekIv, :keyVersion,
                     :submitted, :submittedAt)
                 ON CONFLICT (application_id) DO UPDATE SET ciphertext = EXCLUDED.ciphertext, iv = EXCLUDED.iv,
                     wrapped_dek = EXCLUDED.wrapped_dek, wrapped_dek_iv = EXCLUDED.wrapped_dek_iv,
                     key_version = EXCLUDED.key_version, submitted = EXCLUDED.submitted,
                     submitted_at = EXCLUDED.submitted_at, version = prekinder_complementary_forms.version + 1,
                     updated_at = now()
-                """, encryptedValues(formId, applicationId, encrypted, submitted));
+                """, encryptedValues(formId, applicationId, encrypted, submitted)
+                    .addValue("templateVersionId", templateVersionId));
+            if (submitted) jdbc.update("""
+                UPDATE application_correction_requests SET status = 'COMPLETED', completed_at = now()
+                 WHERE application_id = :id AND status = 'OPEN'
+                """, Map.of("id", applicationId));
+            applicationStates.refresh(applicationId, actor.id());
             return get(applicationId);
         });
     }
@@ -111,6 +122,48 @@ public class PrekinderGuardianFormService {
         List<ExistingForm> rows = jdbc.query("SELECT form_id, submitted FROM prekinder_complementary_forms WHERE application_id = :id FOR UPDATE",
             Map.of("id", applicationId), (rs, row) -> new ExistingForm(rs.getObject("form_id", UUID.class), rs.getBoolean("submitted")));
         return rows.isEmpty() ? null : rows.get(0);
+    }
+
+    private UUID publishedTemplateVersion(UUID applicationId) {
+        List<UUID> versions = jdbc.queryForList("""
+            SELECT version.template_version_id
+              FROM applications application
+              JOIN form_templates template ON template.process_id = application.process_id
+              JOIN form_template_versions version ON version.template_id = template.template_id
+             WHERE application.application_id = :id AND template.code = 'COMPLEMENTARY_FORM'
+               AND version.status = 'PUBLISHED'
+             ORDER BY version.version DESC LIMIT 1
+            """, Map.of("id", applicationId), UUID.class);
+        if (versions.isEmpty()) throw PrekinderDomainException.conflict("QUESTIONNAIRE_NOT_PUBLISHED",
+            "El cuestionario Prekínder aún no está publicado");
+        return versions.getFirst();
+    }
+
+    private void validateCorrectionScope(UUID applicationId, Map<String, Object> next) {
+        List<String> allowed = jdbc.query("""
+            SELECT field FROM application_correction_requests request,
+                 LATERAL jsonb_array_elements_text(request.allowed_fields) field
+             WHERE request.application_id = :id AND request.status = 'OPEN'
+            """, Map.of("id", applicationId), (rs, row) -> rs.getString(1));
+        if (allowed.isEmpty())
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "El formulario complementario ya fue enviado");
+        Map<String, Object> current = jdbc.queryForObject("""
+            SELECT ciphertext, iv, wrapped_dek, wrapped_dek_iv, key_version
+              FROM prekinder_complementary_forms WHERE application_id = :id
+            """, Map.of("id", applicationId), (rs, row) -> decrypt(applicationId, new EncryptedPayload(
+            rs.getString("ciphertext"), rs.getString("iv"), rs.getString("wrapped_dek"),
+            rs.getString("wrapped_dek_iv"), rs.getString("key_version"))));
+        java.util.Set<String> allowedSet = new java.util.HashSet<>(allowed);
+        java.util.Set<String> keys = new java.util.HashSet<>(current.keySet());
+        keys.addAll(next.keySet());
+        keys.remove("isSubmitted");
+        for (String key : keys) {
+            if (!java.util.Objects.equals(mapper.valueToTree(current.get(key)), mapper.valueToTree(next.get(key)))
+                && !allowedSet.contains(key)) {
+                throw new ResponseStatusException(HttpStatus.FORBIDDEN,
+                    "El campo " + key + " no fue habilitado para corrección");
+            }
+        }
     }
 
     private EncryptedPayload encrypt(UUID applicationId, Map<String, Object> payload) {

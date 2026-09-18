@@ -4,7 +4,9 @@ import cl.mtn.admitiabff.prekinder.config.PrekinderPaymentProperties;
 import cl.mtn.admitiabff.prekinder.crypto.EncryptedPayload;
 import cl.mtn.admitiabff.prekinder.crypto.EnvelopeEncryptionService;
 import cl.mtn.admitiabff.prekinder.domain.PrekinderActor;
+import cl.mtn.admitiabff.prekinder.domain.PrekinderPolicyCodes;
 import cl.mtn.admitiabff.prekinder.service.PrekinderAccessService;
+import cl.mtn.admitiabff.prekinder.service.PrekinderApplicationStateService;
 import cl.mtn.admitiabff.service.payments.MtnAdmissionDtos.AdmissionRequest;
 import cl.mtn.admitiabff.service.payments.MtnAdmissionDtos.AdmissionResponse;
 import cl.mtn.admitiabff.service.payments.MtnAdmissionDtos.ChargeRequest;
@@ -56,6 +58,7 @@ public class PrekinderPaymentService {
     private final MtnAdmissionProperties admissionProperties;
     private final PrekinderPaymentProperties paymentProperties;
     private final ZoneId providerZone;
+    private final PrekinderApplicationStateService applicationStates;
 
     public PrekinderPaymentService(@Qualifier("prekinderJdbc") NamedParameterJdbcTemplate jdbc,
                                    @Qualifier("prekinderTransactionManager") PlatformTransactionManager manager,
@@ -64,7 +67,8 @@ public class PrekinderPaymentService {
                                    ObjectMapper mapper,
                                    MtnAdmissionGateway admissionGateway,
                                    MtnAdmissionProperties admissionProperties,
-                                   PrekinderPaymentProperties paymentProperties) {
+                                   PrekinderPaymentProperties paymentProperties,
+                                   PrekinderApplicationStateService applicationStates) {
         this.jdbc = jdbc;
         this.transactions = new TransactionTemplate(manager);
         this.access = access;
@@ -73,6 +77,7 @@ public class PrekinderPaymentService {
         this.admissionGateway = admissionGateway;
         this.admissionProperties = admissionProperties;
         this.paymentProperties = paymentProperties;
+        this.applicationStates = applicationStates;
         this.providerZone = ZoneId.of(blank(admissionProperties.providerZone()) ? "America/Santiago" : admissionProperties.providerZone());
     }
 
@@ -90,11 +95,34 @@ public class PrekinderPaymentService {
         }
     }
 
+    public Map<String, Object> incorporationCheckout(UUID applicationId) {
+        if (!paymentProperties.enabled())
+            throw PaymentIntegrationException.unavailable("Los pagos de Prekínder no están habilitados");
+        admissionProperties.validateConnectionForUse();
+        PrekinderActor actor = access.requireActor();
+        try {
+            return transactions.execute(status -> incorporationCheckoutInTransaction(loadOwned(applicationId, actor, true), actor));
+        } catch (PaymentIntegrationException exception) {
+            throw exception;
+        }
+    }
+
+    public Map<String, Object> incorporationStatus(UUID applicationId) {
+        PrekinderActor actor = access.requireActor();
+        return transactions.execute(transaction -> {
+            ApplicationData application = loadOwned(applicationId, actor, true);
+            PaymentData payment = latestPayment(applicationId, PrekinderPolicyCodes.PAYMENT_INCORPORATION);
+            if (payment != null && "PAYMENT_PENDING".equals(payment.status()) && payment.chargeId() != null)
+                payment = reconcile(application, payment);
+            return wrap(response(applicationId, application, payment, application.incorporationConfiguration()));
+        });
+    }
+
     public Map<String, Object> status(UUID applicationId) {
         PrekinderActor actor = access.requireActor();
         return transactions.execute(transaction -> {
             ApplicationData application = loadOwned(applicationId, actor, true);
-            PaymentData payment = latestPayment(applicationId);
+            PaymentData payment = latestPayment(applicationId, PrekinderPolicyCodes.PAYMENT_APPLICATION);
             if (payment != null && "PAYMENT_PENDING".equals(payment.status()) && payment.chargeId() != null) {
                 payment = reconcile(application, payment);
             }
@@ -103,7 +131,7 @@ public class PrekinderPaymentService {
     }
 
     private Map<String, Object> checkoutInTransaction(ApplicationData application, PrekinderActor actor) {
-        PaymentData payment = latestPayment(application.applicationId());
+        PaymentData payment = latestPayment(application.applicationId(), PrekinderPolicyCodes.PAYMENT_APPLICATION);
         if (!application.paymentRequired() || "PAID".equals(application.paymentStatus())) {
             return wrap(response(application.applicationId(), application, payment));
         }
@@ -120,7 +148,7 @@ public class PrekinderPaymentService {
         Instant expiresAt = LocalDate.now(providerZone).plusDays(application.paymentConfiguration().dueDays())
             .atStartOfDay(providerZone).toInstant();
         upsertPendingPayment(paymentId, application.applicationId(), actor.id(), idempotencyKey, expiresAt,
-            application.paymentConfiguration());
+            application.paymentConfiguration(), PrekinderPolicyCodes.PAYMENT_APPLICATION);
         jdbc.update("UPDATE applications SET payment_status = 'PAYMENT_PENDING', updated_at = now() WHERE application_id = :id",
             Map.of("id", application.applicationId()));
         audit(paymentId, "checkout.requested", Map.of("applicationId", application.applicationId(), "reference", idempotencyKey));
@@ -143,9 +171,49 @@ public class PrekinderPaymentService {
             .addValue("checkoutUrl", chargeResponse.paymentLink()).addValue("externalStatus", upper(chargeResponse.paymentStatus())));
         audit(paymentId, "charge.created", Map.of("chargeId", chargeResponse.chargeId(), "amount", chargeResponse.amount(),
             "currency", chargeResponse.currency()));
-        PaymentData created = latestPayment(application.applicationId());
+        PaymentData created = latestPayment(application.applicationId(), PrekinderPolicyCodes.PAYMENT_APPLICATION);
         if ("PAGADO".equalsIgnoreCase(chargeResponse.paymentStatus())) created = reconcile(application, created);
         return wrap(response(application.applicationId(), reloadPaymentState(application), created));
+    }
+
+    private Map<String, Object> incorporationCheckoutInTransaction(ApplicationData application, PrekinderActor actor) {
+        if (!"PENDING_ENROLLMENT_PAYMENT".equals(application.applicationStatus()))
+            throw PaymentIntegrationException.invalidData("La postulación no tiene una oferta aceptada pendiente de matrícula");
+        if (application.offerExpiresAt() == null || !application.offerExpiresAt().isAfter(Instant.now()))
+            throw PaymentIntegrationException.invalidData("El plazo de la oferta finalizó");
+        PaymentConfiguration configuration = application.incorporationConfiguration();
+        validatePaymentConfiguration(configuration);
+        validateApplication(application);
+        PaymentData payment = latestPayment(application.applicationId(), PrekinderPolicyCodes.PAYMENT_INCORPORATION);
+        if (payment != null && "PAID".equals(payment.status()))
+            return wrap(response(application.applicationId(), application, payment, configuration));
+        if (payment != null && "PAYMENT_PENDING".equals(payment.status())
+            && payment.chargeId() != null && !blank(payment.checkoutUrl())) {
+            payment = reconcile(application, payment);
+            return wrap(response(application.applicationId(), application, payment, configuration));
+        }
+        UUID paymentId = payment == null ? UUID.randomUUID() : payment.paymentId();
+        String idempotencyKey = referencePrefix() + "-INC-" + application.applicationId();
+        upsertPendingPayment(paymentId, application.applicationId(), actor.id(), idempotencyKey,
+            application.offerExpiresAt(), configuration, PrekinderPolicyCodes.PAYMENT_INCORPORATION);
+        AdmissionResponse admissionResponse = admissionGateway.synchronizeAdmission(admissionRequest(application));
+        StudentResponse studentResponse = validateAdmission(admissionResponse, admissionRequest(application));
+        persistSync(application.applicationId(), admissionResponse, studentResponse);
+        ChargeRequest chargeRequest = chargeRequest(application, idempotencyKey, configuration);
+        ChargeResponse chargeResponse = admissionGateway.createCharge(chargeRequest);
+        validateCharge(chargeResponse, admissionResponse, studentResponse, chargeRequest);
+        jdbc.update("""
+            UPDATE prekinder_payments SET institutional_charge_id = :chargeId,
+                provider_invoice_id = :invoiceId, checkout_url = :checkoutUrl,
+                external_status = :externalStatus, updated_at = now()
+             WHERE payment_id = :paymentId
+            """, new MapSqlParameterSource().addValue("paymentId", paymentId)
+            .addValue("chargeId", chargeResponse.chargeId()).addValue("invoiceId", chargeResponse.tokuInvoiceId())
+            .addValue("checkoutUrl", chargeResponse.paymentLink()).addValue("externalStatus", upper(chargeResponse.paymentStatus())));
+        audit(paymentId, "incorporation.charge.created", Map.of("chargeId", chargeResponse.chargeId()));
+        PaymentData created = latestPayment(application.applicationId(), PrekinderPolicyCodes.PAYMENT_INCORPORATION);
+        if ("PAGADO".equalsIgnoreCase(chargeResponse.paymentStatus())) created = reconcile(application, created);
+        return wrap(response(application.applicationId(), application, created, configuration));
     }
 
     private ApplicationData loadOwned(UUID applicationId, PrekinderActor actor, boolean forUpdate) {
@@ -157,13 +225,23 @@ public class PrekinderPaymentService {
                    fv.ciphertext AS form_ciphertext, fv.iv AS form_iv, fv.wrapped_dek AS form_wrapped_dek,
                    fv.wrapped_dek_iv AS form_wrapped_dek_iv, fv.key_version AS form_key_version,
                    config.payment_enabled, config.payment_amount, config.payment_currency,
-                   config.payment_glosa, config.payment_due_days
+                   config.payment_glosa, config.payment_due_days,
+                   config.incorporation_fee_amount, config.incorporation_fee_currency,
+                   config.incorporation_fee_glosa, config.initial_offer_hours,
+                   a.status AS application_status, offer.expires_at AS offer_expires_at,
+                   offer.offer_source
               FROM applications a
               JOIN applicants ap ON ap.applicant_id = a.applicant_id
               JOIN families f ON f.family_id = ap.family_id
               JOIN prekinder_process_configuration config ON config.process_id = a.process_id
               JOIN encrypted_field_values fv ON fv.aggregate_type = 'APPLICATION'
                    AND fv.aggregate_id = a.application_id AND fv.field_code = 'APPLICATION_FORM'
+              LEFT JOIN LATERAL (
+                  SELECT candidate.expires_at, candidate.offer_source
+                    FROM offers candidate WHERE candidate.application_id = a.application_id
+                      AND candidate.status IN ('OFFERED','ACCEPTED')
+                   ORDER BY candidate.created_at DESC LIMIT 1
+              ) offer ON true
              WHERE a.application_id = :applicationId AND f.external_reference = :actorReference
             """ + lock, Map.of("applicationId", applicationId, "actorReference", actor.id().toString()), (rs, row) -> {
                 UUID applicantId = rs.getObject("applicant_id", UUID.class);
@@ -176,8 +254,13 @@ public class PrekinderPaymentService {
                 PaymentConfiguration configuration = new PaymentConfiguration(rs.getBoolean("payment_enabled"),
                     rs.getBigDecimal("payment_amount"), rs.getString("payment_currency"),
                     rs.getString("payment_glosa"), rs.getInt("payment_due_days"));
+                int incorporationDueDays = Math.max(1, (int) Math.ceil(rs.getInt("initial_offer_hours") / 24.0));
+                PaymentConfiguration incorporation = new PaymentConfiguration(true,
+                    rs.getBigDecimal("incorporation_fee_amount"), rs.getString("incorporation_fee_currency"),
+                    rs.getString("incorporation_fee_glosa"), incorporationDueDays);
                 return new ApplicationData(applicationId, rs.getBoolean("payment_required"), rs.getString("payment_status"),
-                    instant(rs.getTimestamp("paid_at")), identity, details, configuration);
+                    instant(rs.getTimestamp("paid_at")), identity, details, configuration, incorporation,
+                    rs.getString("application_status"), instant(rs.getTimestamp("offer_expires_at")));
             });
         if (rows.isEmpty()) throw PaymentIntegrationException.invalidData("Postulación Prekínder no encontrada");
         return rows.get(0);
@@ -187,30 +270,32 @@ public class PrekinderPaymentService {
         return jdbc.queryForObject("SELECT payment_required, payment_status, paid_at FROM applications WHERE application_id = :id",
             Map.of("id", application.applicationId()), (rs, row) -> new ApplicationData(application.applicationId(),
                 rs.getBoolean("payment_required"), rs.getString("payment_status"), instant(rs.getTimestamp("paid_at")),
-                application.identity(), application.details(), application.paymentConfiguration()));
+                application.identity(), application.details(), application.paymentConfiguration(),
+                application.incorporationConfiguration(), application.applicationStatus(), application.offerExpiresAt()));
     }
 
-    private PaymentData latestPayment(UUID applicationId) {
+    private PaymentData latestPayment(UUID applicationId, String paymentKind) {
         List<PaymentData> rows = jdbc.query("""
             SELECT payment_id, status, institutional_charge_id, checkout_url, amount, currency,
-                   expires_at, paid_at, provider_invoice_id, external_status, last_status_checked_at
-              FROM prekinder_payments WHERE application_id = :applicationId
+                   expires_at, paid_at, provider_invoice_id, external_status, last_status_checked_at,
+                   payment_kind
+              FROM prekinder_payments WHERE application_id = :applicationId AND payment_kind = :paymentKind
              ORDER BY created_at DESC LIMIT 1
-            """, Map.of("applicationId", applicationId), (rs, row) -> new PaymentData(rs.getObject("payment_id", UUID.class),
+            """, Map.of("applicationId", applicationId, "paymentKind", paymentKind), (rs, row) -> new PaymentData(rs.getObject("payment_id", UUID.class),
                 rs.getString("status"), (Long) rs.getObject("institutional_charge_id"), rs.getString("checkout_url"),
                 rs.getBigDecimal("amount"), rs.getString("currency"), instant(rs.getTimestamp("expires_at")),
                 instant(rs.getTimestamp("paid_at")), rs.getString("provider_invoice_id"), rs.getString("external_status"),
-                instant(rs.getTimestamp("last_status_checked_at"))));
+                instant(rs.getTimestamp("last_status_checked_at")), rs.getString("payment_kind")));
         return rows.isEmpty() ? null : rows.get(0);
     }
 
     private void upsertPendingPayment(UUID paymentId, UUID applicationId, UUID actorId, String key, Instant expiresAt,
-                                      PaymentConfiguration configuration) {
+                                      PaymentConfiguration configuration, String paymentKind) {
         jdbc.update("""
             INSERT INTO prekinder_payments(payment_id, application_id, guardian_actor_id, provider, idempotency_key,
-                amount, currency, status, external_status, expires_at)
+                amount, currency, status, external_status, expires_at, payment_kind)
             VALUES (:paymentId, :applicationId, :actorId, :provider, :key, :amount, :currency,
-                'PAYMENT_PENDING', 'CREATING', :expiresAt)
+                'PAYMENT_PENDING', 'CREATING', :expiresAt, :paymentKind)
             ON CONFLICT (idempotency_key) DO UPDATE SET amount = EXCLUDED.amount, currency = EXCLUDED.currency,
                 status = 'PAYMENT_PENDING', external_status = 'CREATING', checkout_url = NULL,
                 institutional_charge_id = NULL, provider_invoice_id = NULL, provider_transaction_id = NULL,
@@ -219,7 +304,7 @@ public class PrekinderPaymentService {
             """, new MapSqlParameterSource().addValue("paymentId", paymentId).addValue("applicationId", applicationId)
             .addValue("actorId", actorId).addValue("provider", PROVIDER).addValue("key", key)
             .addValue("amount", configuration.amount()).addValue("currency", upper(configuration.currency()))
-            .addValue("expiresAt", Timestamp.from(expiresAt)));
+            .addValue("expiresAt", Timestamp.from(expiresAt)).addValue("paymentKind", paymentKind));
     }
 
     private AdmissionRequest admissionRequest(ApplicationData application) {
@@ -232,14 +317,18 @@ public class PrekinderPaymentService {
     }
 
     private ChargeRequest chargeRequest(ApplicationData application, String key) {
+        return chargeRequest(application, key, application.paymentConfiguration());
+    }
+
+    private ChargeRequest chargeRequest(ApplicationData application, String key, PaymentConfiguration configuration) {
         RutParts guardianRut = rut(application.details().guardian().rut(), "apoderado");
         RutParts studentRut = rut(application.identity().rut(), "alumno");
         return new ChargeRequest(guardianRut.body(), guardianRut.verifier(), normalizeName(application.details().guardian().fullName()),
             normalizeEmail(application.details().guardian().email()), studentRut.body(), studentRut.verifier(),
-            studentName(application.identity()), "PRE_KINDER", application.paymentConfiguration().amount(),
-            upper(application.paymentConfiguration().currency()),
-            LocalDate.now(providerZone).plusDays(application.paymentConfiguration().dueDays()).toString(),
-            application.paymentConfiguration().glosa().trim(), key);
+            studentName(application.identity()), "PRE_KINDER", configuration.amount(),
+            upper(configuration.currency()),
+            LocalDate.now(providerZone).plusDays(configuration.dueDays()).toString(),
+            configuration.glosa().trim(), key);
     }
 
     private StudentResponse validateAdmission(AdmissionResponse response, AdmissionRequest request) {
@@ -302,8 +391,38 @@ public class PrekinderPaymentService {
                 .addValue("voucher", response.voucher()).addValue("method", response.paymentMethod())
                 .addValue("externalStatus", upper(response.estado())).addValue("checkoutUrl", response.paymentLink())
                 .addValue("checkedAt", Timestamp.from(checkedAt)));
-            jdbc.update("UPDATE applications SET payment_status = 'PAID', paid_at = :paidAt, updated_at = now() WHERE application_id = :id",
-                new MapSqlParameterSource().addValue("id", application.applicationId()).addValue("paidAt", Timestamp.from(paidAt)));
+            if (PrekinderPolicyCodes.PAYMENT_INCORPORATION.equals(payment.paymentKind())) {
+                int applicationUpdated = jdbc.update("""
+                    UPDATE applications SET status = 'ENROLLED', version = version + 1, updated_at = now()
+                     WHERE application_id = :id AND status = 'PENDING_ENROLLMENT_PAYMENT'
+                    """, Map.of("id", application.applicationId()));
+                int seatUpdated = jdbc.update("""
+                    UPDATE seat_ledger SET status = 'ENROLLED', reserved_until = NULL,
+                        version = version + 1, updated_at = now()
+                     WHERE application_id = :id AND status = 'RESERVED'
+                    """, Map.of("id", application.applicationId()));
+                if (applicationUpdated != 1 || seatUpdated != 1) {
+                    throw PaymentIntegrationException.schoolValidation(
+                        "El pago fue confirmado, pero la reserva de matrícula ya no está vigente");
+                }
+                List<UUID> fulfilledOffers = jdbc.queryForList("""
+                    UPDATE offers SET status = 'FULFILLED', version = version + 1, updated_at = now()
+                     WHERE application_id = :id AND status = 'ACCEPTED'
+                    RETURNING offer_id
+                    """, Map.of("id", application.applicationId()), UUID.class);
+                if (fulfilledOffers.size() != 1) {
+                    throw PaymentIntegrationException.schoolValidation(
+                        "El pago fue confirmado, pero la oferta aceptada no está vigente");
+                }
+                jdbc.update("""
+                    INSERT INTO offer_status_history(offer_history_id, offer_id, from_status, to_status, reason_code)
+                    VALUES (:id, :offerId, 'ACCEPTED', 'FULFILLED', 'INCORPORATION_PAYMENT_CONFIRMED')
+                    """, Map.of("id", UUID.randomUUID(), "offerId", fulfilledOffers.getFirst()));
+            } else {
+                jdbc.update("UPDATE applications SET payment_status = 'PAID', paid_at = :paidAt, updated_at = now() WHERE application_id = :id",
+                    new MapSqlParameterSource().addValue("id", application.applicationId()).addValue("paidAt", Timestamp.from(paidAt)));
+                applicationStates.refresh(application.applicationId(), null);
+            }
         } else {
             jdbc.update("""
                 UPDATE prekinder_payments SET external_status = :externalStatus,
@@ -314,7 +433,7 @@ public class PrekinderPaymentService {
                 .addValue("checkedAt", Timestamp.from(checkedAt)));
         }
         audit(payment.paymentId(), "status.checked", Map.of("paid", paid, "status", upper(response.estado())));
-        return latestPayment(application.applicationId());
+        return latestPayment(application.applicationId(), payment.paymentKind());
     }
 
     private void persistSync(UUID applicationId, AdmissionResponse response, StudentResponse student) {
@@ -356,13 +475,21 @@ public class PrekinderPaymentService {
     }
 
     private Map<String, Object> response(UUID applicationId, ApplicationData application, PaymentData payment) {
+        return response(applicationId, application, payment, application.paymentConfiguration());
+    }
+
+    private Map<String, Object> response(UUID applicationId, ApplicationData application, PaymentData payment,
+                                         PaymentConfiguration configuration) {
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("applicationId", applicationId);
         data.put("source", "PREKINDER");
-        data.put("paymentRequired", application.paymentRequired());
-        data.put("paymentStatus", application.paymentStatus());
-        data.put("paidAt", application.paidAt());
+        boolean incorporation = payment != null
+            && PrekinderPolicyCodes.PAYMENT_INCORPORATION.equals(payment.paymentKind());
+        data.put("paymentRequired", incorporation || application.paymentRequired());
+        data.put("paymentStatus", incorporation ? payment.status() : application.paymentStatus());
+        data.put("paidAt", incorporation ? payment.paidAt() : application.paidAt());
         data.put("canFillComplementaryForm", !application.paymentRequired() || "PAID".equals(application.paymentStatus()));
+        data.put("paymentKind", payment == null ? null : payment.paymentKind());
         if (payment != null) {
             data.put("paymentId", payment.paymentId());
             data.put("checkoutUrl", payment.checkoutUrl());
@@ -373,8 +500,8 @@ public class PrekinderPaymentService {
             data.put("providerStatus", payment.externalStatus());
             data.put("lastStatusCheckedAt", payment.lastCheckedAt());
         } else {
-            data.put("amount", application.paymentConfiguration().amount());
-            data.put("currency", upper(application.paymentConfiguration().currency()));
+            data.put("amount", configuration.amount());
+            data.put("currency", upper(configuration.currency()));
         }
         return data;
     }
@@ -486,12 +613,14 @@ public class PrekinderPaymentService {
 
     private record ApplicationData(UUID applicationId, boolean paymentRequired, String paymentStatus, Instant paidAt,
                                    ApplicantIdentity identity, ApplicationDetails details,
-                                   PaymentConfiguration paymentConfiguration) { }
+                                   PaymentConfiguration paymentConfiguration,
+                                   PaymentConfiguration incorporationConfiguration,
+                                   String applicationStatus, Instant offerExpiresAt) { }
     private record PaymentConfiguration(boolean enabled, BigDecimal amount, String currency, String glosa,
                                         int dueDays) { }
     private record PaymentData(UUID paymentId, String status, Long chargeId, String checkoutUrl, BigDecimal amount,
                                String currency, Instant expiresAt, Instant paidAt, String invoiceId,
-                               String externalStatus, Instant lastCheckedAt) { }
+                               String externalStatus, Instant lastCheckedAt, String paymentKind) { }
     private record RutParts(String body, String verifier) { }
     @JsonIgnoreProperties(ignoreUnknown = true)
     private record ApplicantIdentity(String rut, String firstName, String paternalLastName, String maternalLastName) { }

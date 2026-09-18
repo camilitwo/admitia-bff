@@ -3,6 +3,8 @@ package cl.mtn.admitiabff.prekinder.service;
 import cl.mtn.admitiabff.prekinder.crypto.EncryptedPayload;
 import cl.mtn.admitiabff.prekinder.crypto.EnvelopeEncryptionService;
 import cl.mtn.admitiabff.prekinder.domain.PrekinderActor;
+import cl.mtn.admitiabff.prekinder.domain.PrekinderPolicyCodes;
+import cl.mtn.admitiabff.prekinder.domain.PrekinderScoringPolicy;
 import cl.mtn.admitiabff.prekinder.realtime.PrekinderRealtimeNotifier;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -44,12 +46,13 @@ public class PrekinderFlowService {
         new ProfessionalRoleDefinition("PK_EVALUATOR_PSYCHOLOGY", "Psicólogo/a evaluador/a", "EVALUACION", "PSYCHOLOGY", 7),
         new ProfessionalRoleDefinition("PK_EVALUATOR_ENTRY_INDICATORS", "Evaluador/a de indicadores de ingreso", "EVALUACION", "ENTRY_INDICATORS", 8),
         new ProfessionalRoleDefinition("PK_EVALUATOR_GROUP_OBSERVATION", "Observador/a grupal", "EVALUACION", "GROUP_OBSERVATION", 9),
-        new ProfessionalRoleDefinition("PK_EVALUATOR_LEARNING_SUPPORT", "Profesional de Apoyo al Aprendizaje", "EVALUACION", "LEARNING_SUPPORT", 10),
-        new ProfessionalRoleDefinition("PK_EVALUATOR_DAP", "Profesional DAP", "EVALUACION", "DAP", 11),
-        new ProfessionalRoleDefinition("PK_REVIEWER", "Revisor/a de informes", "DECISION_CONTROL", null, 12),
-        new ProfessionalRoleDefinition("PK_COMMITTEE", "Integrante de comisión", "DECISION_CONTROL", null, 13),
-        new ProfessionalRoleDefinition("PK_FINAL_APPROVER", "Responsable de decisión final", "DECISION_CONTROL", null, 14),
-        new ProfessionalRoleDefinition("PK_AUDITOR", "Auditor/a del proceso", "DECISION_CONTROL", null, 15)
+        new ProfessionalRoleDefinition("PK_EVALUATOR_FAMILY_INTERVIEW", "Entrevistador/a familiar", "EVALUACION", "FAMILY_INTERVIEW", 10),
+        new ProfessionalRoleDefinition("PK_EVALUATOR_LEARNING_SUPPORT", "Profesional de Apoyo al Aprendizaje", "EVALUACION", "LEARNING_SUPPORT", 11),
+        new ProfessionalRoleDefinition("PK_EVALUATOR_DAP", "Profesional DAP", "EVALUACION", "DAP", 12),
+        new ProfessionalRoleDefinition("PK_REVIEWER", "Revisor/a de informes", "DECISION_CONTROL", null, 13),
+        new ProfessionalRoleDefinition("PK_COMMITTEE", "Integrante de comisión", "DECISION_CONTROL", null, 14),
+        new ProfessionalRoleDefinition("PK_FINAL_APPROVER", "Responsable de decisión final", "DECISION_CONTROL", null, 15),
+        new ProfessionalRoleDefinition("PK_AUDITOR", "Auditor/a del proceso", "DECISION_CONTROL", null, 16)
     );
     private final NamedParameterJdbcTemplate jdbc;
     private final TransactionTemplate transactions;
@@ -120,7 +123,14 @@ public class PrekinderFlowService {
     public ApplicationView submitApplication(SubmitApplication command) {
         PrekinderActor actor = access.requireActor();
         String rut = PrekinderRut.normalize(command.rut());
-        PrekinderAgePolicy.validate(command.birthDate(), Instant.now());
+        Map<String, Object> agePolicy = jdbc.queryForMap("""
+            SELECT age_reference_date, minimum_age_months, maximum_age_months
+              FROM prekinder_process_configuration WHERE process_id = :id
+            """, Map.of("id", command.processId()));
+        PrekinderAgePolicy.validate(command.birthDate(),
+            agePolicy.get("age_reference_date") == null ? null : ((java.sql.Date) agePolicy.get("age_reference_date")).toLocalDate(),
+            ((Number) agePolicy.get("minimum_age_months")).intValue(),
+            ((Number) agePolicy.get("maximum_age_months")).intValue());
         String category = category(command.eligibility());
         WaveView wave = activeWave(command.processId());
         if (!wave.waveType().equals(category)) {
@@ -152,17 +162,19 @@ public class PrekinderFlowService {
             try {
                 jdbc.update("""
                     INSERT INTO applications(application_id, applicant_id, process_id, wave_id, status,
-                        eligibility_category, eligibility_status, applicant_identity_hash, submitted_at, submitted_by,
-                        payment_required, payment_status)
-                    VALUES (:id, :applicantId, :processId, :waveId, 'SUBMITTED', :category, 'PENDING',
-                        :identityHash, now(), :actorId,
+                        eligibility_category, eligibility_status, applicant_identity_hash, submitted_by,
+                        payment_required, payment_status, applicant_sex, configuration_version)
+                    VALUES (:id, :applicantId, :processId, :waveId, 'PENDING_SEGMENT_VALIDATION', :category, 'PENDING',
+                        :identityHash, :actorId,
                         (SELECT payment_enabled FROM prekinder_process_configuration WHERE process_id = :processId),
                         CASE WHEN (SELECT payment_enabled FROM prekinder_process_configuration WHERE process_id = :processId)
-                             THEN 'PENDING' ELSE 'NOT_REQUIRED' END)
+                             THEN 'PENDING' ELSE 'NOT_REQUIRED' END,
+                        :applicantSex,
+                        (SELECT version FROM prekinder_process_configuration WHERE process_id = :processId))
                     """, new MapSqlParameterSource().addValue("id", applicationId).addValue("applicantId", applicantId)
                     .addValue("processId", command.processId()).addValue("waveId", wave.waveId())
                     .addValue("category", category).addValue("identityHash", sha256(rut))
-                    .addValue("actorId", actor.id()));
+                    .addValue("actorId", actor.id()).addValue("applicantSex", command.applicationDetails().gender()));
             } catch (DataIntegrityViolationException exception) {
                 throw PrekinderDomainException.conflict("DUPLICATE_APPLICATION",
                     "Ya existe una postulación activa para este postulante y proceso");
@@ -228,13 +240,139 @@ public class PrekinderFlowService {
             if (updated != 1) throw new VersionConflictException("La declaración cambió");
             jdbc.update("""
                 UPDATE applications SET eligibility_status = :decision,
-                    status = CASE WHEN :decision = 'REJECTED' THEN 'INVALIDATED' ELSE 'UNDER_REVIEW' END,
+                    status = CASE
+                        WHEN :decision = 'REJECTED' THEN 'REQUIRES_INFORMATION'
+                        WHEN payment_required AND payment_status <> 'PAID' THEN 'PENDING_PAYMENT'
+                        ELSE 'FORM_PENDING'
+                    END,
                     invalidated_at = CASE WHEN :decision = 'REJECTED' THEN now() ELSE NULL END,
                     invalidated_by = CASE WHEN :decision = 'REJECTED' THEN :actorId ELSE NULL END,
                     version = version + 1, updated_at = now()
                  WHERE application_id = :applicationId
                 """, Map.of("applicationId", applicationId, "decision", decision, "actorId", actor.id()));
             audit(actor.id(), "ELIGIBILITY_" + decision, "APPLICATION", applicationId, Map.of());
+            return application(applicationId);
+        });
+    }
+
+    public ApplicationView reclassifyEligibility(UUID applicationId, UUID waveId, String category,
+                                                 String reason, long expectedVersion) {
+        PrekinderActor actor = access.requireAdmin();
+        String targetCategory = category == null ? "" : category.trim().toUpperCase();
+        if (!List.of("STAFF_OR_ALUMNI", "NEW_FAMILIES").contains(targetCategory))
+            throw new IllegalArgumentException("La reclasificación debe dirigirse a funcionarios/exalumnos o familias nuevas");
+        if (blank(reason)) throw new IllegalArgumentException("La reclasificación requiere motivo");
+        return transactions.execute(status -> {
+            Long validWave = jdbc.queryForObject("""
+                SELECT count(*) FROM process_waves wave JOIN applications application
+                  ON application.process_id = wave.process_id
+                 WHERE application.application_id = :applicationId AND wave.wave_id = :waveId
+                   AND wave.wave_type = :category AND wave.status <> 'CANCELLED'
+                """, Map.of("applicationId", applicationId, "waveId", waveId, "category", targetCategory), Long.class);
+            if (validWave == null || validWave == 0)
+                throw PrekinderDomainException.conflict("RECLASSIFICATION_WAVE_INVALID", "La etapa destino no es válida");
+            UUID declarationId = jdbc.queryForObject("""
+                SELECT declaration_id FROM eligibility_declarations
+                 WHERE application_id = :applicationId AND version = :version FOR UPDATE
+                """, Map.of("applicationId", applicationId, "version", expectedVersion), UUID.class);
+            if (declarationId == null) throw new VersionConflictException("La declaración cambió");
+            EncryptedPayload rationale = encryption.encrypt(reason.trim(),
+                "prekinder|eligibility-reclassification|" + declarationId + "|version:" + expectedVersion);
+            MapSqlParameterSource reclassification = new MapSqlParameterSource()
+                .addValue("waveId", waveId).addValue("category", targetCategory).addValue("actorId", actor.id())
+                .addValue("applicationId", applicationId).addValue("version", expectedVersion);
+            encryptedValues(rationale, reclassification, "reason");
+            int updated = jdbc.update("""
+                UPDATE eligibility_declarations SET wave_id = :waveId, category = :category,
+                    status = 'PENDING', reviewed_by = :actorId, reviewed_at = now(),
+                    review_reason_ciphertext = :reasonCiphertext, review_reason_iv = :reasonIv,
+                    review_reason_wrapped_dek = :reasonWrappedDek,
+                    review_reason_wrapped_dek_iv = :reasonWrappedDekIv,
+                    review_reason_key_version = :reasonKeyVersion,
+                    version = version + 1, updated_at = now()
+                 WHERE application_id = :applicationId AND version = :version
+                """, reclassification);
+            if (updated != 1) throw new VersionConflictException("La declaración cambió");
+            jdbc.update("""
+                UPDATE applications SET wave_id = :waveId, eligibility_category = :category,
+                    eligibility_status = 'PENDING', status = 'PENDING_SEGMENT_VALIDATION',
+                    invalidated_at = NULL, invalidated_by = NULL,
+                    version = version + 1, updated_at = now()
+                 WHERE application_id = :applicationId
+                """, Map.of("waveId", waveId, "category", targetCategory, "applicationId", applicationId));
+            audit(actor.id(), "ELIGIBILITY_RECLASSIFIED", "APPLICATION", applicationId,
+                Map.of("waveId", waveId, "category", targetCategory));
+            return application(applicationId);
+        });
+    }
+
+    public ApplicationView approveForScheduling(UUID applicationId, long expectedVersion) {
+        PrekinderActor actor = access.requireAdmin();
+        return transactions.execute(status -> {
+            Long missingDocuments = jdbc.queryForObject("""
+                SELECT count(*)
+                  FROM applications application
+                  JOIN prekinder_process_configuration config ON config.process_id = application.process_id
+                 CROSS JOIN LATERAL jsonb_array_elements_text(config.required_documents) required(category)
+                 WHERE application.application_id = :id
+                   AND NOT EXISTS (
+                       SELECT 1 FROM document_metadata document
+                        WHERE document.application_id = application.application_id
+                          AND upper(document.category) = upper(required.category)
+                          AND document.review_status = 'APPROVED'
+                   )
+                """, Map.of("id", applicationId), Long.class);
+            if (missingDocuments != null && missingDocuments > 0)
+                throw PrekinderDomainException.conflict("DOCUMENT_REVIEW_PENDING",
+                    "Aprueba todos los documentos obligatorios antes de habilitar la agenda");
+            int updated = jdbc.update("""
+                UPDATE applications SET status = 'READY_TO_SCHEDULE', version = version + 1, updated_at = now()
+                 WHERE application_id = :id AND version = :version
+                   AND formal_submitted_at IS NOT NULL AND status = 'UNDER_ADMIN_REVIEW'
+                """, Map.of("id", applicationId, "version", expectedVersion));
+            if (updated != 1) throw new VersionConflictException("La postulación cambió o no está lista para revisión");
+            audit(actor.id(), "APPLICATION_READY_TO_SCHEDULE", "APPLICATION", applicationId, Map.of());
+            return application(applicationId);
+        });
+    }
+
+    public ApplicationView requestCorrections(UUID applicationId, List<String> allowedFields,
+                                              List<String> allowedDocumentCategories,
+                                              String reason, long expectedVersion) {
+        PrekinderActor actor = access.requireAdmin();
+        List<String> fields = allowedFields == null ? List.of() : allowedFields.stream()
+            .map(String::trim).filter(value -> value.matches("[A-Za-z0-9_.]{2,96}")).distinct().toList();
+        List<String> documents = allowedDocumentCategories == null ? List.of() : allowedDocumentCategories.stream()
+            .map(value -> value.trim().toUpperCase()).filter(value -> value.matches("[A-Z0-9_]{2,64}"))
+            .distinct().toList();
+        if (fields.isEmpty() && documents.isEmpty())
+            throw new IllegalArgumentException("Selecciona campos o documentos que la familia podrá corregir");
+        if (blank(reason)) throw new IllegalArgumentException("La solicitud de corrección requiere motivo");
+        return transactions.execute(status -> {
+            int updated = jdbc.update("""
+                UPDATE applications SET status = 'REQUIRES_INFORMATION', version = version + 1, updated_at = now()
+                 WHERE application_id = :id AND version = :version
+                   AND status IN ('UNDER_ADMIN_REVIEW','REQUIRES_INFORMATION')
+                """, Map.of("id", applicationId, "version", expectedVersion));
+            if (updated != 1) throw new VersionConflictException("La postulación cambió o no admite correcciones");
+            jdbc.update("""
+                UPDATE application_correction_requests SET status = 'CANCELLED'
+                 WHERE application_id = :id AND status = 'OPEN'
+                """, Map.of("id", applicationId));
+            UUID correctionId = UUID.randomUUID();
+            EncryptedPayload encrypted = encryption.encrypt(reason.trim(),
+                "prekinder|application-correction|" + correctionId);
+            jdbc.update("""
+                INSERT INTO application_correction_requests(correction_id, application_id,
+                    allowed_fields, allowed_document_categories, reason_ciphertext, reason_iv,
+                    reason_wrapped_dek, reason_wrapped_dek_iv, reason_key_version, requested_by)
+                VALUES (:id, :applicationId, CAST(:fields AS jsonb), CAST(:documents AS jsonb),
+                    :ciphertext, :iv, :wrappedDek, :wrappedDekIv, :keyVersion, :actorId)
+                """, encryptedValues(encrypted).addValue("id", correctionId)
+                .addValue("applicationId", applicationId).addValue("fields", json(fields))
+                .addValue("documents", json(documents)).addValue("actorId", actor.id()));
+            audit(actor.id(), "APPLICATION_CORRECTION_REQUESTED", "APPLICATION", applicationId,
+                Map.of("fields", fields, "documents", documents));
             return application(applicationId);
         });
     }
@@ -646,12 +784,33 @@ public class PrekinderFlowService {
                 rs.getString("name"), rs.getObject("day_date", LocalDate.class), SANTIAGO.getId(), rs.getLong("version")));
     }
 
+    private GroupDefaults groupDefaults(UUID processId) {
+        return jdbc.queryForObject("""
+            SELECT schedule_block_minutes, academic_group_size, psychomotor_group_size,
+                   academic_required_evaluators, psychomotor_required_evaluators
+              FROM prekinder_process_configuration WHERE process_id = :processId
+            """, Map.of("processId", processId), (rs, row) -> new GroupDefaults(
+                rs.getInt("schedule_block_minutes"), rs.getInt("academic_group_size"),
+                rs.getInt("psychomotor_group_size"), rs.getInt("academic_required_evaluators"),
+                rs.getInt("psychomotor_required_evaluators")));
+    }
+
     public GroupView createGroup(GroupCommand command) {
         PrekinderActor actor = access.requireAdmin();
         String stage = command.stage();
-        if (!List.of("GROUP_3", "GROUP_9").contains(stage)) throw new IllegalArgumentException("Instancia inválida");
-        int suggestedCapacity = stage.equals("GROUP_3") ? 3 : 9;
-        int suggestedEvaluators = stage.equals("GROUP_3") ? 3 : 6;
+        if (!List.of("GROUP_3", "GROUP_9", "FAMILY_INTERVIEW").contains(stage))
+            throw new IllegalArgumentException("Instancia inválida");
+        GroupDefaults defaults = groupDefaults(command.processId());
+        int suggestedCapacity = switch (stage) {
+            case "GROUP_3" -> defaults.academicGroupSize();
+            case "GROUP_9" -> defaults.psychomotorGroupSize();
+            default -> 1;
+        };
+        int suggestedEvaluators = switch (stage) {
+            case "GROUP_3" -> defaults.academicRequiredEvaluators();
+            case "GROUP_9" -> defaults.psychomotorRequiredEvaluators();
+            default -> 1;
+        };
         int capacity = command.capacity() == null ? suggestedCapacity : command.capacity();
         int requiredEvaluators = command.requiredEvaluators() == null ? suggestedEvaluators : command.requiredEvaluators();
         if (capacity < 1 || capacity > 30) throw new IllegalArgumentException("La capacidad debe estar entre 1 y 30");
@@ -661,9 +820,17 @@ public class PrekinderFlowService {
         if (roomCapacity == null || capacity > roomCapacity) {
             throw PrekinderDomainException.conflict("ROOM_CAPACITY", "La capacidad configurada supera la capacidad física de la sala");
         }
-        int duration = command.durationMinutes() == null ? 30 : command.durationMinutes();
+        int duration = command.durationMinutes() == null ? defaults.blockMinutes() : command.durationMinutes();
         if (duration < 10 || duration > 240) throw new IllegalArgumentException("Duración fuera de rango");
         Instant endsAt = command.startsAt().plus(Duration.ofMinutes(duration));
+        Long roomConflicts = jdbc.queryForObject("""
+            SELECT count(*) FROM evaluation_groups
+             WHERE room_id = :roomId AND status <> 'CANCELLED'
+               AND starts_at < :endsAt AND ends_at > :startsAt
+            """, new MapSqlParameterSource().addValue("roomId", command.roomId())
+            .addValue("startsAt", Timestamp.from(command.startsAt())).addValue("endsAt", Timestamp.from(endsAt)), Long.class);
+        if (roomConflicts != null && roomConflicts > 0)
+            throw PrekinderDomainException.conflict("SCHEDULE_CONFLICT", "La sala ya está ocupada en ese horario");
         ScheduleSlot slot = ensureScheduleSlot(command.processId(), command.startsAt(), endsAt);
         UUID id = UUID.randomUUID();
         try {
@@ -688,9 +855,14 @@ public class PrekinderFlowService {
     public GroupView createAssignedGroup(GroupCommand command, List<UUID> memberIds, List<UUID> evaluatorIds) {
         List<UUID> children = memberIds == null ? List.of() : List.copyOf(memberIds);
         List<UUID> evaluators = evaluatorIds == null ? List.of() : List.copyOf(evaluatorIds);
-        int capacity = command.capacity() == null ? ("GROUP_3".equals(command.stage()) ? 3 : 9) : command.capacity();
+        GroupDefaults defaults = groupDefaults(command.processId());
+        int capacity = command.capacity() == null
+            ? ("GROUP_3".equals(command.stage()) ? defaults.academicGroupSize()
+                : "GROUP_9".equals(command.stage()) ? defaults.psychomotorGroupSize() : 1)
+            : command.capacity();
         int requiredEvaluators = command.requiredEvaluators() == null
-            ? ("GROUP_3".equals(command.stage()) ? 3 : 6)
+            ? ("GROUP_3".equals(command.stage()) ? defaults.academicRequiredEvaluators()
+                : "GROUP_9".equals(command.stage()) ? defaults.psychomotorRequiredEvaluators() : 1)
             : command.requiredEvaluators();
 
         if (children.isEmpty()) {
@@ -1162,6 +1334,7 @@ public class PrekinderFlowService {
                 throw PrekinderDomainException.forbidden("PROFESSIONAL_ROLE_MISMATCH",
                     "El profesional no tiene un rol evaluador homologado para este proceso");
             }
+            ensureEvaluatorAvailable(evaluatorId, group.startsAt(), group.endsAt());
             ProfessionalRoleDefinition definition = professionalRole(roleCode);
             String instrumentCode = definition.instrumentCode();
             if (group.evaluatorIds().size() >= group.requiredEvaluators()) {
@@ -1193,6 +1366,22 @@ public class PrekinderFlowService {
             touchGroupVersion(groupId);
             return group(groupId);
         });
+    }
+
+    private void ensureEvaluatorAvailable(UUID evaluatorId, Instant startsAt, Instant endsAt) {
+        Map<String, Object> availability = jdbc.queryForMap("""
+            SELECT count(*) FILTER (WHERE starts_at < :endsAt AND ends_at > :startsAt) AS declared,
+                   count(*) FILTER (WHERE status = 'AVAILABLE' AND starts_at <= :startsAt AND ends_at >= :endsAt) AS available,
+                   count(*) FILTER (WHERE status = 'UNAVAILABLE' AND starts_at < :endsAt AND ends_at > :startsAt) AS unavailable
+              FROM professional_availability WHERE professional_id = :evaluatorId
+            """, new MapSqlParameterSource().addValue("evaluatorId", evaluatorId)
+            .addValue("startsAt", Timestamp.from(startsAt)).addValue("endsAt", Timestamp.from(endsAt)));
+        long declared = ((Number) availability.get("declared")).longValue();
+        long available = ((Number) availability.get("available")).longValue();
+        long unavailable = ((Number) availability.get("unavailable")).longValue();
+        if (unavailable > 0 || (declared > 0 && available == 0))
+            throw PrekinderDomainException.conflict("EVALUATOR_UNAVAILABLE",
+                "El profesional no está disponible durante todo el bloque");
     }
 
     public GroupView removeEvaluator(UUID groupId, UUID evaluatorId, long expectedVersion) {
@@ -1424,6 +1613,14 @@ public class PrekinderFlowService {
             null
         );
 
+        jdbc.update("""
+            UPDATE applications SET status = 'SCHEDULED', version = version + 1, updated_at = now()
+             WHERE application_id IN (
+                 SELECT application_id FROM evaluation_group_members
+                  WHERE group_id = :groupId AND status = 'ASSIGNED'
+             ) AND status = 'READY_TO_SCHEDULE'
+            """, Map.of("groupId", groupId));
+
         return group(groupId);
     });
 }
@@ -1480,7 +1677,8 @@ public class PrekinderFlowService {
     public GroupView completeGroup(UUID groupId, long expectedVersion) {
         PrekinderActor actor = access.requireAdmin();
         long pending = jdbc.queryForObject("""
-            SELECT count(*) FROM evaluator_reports WHERE group_id = :groupId AND status <> 'COMPLETED'
+            SELECT count(*) FROM evaluator_reports
+             WHERE group_id = :groupId AND status NOT IN ('COMPLETED','VALIDATED','LOCKED')
             """, Map.of("groupId", groupId), Long.class);
         if (pending > 0) throw PrekinderDomainException.conflict("REPORTS_PENDING", "Aún existen informes sin completar");
         int updated = jdbc.update("""
@@ -1512,6 +1710,19 @@ public class PrekinderFlowService {
         PrekinderActor actor = access.requireAdmin();
         if (!List.of("ACCEPTED", "REJECTED", "WAITLIST").contains(decision)) throw new IllegalArgumentException("Decisión inválida");
         return transactions.execute(status -> {
+            Map<String, Object> target = jdbc.queryForMap("""
+                SELECT eligibility_category, applicant_sex, formal_submitted_at
+                  FROM applications WHERE application_id = :id FOR UPDATE
+                """, Map.of("id", applicationId));
+            if ("WAITLIST".equals(decision) && "SIBLINGS".equals(target.get("eligibility_category"))) {
+                throw PrekinderDomainException.conflict("SIBLING_WAITLIST_FORBIDDEN",
+                    "Una postulación de hermanos no puede ingresar a lista de espera");
+            }
+            if (("ACCEPTED".equals(decision) || "WAITLIST".equals(decision))
+                && (target.get("applicant_sex") == null || target.get("formal_submitted_at") == null)) {
+                throw PrekinderDomainException.conflict("APPLICATION_NOT_FORMALIZED",
+                    "La postulación debe estar formalizada y tener sexo registrado antes de decidir");
+            }
             Long published = jdbc.queryForObject("SELECT count(*) FROM application_decisions_v2 WHERE application_id = :id AND status = 'PUBLISHED'",
                 Map.of("id", applicationId), Long.class);
             if (published != null && published > 0) throw PrekinderDomainException.conflict("DECISION_LOCKED", "La decisión publicada requiere una rectificación autorizada");
@@ -1564,21 +1775,30 @@ public class PrekinderFlowService {
               JOIN evaluation_template_versions version
                 ON version.evaluation_template_version_id = report.evaluation_template_version_id
               JOIN evaluation_templates template ON template.evaluation_template_id = version.evaluation_template_id
-             WHERE report.application_id = :id AND report.status = 'COMPLETED'
+             WHERE report.application_id = :id AND report.status IN ('VALIDATED','LOCKED')
                AND template.type_code IN (:instruments)
             """, new MapSqlParameterSource().addValue("id", applicationId)
                 .addValue("instruments", PrekinderProcessLifecycleService.REQUIRED_INSTRUMENTS), Long.class);
         if (completedInstruments == null || completedInstruments < PrekinderProcessLifecycleService.REQUIRED_INSTRUMENTS.size()) {
             throw PrekinderDomainException.conflict("DOSSIER_INCOMPLETE",
-                "El expediente requiere los ocho instrumentos completos antes de decidir");
+                "El expediente requiere los seis instrumentos obligatorios completos antes de decidir");
         }
         Long pendingReferrals = jdbc.queryForObject("""
             SELECT count(*) FROM referrals WHERE application_id = :id
-             AND status NOT IN ('REJECTED','CANCELLED','COMPLETED')
+             AND status IN ('APPROVED','REQUIRES_INFORMATION','ASSIGNED','IN_PROGRESS')
             """, Map.of("id", applicationId), Long.class);
         if (pendingReferrals != null && pendingReferrals > 0) {
             throw PrekinderDomainException.conflict("DOSSIER_INCOMPLETE",
                 "Completa las derivaciones de Apoyo o DAP antes de decidir");
+        }
+        Long pendingInclusionInterview = jdbc.queryForObject("""
+            SELECT count(*) FROM inclusion_records
+             WHERE application_id = :id AND specific_interview_required
+               AND specific_interview_status NOT IN ('COMPLETED','WAIVED')
+            """, Map.of("id", applicationId), Long.class);
+        if (pendingInclusionInterview != null && pendingInclusionInterview > 0) {
+            throw PrekinderDomainException.conflict("DOSSIER_INCOMPLETE",
+                "Completa la entrevista específica de inclusión antes de decidir");
         }
         UUID processId = (UUID) application.get("process_id");
         Map<String, Object> policy = jdbc.queryForMap("""
@@ -1587,21 +1807,36 @@ public class PrekinderFlowService {
              ORDER BY version DESC LIMIT 1
             """, Map.of("id", processId));
         Map<String, Object> scores = jdbc.queryForMap("""
-            SELECT coalesce(avg(report.raw_score / nullif(report.maximum_score, 0))
-                       FILTER (WHERE template.type_code <> 'FAMILY_INTERVIEW'), 0) AS applicant_result,
-                   coalesce(avg(report.raw_score / nullif(report.maximum_score, 0))
-                       FILTER (WHERE template.type_code = 'FAMILY_INTERVIEW'), 0) AS family_result
+            SELECT avg(report.raw_score)
+                       FILTER (WHERE template.type_code = 'ACADEMIC') AS academic_result,
+                   avg(report.raw_score)
+                       FILTER (WHERE template.type_code = 'PSYCHOLOGY') AS psychology_result,
+                   avg(report.raw_score)
+                       FILTER (WHERE template.type_code = 'PSYCHOMOTOR') AS psychomotor_result
               FROM evaluator_reports report
               JOIN evaluation_template_versions version
                 ON version.evaluation_template_version_id = report.evaluation_template_version_id
               JOIN evaluation_templates template ON template.evaluation_template_id = version.evaluation_template_id
-             WHERE report.application_id = :id AND report.status = 'COMPLETED'
+             WHERE report.application_id = :id AND report.status IN ('VALIDATED','LOCKED')
             """, Map.of("id", applicationId));
-        BigDecimal applicantResult = (BigDecimal) scores.get("applicant_result");
-        BigDecimal familyResult = (BigDecimal) scores.get("family_result");
-        BigDecimal applicantWeight = (BigDecimal) policy.get("applicant_weight");
-        BigDecimal familyWeight = (BigDecimal) policy.get("family_weight");
-        BigDecimal integral = applicantResult.multiply(applicantWeight).add(familyResult.multiply(familyWeight));
+        Map<String, Object> maxima = jdbc.queryForMap("""
+            SELECT max(maximum_score) FILTER (WHERE instrument_code = 'ACADEMIC') AS academic_maximum,
+                   max(maximum_score) FILTER (WHERE instrument_code = 'PSYCHOLOGY') AS psychology_maximum,
+                   max(maximum_score) FILTER (WHERE instrument_code = 'PSYCHOMOTOR') AS psychomotor_maximum
+              FROM process_instrument_policies
+             WHERE process_id = :processId AND scoring
+            """, Map.of("processId", processId));
+        PrekinderScoringPolicy.Score score = PrekinderScoringPolicy.calculate(
+            requireScore(scores, "academic_result", "Académica"),
+            requireScore(maxima, "academic_maximum", "máximo de Académica"),
+            requireScore(scores, "psychology_result", "Psicología"),
+            requireScore(maxima, "psychology_maximum", "máximo de Psicología"),
+            requireScore(scores, "psychomotor_result", "Psicomotricidad"),
+            requireScore(maxima, "psychomotor_maximum", "máximo de Psicomotricidad"));
+        BigDecimal academic = score.normalizedComponents().get(PrekinderPolicyCodes.ACADEMIC);
+        BigDecimal psychology = score.normalizedComponents().get(PrekinderPolicyCodes.PSYCHOLOGY);
+        BigDecimal psychomotor = score.normalizedComponents().get(PrekinderPolicyCodes.PSYCHOMOTOR);
+        BigDecimal integral = score.total();
         Integer snapshotVersion = jdbc.queryForObject(
             "SELECT coalesce(max(snapshot_version), 0) + 1 FROM application_score_snapshots WHERE application_id = :id",
             Map.of("id", applicationId), Integer.class);
@@ -1613,8 +1848,13 @@ public class PrekinderFlowService {
                 CAST(:components AS jsonb))
             """, new MapSqlParameterSource().addValue("id", scoreSnapshotId).addValue("applicationId", applicationId)
             .addValue("policyId", policy.get("scoring_policy_id")).addValue("version", snapshotVersion)
-            .addValue("applicant", applicantResult).addValue("family", familyResult).addValue("integral", integral)
-            .addValue("components", json(Map.of("completedInstruments", completedInstruments))));
+            .addValue("applicant", integral).addValue("family", null).addValue("integral", integral)
+            .addValue("components", json(Map.of(
+                "completedInstruments", completedInstruments,
+                "academic", academic, "academicWeight", PrekinderPolicyCodes.ACADEMIC_WEIGHT,
+                "psychology", psychology, "psychologyWeight", PrekinderPolicyCodes.PSYCHOLOGY_WEIGHT,
+                "psychomotor", psychomotor, "psychomotorWeight", PrekinderPolicyCodes.PSYCHOMOTOR_WEIGHT,
+                "familyInterview", "QUALITATIVE"))));
         Integer dossierVersion = jdbc.queryForObject(
             "SELECT coalesce(max(dossier_version), 0) + 1 FROM committee_dossiers WHERE application_id = :id",
             Map.of("id", applicationId), Integer.class);
@@ -1636,6 +1876,13 @@ public class PrekinderFlowService {
             case "WAITLIST" -> "WAITLISTED";
             default -> "NOT_ADMITTED";
         };
+    }
+
+    private static BigDecimal requireScore(Map<String, Object> scores, String key, String label) {
+        BigDecimal value = (BigDecimal) scores.get(key);
+        if (value == null) throw PrekinderDomainException.conflict("DOSSIER_SCORE_MISSING",
+            "Falta el puntaje normalizado de " + label);
+        return value;
     }
 
     public DecisionView correctPublishedDecision(UUID applicationId, String decision, String note, String reason) {
@@ -1752,27 +1999,6 @@ public class PrekinderFlowService {
             """, Map.of("limit", safeLimit), (rs, row) -> new AuditView(rs.getObject("audit_id", UUID.class),
                 rs.getObject("actor_id", UUID.class), rs.getString("action"), rs.getString("aggregate_type"),
                 rs.getObject("aggregate_id", UUID.class), rs.getString("result"), instant(rs.getTimestamp("occurred_at"))));
-    }
-
-    public List<PublishedResultView> myPublishedResults() {
-        PrekinderActor actor = access.requireActor();
-        return jdbc.query("""
-            SELECT a.application_id, a.applicant_id, i.decision_snapshot ->> 'decision' AS decision,
-                   i.published_at, d.version
-              FROM families f JOIN applicants ap ON ap.family_id = f.family_id
-              JOIN applications a ON a.applicant_id = ap.applicant_id
-              JOIN publication_batch_items i ON i.application_id = a.application_id
-              JOIN application_decisions_v2 d ON d.decision_id = i.decision_id
-             WHERE f.external_reference = :actorReference AND i.published_at IS NOT NULL
-             ORDER BY i.published_at DESC
-            """, Map.of("actorReference", actor.id().toString()), (rs, row) -> {
-                UUID applicationId = rs.getObject("application_id", UUID.class);
-                ApplicationView application = application(applicationId);
-                String applicantName = (application.identity().firstName() + " "
-                    + application.identity().paternalLastName()).trim();
-                return new PublishedResultView(applicationId, applicantName, rs.getString("decision"),
-                    instant(rs.getTimestamp("published_at")), rs.getInt("version"));
-            });
     }
 
     private ApplicationView application(UUID id) {
@@ -2212,11 +2438,11 @@ public class PrekinderFlowService {
                                String status, Instant decidedAt) {}
     public record BatchView(UUID batchId, UUID processId, Instant scheduledAt, String status,
                             long version, long itemCount, Instant createdAt) {}
-    public record PublishedResultView(UUID applicationId, String applicantName, String decision,
-                                      Instant publishedAt, int decisionVersion) {}
     public record RubricView(UUID rubricId, String stage, String name, UUID versionId, int version, String status,
                              java.math.BigDecimal maximumScore, Instant publishedAt, int criteriaCount) {}
     public record AuditView(UUID auditId, UUID actorId, String action, String aggregateType, UUID aggregateId,
                             String result, Instant occurredAt) {}
     private record ScheduleSlot(UUID dayId, UUID blockId) {}
+    private record GroupDefaults(int blockMinutes, int academicGroupSize, int psychomotorGroupSize,
+                                 int academicRequiredEvaluators, int psychomotorRequiredEvaluators) {}
 }

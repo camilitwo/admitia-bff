@@ -1,6 +1,8 @@
 package cl.mtn.admitiabff.prekinder.api;
 
 import cl.mtn.admitiabff.prekinder.service.PrekinderFlowService;
+import cl.mtn.admitiabff.prekinder.service.PrekinderInclusionService;
+import cl.mtn.admitiabff.prekinder.service.PrekinderSchedulingService;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.Future;
@@ -33,8 +35,15 @@ import org.springframework.web.bind.annotation.RestController;
 @ConditionalOnProperty(prefix = "app.prekinder", name = "enabled", havingValue = "true")
 public class PrekinderFlowController {
     private final PrekinderFlowService flow;
+    private final PrekinderSchedulingService scheduling;
+    private final PrekinderInclusionService inclusion;
 
-    public PrekinderFlowController(PrekinderFlowService flow) { this.flow = flow; }
+    public PrekinderFlowController(PrekinderFlowService flow, PrekinderSchedulingService scheduling,
+                                   PrekinderInclusionService inclusion) {
+        this.flow = flow;
+        this.scheduling = scheduling;
+        this.inclusion = inclusion;
+    }
 
     @GetMapping("/processes/{processId}/waves")
     public Map<String, Object> waves(@PathVariable UUID processId) {
@@ -65,6 +74,32 @@ public class PrekinderFlowController {
     @PutMapping("/applications/{applicationId}/eligibility")
     public Map<String, Object> review(@PathVariable UUID applicationId, @Valid @RequestBody EligibilityReview command) {
         return ok(flow.reviewEligibility(applicationId, command.decision(), command.reason(), command.expectedVersion()));
+    }
+
+    @PutMapping("/applications/{applicationId}/eligibility/reclassification")
+    public Map<String, Object> reclassify(@PathVariable UUID applicationId,
+        @Valid @RequestBody EligibilityReclassification command) {
+        return ok(flow.reclassifyEligibility(applicationId, command.waveId(), command.category(),
+            command.reason(), command.expectedVersion()));
+    }
+
+    @PutMapping("/applications/{applicationId}/administrative-review/approval")
+    public Map<String, Object> approveForScheduling(@PathVariable UUID applicationId,
+        @Valid @RequestBody VersionCommand command) {
+        return ok(flow.approveForScheduling(applicationId, command.expectedVersion()));
+    }
+
+    @PutMapping("/applications/{applicationId}/administrative-review/corrections")
+    public Map<String, Object> requestCorrections(@PathVariable UUID applicationId,
+        @Valid @RequestBody CorrectionRequest command) {
+        return ok(flow.requestCorrections(applicationId, command.allowedFields(),
+            command.allowedDocumentCategories(), command.reason(), command.expectedVersion()));
+    }
+
+    @PutMapping("/applications/{applicationId}/inclusion/interview")
+    public Map<String, Object> inclusionInterview(@PathVariable UUID applicationId,
+        @Valid @RequestBody InclusionInterviewCommand command) {
+        return ok(inclusion.updateInterview(applicationId, command.status(), command.reason()));
     }
 
     @GetMapping("/professionals")
@@ -157,6 +192,17 @@ public class PrekinderFlowController {
         return ok(flow.schedule(processId, date));
     }
 
+    @PostMapping("/processes/{processId}/schedule/preview")
+    public Map<String, Object> schedulePreview(@PathVariable UUID processId,
+        @Valid @RequestBody SchedulePreviewCommand command) {
+        return ok(scheduling.preview(processId, command.date(), command.stage(), command.applicationIds()));
+    }
+
+    @PostMapping("/schedule-plans/{planId}/confirmation")
+    public Map<String, Object> confirmSchedule(@PathVariable UUID planId) {
+        return ok(scheduling.confirm(planId));
+    }
+
     @PostMapping("/groups")
     public Map<String, Object> group(@Valid @RequestBody GroupCommand command) {
         var groupCommand = new PrekinderFlowService.GroupCommand(command.processId(), command.roomId(),
@@ -231,9 +277,6 @@ public class PrekinderFlowController {
     public Map<String, Object> agenda(@RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate date) {
         return ok(flow.myAgenda(date));
     }
-
-    @GetMapping("/me/results")
-    public Map<String, Object> results() { return ok(flow.myPublishedResults()); }
 
     @PutMapping("/applications/{applicationId}/decision")
     public Map<String, Object> decision(@PathVariable UUID applicationId, @Valid @RequestBody DecisionCommand command) {
@@ -317,6 +360,15 @@ public class PrekinderFlowController {
         @NotNull @Valid EligibilityDeclaration eligibility) {}
     public record EligibilityReview(@NotBlank String decision, @Size(max = 2000) String reason,
                                     @Min(0) long expectedVersion) {}
+    public record EligibilityReclassification(@NotNull UUID waveId,
+        @NotBlank @Pattern(regexp = "STAFF_OR_ALUMNI|NEW_FAMILIES") String category,
+        @NotBlank @Size(max = 2000) String reason, @Min(0) long expectedVersion) {}
+    public record CorrectionRequest(List<@Pattern(regexp = "[A-Za-z0-9_.]{2,96}") String> allowedFields,
+        List<@Pattern(regexp = "[A-Z0-9_]{2,64}") String> allowedDocumentCategories,
+        @NotBlank @Size(max = 4000) String reason, @Min(0) long expectedVersion) {}
+    public record InclusionInterviewCommand(
+        @NotBlank @Pattern(regexp = "PENDING|SCHEDULED|COMPLETED|WAIVED") String status,
+        @Size(max = 2000) String reason) {}
     public record ProfessionalCommand(@NotNull UUID processId, UUID professionalId, Long legacyUserId,
         @NotBlank @Size(max = 160) String displayName,
         @Email @NotBlank @Size(max = 254) String email, @Size(min = 6, max = 128) String password,
@@ -331,6 +383,9 @@ public class PrekinderFlowController {
     public record EvaluationDayCommand(@NotBlank @Size(max = 160) String name, @NotNull LocalDate date) {}
     public record UpdateEvaluationDayCommand(@NotBlank @Size(max = 160) String name, @NotNull LocalDate date,
                                              @Min(0) long expectedVersion) {}
+    public record SchedulePreviewCommand(@NotNull LocalDate date,
+        @NotBlank @Pattern(regexp = "GROUP_3|GROUP_9") String stage,
+        @Size(max = 2000) List<@NotNull UUID> applicationIds) {}
     public record GroupCommand(@NotNull UUID processId, @NotNull UUID roomId, @NotBlank String stage,
                                @NotBlank @Size(max = 64) String code, @NotNull Instant startsAt,
                                @Min(10) @Max(240) Integer durationMinutes,

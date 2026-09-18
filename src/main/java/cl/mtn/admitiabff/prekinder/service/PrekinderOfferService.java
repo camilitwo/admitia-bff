@@ -63,22 +63,85 @@ public class PrekinderOfferService {
                 VALUES (:id, :offerId, 'OFFERED', :next, :actorId)
                 """, Map.of("id", UUID.randomUUID(), "offerId", offerId, "next", next, "actorId", actor.id()));
             jdbc.update("UPDATE applications SET status = :status, version = version + 1, updated_at = now() WHERE application_id = (SELECT application_id FROM offers WHERE offer_id = :id)",
-                Map.of("id", offerId, "status", "ACCEPTED".equals(next) ? "OFFER_ACCEPTED" : "DECLINED"));
+                Map.of("id", offerId, "status", "ACCEPTED".equals(next) ? "PENDING_ENROLLMENT_PAYMENT" : "DECLINED"));
+            if ("DECLINED".equals(next)) releaseSeatAndPromote(offerId, "OFFER_DECLINED");
             return mine().stream().filter(value -> value.offerId().equals(offerId)).findFirst().orElseThrow();
         });
     }
 
     @Scheduled(cron = "${app.prekinder.offers.expiry-cron:0 */10 * * * *}")
     public void expire() {
-        List<UUID> expired = jdbc.queryForList("SELECT offer_id FROM offers WHERE status = 'OFFERED' AND expires_at <= now()", Map.of(), UUID.class);
+        List<UUID> expired = jdbc.queryForList("SELECT offer_id FROM offers WHERE status IN ('OFFERED','ACCEPTED') AND expires_at <= now()", Map.of(), UUID.class);
         for (UUID offerId : expired) transactions.executeWithoutResult(status -> {
-            int updated = jdbc.update("UPDATE offers SET status = 'EXPIRED', version = version + 1, updated_at = now() WHERE offer_id = :id AND status = 'OFFERED'",
+            List<String> previous = jdbc.queryForList("SELECT status FROM offers WHERE offer_id = :id FOR UPDATE",
+                Map.of("id", offerId), String.class);
+            if (previous.isEmpty()) return;
+            int updated = jdbc.update("UPDATE offers SET status = 'EXPIRED', version = version + 1, updated_at = now() WHERE offer_id = :id AND status IN ('OFFERED','ACCEPTED')",
                 Map.of("id", offerId));
-            if (updated == 1) jdbc.update("""
-                INSERT INTO offer_status_history(offer_history_id, offer_id, from_status, to_status, reason_code)
-                VALUES (:id, :offerId, 'OFFERED', 'EXPIRED', 'DEADLINE_REACHED')
-                """, Map.of("id", UUID.randomUUID(), "offerId", offerId));
+            if (updated == 1) {
+                jdbc.update("""
+                    INSERT INTO offer_status_history(offer_history_id, offer_id, from_status, to_status, reason_code)
+                    VALUES (:id, :offerId, :fromStatus, 'EXPIRED', 'DEADLINE_REACHED')
+                    """, Map.of("id", UUID.randomUUID(), "offerId", offerId, "fromStatus", previous.getFirst()));
+                jdbc.update("""
+                    UPDATE applications SET status = 'EXPIRED', version = version + 1, updated_at = now()
+                     WHERE application_id = (SELECT application_id FROM offers WHERE offer_id = :id)
+                    """, Map.of("id", offerId));
+                releaseSeatAndPromote(offerId, "OFFER_EXPIRED");
+            }
         });
+    }
+
+    private void releaseSeatAndPromote(UUID offerId, String reason) {
+        List<Map<String, Object>> released = jdbc.queryForList("""
+            UPDATE seat_ledger seat
+               SET status = 'AVAILABLE', application_id = NULL, reserved_until = NULL,
+                   version = version + 1, updated_at = now()
+              FROM offers offer
+             WHERE offer.offer_id = :offerId AND seat.seat_id = offer.seat_id
+               AND seat.status = 'RESERVED'
+            RETURNING seat.seat_id, seat.process_id, seat.sex
+            """, Map.of("offerId", offerId));
+        if (released.isEmpty()) return;
+        Map<String, Object> seat = released.getFirst();
+        List<Map<String, Object>> candidates = jdbc.queryForList("""
+            SELECT entry_id, application_id FROM waitlist_entries
+             WHERE process_id = :processId AND sex = :sex AND status = 'ACTIVE'
+             ORDER BY score DESC, segment_priority, formal_submitted_at, folio
+             FOR UPDATE SKIP LOCKED LIMIT 1
+            """, Map.of("processId", seat.get("process_id"), "sex", seat.get("sex")));
+        if (candidates.isEmpty()) return;
+        UUID applicationId = (UUID) candidates.getFirst().get("application_id");
+        UUID promotedOfferId = UUID.randomUUID();
+        jdbc.update("""
+            UPDATE waitlist_entries SET status = 'PROMOTED', updated_at = now() WHERE entry_id = :id
+            """, Map.of("id", candidates.getFirst().get("entry_id")));
+        jdbc.update("""
+            UPDATE seat_ledger seat SET status = 'RESERVED', application_id = :applicationId,
+                reserved_until = now() + config.waitlist_offer_hours * interval '1 hour',
+                version = version + 1, updated_at = now()
+              FROM prekinder_process_configuration config
+             WHERE seat.seat_id = :seatId AND config.process_id = seat.process_id
+            """, Map.of("seatId", seat.get("seat_id"), "applicationId", applicationId));
+        jdbc.update("""
+            INSERT INTO offers(offer_id, application_id, status, expires_at, offer_source, seat_id)
+            SELECT :id, :applicationId, 'OFFERED', reserved_until, 'WAITLIST', seat_id
+              FROM seat_ledger WHERE seat_id = :seatId
+            """, Map.of("id", promotedOfferId, "applicationId", applicationId, "seatId", seat.get("seat_id")));
+        jdbc.update("""
+            INSERT INTO offer_status_history(offer_history_id, offer_id, to_status, reason_code)
+            VALUES (:id, :offerId, 'OFFERED', 'WAITLIST_PROMOTION')
+            """, Map.of("id", UUID.randomUUID(), "offerId", promotedOfferId));
+        jdbc.update("UPDATE applications SET status = 'OFFERED', version = version + 1, updated_at = now() WHERE application_id = :id",
+            Map.of("id", applicationId));
+        jdbc.update("""
+            INSERT INTO notification_intents(notification_id, application_id, template_code, channel,
+                status, idempotency_key, next_attempt_at, payload)
+            VALUES (:id, :applicationId, 'PREKINDER_WAITLIST_PROMOTED', 'EMAIL', 'PENDING',
+                :key, now(), jsonb_build_object('offerId', :offerId, 'reason', :reason))
+            ON CONFLICT (idempotency_key) DO NOTHING
+            """, Map.of("id", UUID.randomUUID(), "applicationId", applicationId,
+                "key", "prekinder-waitlist-promotion:" + promotedOfferId, "offerId", promotedOfferId, "reason", reason));
     }
     private static Instant timestamp(java.sql.Timestamp value) { return value == null ? null : value.toInstant(); }
     public record OfferView(UUID offerId, UUID applicationId, String status, Instant expiresAt,

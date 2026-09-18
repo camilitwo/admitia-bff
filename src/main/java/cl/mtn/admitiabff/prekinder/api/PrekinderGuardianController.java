@@ -2,6 +2,7 @@ package cl.mtn.admitiabff.prekinder.api;
 
 import cl.mtn.admitiabff.prekinder.service.PrekinderGuardianService;
 import cl.mtn.admitiabff.prekinder.service.PrekinderGuardianFormService;
+import cl.mtn.admitiabff.prekinder.service.PrekinderInclusionService;
 import cl.mtn.admitiabff.service.payments.PrekinderPaymentService;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -20,12 +21,15 @@ public class PrekinderGuardianController {
     private final PrekinderGuardianService guardian;
     private final PrekinderPaymentService payments;
     private final PrekinderGuardianFormService forms;
+    private final PrekinderInclusionService inclusion;
 
     public PrekinderGuardianController(PrekinderGuardianService guardian, PrekinderPaymentService payments,
-                                       PrekinderGuardianFormService forms) {
+                                       PrekinderGuardianFormService forms,
+                                       PrekinderInclusionService inclusion) {
         this.guardian = guardian;
         this.payments = payments;
         this.forms = forms;
+        this.inclusion = inclusion;
     }
 
     @GetMapping("/me/applications")
@@ -39,6 +43,16 @@ public class PrekinderGuardianController {
     @GetMapping("/applications/{applicationId}/payments/status")
     public Map<String, Object> paymentStatus(@PathVariable UUID applicationId) { return payments.status(applicationId); }
 
+    @PostMapping("/applications/{applicationId}/incorporation-payments/checkout")
+    public Map<String, Object> incorporationCheckout(@PathVariable UUID applicationId) {
+        return payments.incorporationCheckout(applicationId);
+    }
+
+    @GetMapping("/applications/{applicationId}/incorporation-payments/status")
+    public Map<String, Object> incorporationStatus(@PathVariable UUID applicationId) {
+        return payments.incorporationStatus(applicationId);
+    }
+
     @GetMapping("/applications/{applicationId}/complementary-form")
     public Map<String, Object> complementaryForm(@PathVariable UUID applicationId) { return forms.get(applicationId); }
 
@@ -46,5 +60,16 @@ public class PrekinderGuardianController {
     public Map<String, Object> saveComplementaryForm(@PathVariable UUID applicationId,
                                                       @RequestBody Map<String, Object> payload) {
         return forms.save(applicationId, payload);
+    }
+
+    @GetMapping("/applications/{applicationId}/inclusion")
+    public Map<String, Object> inclusion(@PathVariable UUID applicationId) {
+        return Map.of("success", true, "data", inclusion.get(applicationId));
+    }
+
+    @PostMapping("/applications/{applicationId}/inclusion")
+    public Map<String, Object> saveInclusion(@PathVariable UUID applicationId,
+                                              @RequestBody Map<String, Object> payload) {
+        return Map.of("success", true, "data", inclusion.save(applicationId, payload));
     }
 }

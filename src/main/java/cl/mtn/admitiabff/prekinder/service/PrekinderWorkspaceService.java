@@ -11,6 +11,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -56,6 +57,7 @@ public class PrekinderWorkspaceService {
             seedWaves(id);
             seedWorkflowStages(id);
             seedProcessConfiguration(id);
+            seedQuestionnaire(id, actor.id());
             seedCommunicationTemplates(id);
             audit(actor.id(), "PROCESS_CREATED", id);
             return process(id);
@@ -97,9 +99,11 @@ public class PrekinderWorkspaceService {
                    AND w.closes_at >= now()
             )
             SELECT p.process_id, p.academic_year, p.name,
-                   w.wave_id, w.wave_type, w.opens_at, w.closes_at
+                   w.wave_id, w.wave_type, w.opens_at, w.closes_at,
+                   config.age_reference_date, config.minimum_age_months, config.maximum_age_months
               FROM admission_processes p
               JOIN active_waves w ON w.process_id = p.process_id AND w.active_count = 1
+              JOIN prekinder_process_configuration config ON config.process_id = p.process_id
              WHERE p.status = 'PUBLISHED'
                AND (p.starts_at IS NULL OR p.starts_at <= now())
                AND (p.ends_at IS NULL OR p.ends_at >= now())
@@ -107,7 +111,9 @@ public class PrekinderWorkspaceService {
             """, Map.of(), (rs, row) -> new ApplicationOption(
                 rs.getObject("process_id", UUID.class), rs.getInt("academic_year"), rs.getString("name"),
                 rs.getObject("wave_id", UUID.class), rs.getString("wave_type"),
-                instant(rs.getTimestamp("opens_at")), instant(rs.getTimestamp("closes_at"))));
+                instant(rs.getTimestamp("opens_at")), instant(rs.getTimestamp("closes_at")),
+                rs.getObject("age_reference_date", LocalDate.class), rs.getInt("minimum_age_months"),
+                rs.getInt("maximum_age_months")));
     }
 
     public ProcessView publishProcess(UUID processId, Instant startsAt, Instant endsAt) {
@@ -264,11 +270,15 @@ public class PrekinderWorkspaceService {
     private void seedProcessConfiguration(UUID processId) {
         jdbc.update("""
             INSERT INTO prekinder_process_configuration(process_id, payment_enabled, payment_amount,
-                payment_currency, payment_glosa, payment_due_days)
-            VALUES (:processId, :enabled, :amount, :currency, :glosa, :dueDays)
+                payment_currency, payment_glosa, payment_due_days, applicant_weight, family_weight,
+                total_seats, male_seats, female_seats)
+            VALUES (:processId, :enabled, :amount, :currency, :glosa, :dueDays, 1.0000, 0.0000,
+                128, 64, 64)
             ON CONFLICT (process_id) DO NOTHING
             """, new MapSqlParameterSource().addValue("processId", processId)
-            .addValue("enabled", paymentDefaults.enabled()).addValue("amount", paymentDefaults.applicationFee())
+            .addValue("enabled", paymentDefaults.enabled())
+            .addValue("amount", paymentDefaults.applicationFee() == null || paymentDefaults.applicationFee().signum() <= 0
+                ? new java.math.BigDecimal("55000") : paymentDefaults.applicationFee())
             .addValue("currency", paymentDefaults.currency()).addValue("glosa", paymentDefaults.paymentGlosa())
             .addValue("dueDays", Math.max(1, paymentDefaults.dueDays())));
         jdbc.update("""
@@ -281,7 +291,12 @@ public class PrekinderWorkspaceService {
                      'paymentDueDays', payment_due_days, 'inclusionEnabled', inclusion_enabled,
                      'inclusionDocumentsRequired', inclusion_documents_required,
                      'minimumAgeMonths', minimum_age_months, 'maximumAgeMonths', maximum_age_months,
-                     'applicantWeight', applicant_weight, 'familyWeight', family_weight)
+                     'applicantWeight', applicant_weight, 'familyWeight', family_weight,
+                     'schemaVersion', configuration_schema_version,
+                     'totalSeats', total_seats, 'maleSeats', male_seats, 'femaleSeats', female_seats,
+                     'incorporationFeeAmount', incorporation_fee_amount,
+                     'requiredDocuments', required_documents,
+                     'resultChannel', result_channel)
               FROM prekinder_process_configuration WHERE process_id = :processId
             ON CONFLICT (process_id, version) DO NOTHING
             """, Map.of("id", UUID.randomUUID(), "processId", processId));
@@ -289,9 +304,63 @@ public class PrekinderWorkspaceService {
             INSERT INTO scoring_policies(scoring_policy_id, process_id, version, status,
                 applicant_weight, family_weight, formula_document, published_at)
             SELECT :id, process_id, 1, 'PUBLISHED', applicant_weight, family_weight,
-                   jsonb_build_object('source', 'PROCESS_CONFIGURATION', 'configurationVersion', version), now()
+                   jsonb_build_object(
+                     'formula', 'ACADEMIC*0.34+PSYCHOLOGY*0.33+PSYCHOMOTOR*0.33',
+                     'familyInterview', 'QUALITATIVE', 'automaticDecision', false,
+                     'configurationVersion', version), now()
               FROM prekinder_process_configuration WHERE process_id = :processId
             """, Map.of("id", UUID.randomUUID(), "processId", processId));
+        List<Object[]> policies = List.of(
+            new Object[]{"ENTRY_INDICATORS", "REQUIRED", false, "0.00", null, false},
+            new Object[]{"ACADEMIC", "REQUIRED", true, "0.34", "19", false},
+            new Object[]{"PSYCHOLOGY", "REQUIRED", true, "0.33", "20", true},
+            new Object[]{"PSYCHOMOTOR", "REQUIRED", true, "0.33", "15", false},
+            new Object[]{"GROUP_OBSERVATION", "REQUIRED", false, "0.00", null, false},
+            new Object[]{"FAMILY_INTERVIEW", "REQUIRED", false, "0.00", null, true},
+            new Object[]{"LEARNING_SUPPORT", "APPROVED_REFERRAL", false, "0.00", null, true},
+            new Object[]{"DAP", "APPROVED_REFERRAL", false, "0.00", null, true}
+        );
+        for (Object[] policy : policies) {
+            jdbc.update("""
+                INSERT INTO process_instrument_policies(policy_id, process_id, instrument_code,
+                    requirement, scoring, weight, maximum_score, sensitive)
+                VALUES (:id, :processId, :instrument, :requirement, :scoring,
+                    CAST(:weight AS numeric), CAST(:maximum AS numeric), :sensitive)
+                ON CONFLICT (process_id, instrument_code) DO NOTHING
+                """, new MapSqlParameterSource().addValue("id", UUID.randomUUID()).addValue("processId", processId)
+                .addValue("instrument", policy[0]).addValue("requirement", policy[1])
+                .addValue("scoring", policy[2]).addValue("weight", policy[3])
+                .addValue("maximum", policy[4]).addValue("sensitive", policy[5]));
+        }
+        jdbc.update("""
+            INSERT INTO seat_ledger(seat_id, process_id, sex, seat_number)
+            SELECT gen_random_uuid(), :processId, 'MALE', generate_series(1, 64)
+            UNION ALL
+            SELECT gen_random_uuid(), :processId, 'FEMALE', generate_series(1, 64)
+            ON CONFLICT (process_id, sex, seat_number) DO NOTHING
+            """, Map.of("processId", processId));
+    }
+
+    private void seedQuestionnaire(UUID processId, UUID actorId) {
+        UUID templateId = UUID.randomUUID();
+        jdbc.update("""
+            INSERT INTO form_templates(template_id, process_id, code, name)
+            VALUES (:id, :processId, 'COMPLEMENTARY_FORM', 'Cuestionario de postulación Prekínder')
+            """, Map.of("id", templateId, "processId", processId));
+        jdbc.update("""
+            INSERT INTO form_template_versions(template_version_id, template_id, version, status,
+                schema_document, created_by)
+            VALUES (:id, :templateId, 1, 'DRAFT', CAST(:schema AS jsonb), :actorId)
+            """, new MapSqlParameterSource().addValue("id", UUID.randomUUID())
+            .addValue("templateId", templateId).addValue("actorId", actorId)
+            .addValue("schema", """
+                {"schemaVersion":1,"renderer":"PREKINDER_COMPLEMENTARY_FORM","sections":[
+                  {"code":"FAMILY_CONTEXT","label":"Antecedentes familiares"},
+                  {"code":"HEALTH_AND_DEVELOPMENT","label":"Salud y desarrollo"},
+                  {"code":"SCHOOL_CONTEXT","label":"Contexto escolar"},
+                  {"code":"INCLUSION","label":"Inclusión","conditional":true}],
+                 "conditionalRequirements":{"inclusion":["CONSENT","SUPPORTING_DOCUMENTS","SPECIFIC_INTERVIEW"]}}
+                """));
     }
 
     private void seedCommunicationTemplates(UUID processId) {
@@ -301,13 +370,15 @@ public class PrekinderWorkspaceService {
             new String[]{"SCHEDULE_ASSIGNED", "Jornada agendada", "Jornada de evaluación Prekínder",
                 "<h1>Jornada agendada</h1><p>Revisa en el portal la fecha asignada a {{applicantName}}.</p>"},
             new String[]{"RESULT_ACCEPTED", "Resultado aceptado", "Resultado proceso de admisión Prekínder",
-                "<h1>Resultado disponible</h1><p>El resultado de {{applicantName}} ya está en el portal.</p>"},
+                "<h1>Resultado de admisión</h1><p>{{applicantName}} fue aceptado/a. Este correo es el canal oficial del resultado.</p>"},
             new String[]{"RESULT_WAITLIST", "Resultado lista de espera", "Resultado proceso de admisión Prekínder",
-                "<h1>Resultado disponible</h1><p>El resultado de {{applicantName}} ya está en el portal.</p>"},
+                "<h1>Resultado de admisión</h1><p>{{applicantName}} quedó en lista de espera. Este correo es el canal oficial del resultado.</p>"},
             new String[]{"RESULT_REJECTED", "Resultado no admitido", "Resultado proceso de admisión Prekínder",
-                "<h1>Resultado disponible</h1><p>El resultado de {{applicantName}} ya está en el portal.</p>"},
+                "<h1>Resultado de admisión</h1><p>{{applicantName}} no fue admitido/a. Este correo es el canal oficial del resultado.</p>"},
             new String[]{"RESULT_RECTIFICATION", "Rectificación de resultado", "Rectificación de resultado de admisión Prekínder",
-                "<h1>Resultado rectificado</h1><p>Existe una actualización para {{applicantName}} en el portal.</p>"}
+                "<h1>Resultado rectificado</h1><p>Este correo informa la actualización oficial para {{applicantName}}.</p>"},
+            new String[]{"WAITLIST_PROMOTED", "Promoción desde lista de espera", "Cupo disponible para Prekínder",
+                "<h1>Cupo disponible</h1><p>Se ha liberado un cupo para {{applicantName}}. Ingresa al portal para responder la oferta dentro del plazo informado.</p>"}
         );
         for (String[] template : templates) {
             UUID templateId = UUID.randomUUID();
@@ -325,16 +396,30 @@ public class PrekinderWorkspaceService {
                     CAST(:variables AS jsonb), now())
                 """, Map.of("id", UUID.randomUUID(), "templateId", templateId,
                     "subject", template[2], "body", template[3],
-                    "variables", "[\"applicantName\",\"processName\",\"portalUrl\"]"));
+                    "variables", template[0].startsWith("RESULT_")
+                        ? "[\"applicantName\",\"processName\"]"
+                        : "[\"applicantName\",\"processName\",\"portalUrl\"]"));
         }
     }
 
     private List<String> openingBlockers(UUID processId) {
         List<String> blockers = new java.util.ArrayList<>();
-        Long configuration = jdbc.queryForObject(
-            "SELECT count(*) FROM prekinder_process_configuration WHERE process_id = :id",
+        Long configuration = jdbc.queryForObject("""
+            SELECT count(*) FROM prekinder_process_configuration
+             WHERE process_id = :id AND incorporation_fee_amount IS NOT NULL
+               AND age_reference_date IS NOT NULL
+               AND result_channel = 'EMAIL_ONLY' AND male_seats + female_seats = total_seats
+               AND required_documents @> '["BIRTH_CERTIFICATE"]'::jsonb
+            """,
             Map.of("id", processId), Long.class);
-        if (configuration == null || configuration == 0) blockers.add("configuración general");
+        if (configuration == null || configuration == 0) blockers.add("configuración V2 completa y arancel de incorporación");
+        Long questionnaire = jdbc.queryForObject("""
+            SELECT count(*) FROM form_templates template
+              JOIN form_template_versions version ON version.template_id = template.template_id
+             WHERE template.process_id = :id AND template.code = 'COMPLEMENTARY_FORM'
+               AND version.status = 'PUBLISHED'
+            """, Map.of("id", processId), Long.class);
+        if (questionnaire == null || questionnaire == 0) blockers.add("cuestionario de postulación publicado");
         Long stages = jdbc.queryForObject("""
             SELECT count(*) FROM process_waves
              WHERE process_id = :id AND opens_at IS NOT NULL AND closes_at IS NOT NULL
@@ -348,6 +433,38 @@ public class PrekinderWorkspaceService {
                AND version.status = 'PUBLISHED'
             """, Map.of("id", processId), Long.class);
         if (communication == null || communication == 0) blockers.add("comunicación de postulación recibida");
+        Long rubrics = jdbc.queryForObject("""
+            SELECT count(DISTINCT assignment.instrument_code)
+              FROM process_rubric_assignments assignment
+              JOIN evaluation_template_versions version
+                ON version.evaluation_template_version_id = assignment.evaluation_template_version_id
+             WHERE assignment.process_id = :id AND assignment.active
+               AND version.status = 'PUBLISHED' AND assignment.instrument_code IN (:instruments)
+            """, new MapSqlParameterSource().addValue("id", processId)
+            .addValue("instruments", PrekinderProcessLifecycleService.REQUIRED_INSTRUMENTS), Long.class);
+        if (rubrics == null || rubrics < PrekinderProcessLifecycleService.REQUIRED_INSTRUMENTS.size()) {
+            blockers.add("pautas publicadas para todos los instrumentos obligatorios");
+        }
+        Long rooms = jdbc.queryForObject("SELECT count(*) FROM prekinder_rooms WHERE process_id = :id AND active",
+            Map.of("id", processId), Long.class);
+        if (rooms == null || rooms == 0) blockers.add("salas activas para la agenda");
+        Long familyInterviewers = jdbc.queryForObject("""
+            SELECT count(*) FROM prekinder_actor_role_assignments
+             WHERE process_id = :id AND active AND role_code = 'PK_EVALUATOR_FAMILY_INTERVIEW'
+            """, Map.of("id", processId), Long.class);
+        if (familyInterviewers == null || familyInterviewers == 0) {
+            blockers.add("equipo habilitado para entrevista familiar");
+        }
+        Long resultTemplates = jdbc.queryForObject("""
+            SELECT count(DISTINCT template.event_code)
+              FROM prekinder_communication_templates template
+              JOIN prekinder_communication_template_versions version
+                ON version.communication_template_id = template.communication_template_id
+             WHERE template.process_id = :id
+               AND template.event_code IN ('RESULT_ACCEPTED','RESULT_WAITLIST','RESULT_REJECTED','RESULT_RECTIFICATION')
+               AND version.status = 'PUBLISHED'
+            """, Map.of("id", processId), Long.class);
+        if (resultTemplates == null || resultTemplates < 4) blockers.add("plantillas de resultado publicadas");
         return blockers;
     }
 
@@ -430,7 +547,8 @@ public class PrekinderWorkspaceService {
     public record ProcessView(UUID processId, int academicYear, String name, String status, Instant startsAt,
                               Instant endsAt, long version, long applicationCount, boolean acceptingApplications) {}
     public record ApplicationOption(UUID processId, int academicYear, String name, UUID waveId, String waveType,
-                                    Instant opensAt, Instant closesAt) {}
+                                    Instant opensAt, Instant closesAt, LocalDate ageReferenceDate,
+                                    int minimumAgeMonths, int maximumAgeMonths) {}
     public record ApplicationView(UUID applicationId, UUID applicantId, UUID processId, String status,
                                   Identity identity, Instant createdAt) {}
     public record EvaluationView(UUID evaluationId, UUID applicationId, String typeCode, String status,

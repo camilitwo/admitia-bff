@@ -11,6 +11,9 @@ import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 import java.math.BigDecimal;
+import java.time.LocalDate;
+import java.time.LocalTime;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -53,7 +56,13 @@ public class PrekinderProcessController {
                 request.paymentEnabled(), request.paymentAmount(), request.paymentCurrency(),
                 request.paymentGlosa(), request.paymentDueDays(), request.inclusionEnabled(),
                 request.inclusionDocumentsRequired(), request.minimumAgeMonths(), request.maximumAgeMonths(),
-                request.applicantWeight(), request.familyWeight(), request.expectedVersion())));
+                request.ageReferenceDate(), request.totalSeats(), request.maleSeats(), request.femaleSeats(),
+                request.incorporationFeeAmount(), request.incorporationFeeCurrency(), request.incorporationFeeGlosa(),
+                request.requiredDocuments(), request.scheduleTimezone(), request.scheduleDayStart(), request.scheduleDayEnd(),
+                request.scheduleBlockMinutes(), request.scheduleMaxBlocks(), request.suggestedParallelCapacity(),
+                request.academicGroupSize(), request.psychomotorGroupSize(),
+                request.academicRequiredEvaluators(), request.psychomotorRequiredEvaluators(), request.initialOfferHours(),
+                request.waitlistOfferHours(), request.advisoryThreshold(), request.expectedVersion())));
     }
 
     @GetMapping("/readiness")
@@ -86,7 +95,23 @@ public class PrekinderProcessController {
         boolean inclusionEnabled, boolean inclusionDocumentsRequired,
         @Min(36) @Max(84) int minimumAgeMonths,
         @Min(36) @Max(96) int maximumAgeMonths,
-        @NotNull @DecimalMin("0") @DecimalMax("1") BigDecimal applicantWeight,
-        @NotNull @DecimalMin("0") @DecimalMax("1") BigDecimal familyWeight,
+        LocalDate ageReferenceDate,
+        @Min(1) int totalSeats, @Min(0) int maleSeats, @Min(0) int femaleSeats,
+        @DecimalMin(value = "0.01") BigDecimal incorporationFeeAmount,
+        @NotBlank @Pattern(regexp = "[A-Za-z]{3}") String incorporationFeeCurrency,
+        @NotBlank @Size(max = 180) String incorporationFeeGlosa,
+        @NotNull @Size(min = 1) List<@Pattern(regexp = "[A-Z0-9_]{2,64}") String> requiredDocuments,
+        @NotBlank @Size(max = 64) String scheduleTimezone,
+        @NotNull LocalTime scheduleDayStart, @NotNull LocalTime scheduleDayEnd,
+        @Min(10) @Max(240) int scheduleBlockMinutes,
+        @Min(1) @Max(48) int scheduleMaxBlocks,
+        @Min(1) @Max(200) int suggestedParallelCapacity,
+        @Min(1) @Max(100) int academicGroupSize,
+        @Min(1) @Max(100) int psychomotorGroupSize,
+        @Min(1) @Max(24) int academicRequiredEvaluators,
+        @Min(1) @Max(24) int psychomotorRequiredEvaluators,
+        @Min(1) @Max(720) int initialOfferHours,
+        @Min(1) @Max(720) int waitlistOfferHours,
+        @NotNull @DecimalMin("0") @DecimalMax("100") BigDecimal advisoryThreshold,
         @Min(0) long expectedVersion) {}
 }

@@ -12,6 +12,8 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.PutMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -37,4 +39,12 @@ public class PrekinderDocumentController {
     public ResponseEntity<ByteArrayResource> download(@PathVariable UUID documentId) throws IOException {
         return documents.download(documentId);
     }
+
+    @PutMapping("/documents/{documentId}/review")
+    public Map<String, Object> review(@PathVariable UUID documentId, @RequestBody ReviewDocument request) {
+        return Map.of("success", true, "data",
+            documents.review(documentId, request.decision(), request.reason(), request.expectedVersion()));
+    }
+
+    public record ReviewDocument(String decision, String reason, long expectedVersion) {}
 }

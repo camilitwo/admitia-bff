@@ -39,6 +39,10 @@ spring:
 app:
   prekinder:
     enabled: ${PREKINDER_ENABLED:false}
+    surfaces:
+      api-enabled: ${PREKINDER_API_ENABLED:${PREKINDER_ENABLED:false}}
+      public-enabled: ${PREKINDER_PUBLIC_ENABLED:${PREKINDER_ENABLED:false}}
+      internal-enabled: ${PREKINDER_INTERNAL_ENABLED:${PREKINDER_ENABLED:false}}
     payment:
       enabled: ${PREKINDER_PAYMENT_ENABLED:false}
       application-fee: ${PREKINDER_PAYMENT_APPLICATION_FEE:0}

@@ -28,16 +28,22 @@ public class PrekinderDocumentService {
     private final PrekinderAccessService access;
     private final VercelBlobService blobs;
     private final Path localRoot;
+    private final PrekinderApplicationStateService applicationStates;
 
     public PrekinderDocumentService(@Qualifier("prekinderJdbc") NamedParameterJdbcTemplate jdbc,
-        PrekinderAccessService access, VercelBlobService blobs, @Value("${app.uploads-dir:uploads}") String uploadsDir) {
+        PrekinderAccessService access, VercelBlobService blobs,
+        PrekinderApplicationStateService applicationStates,
+        @Value("${app.uploads-dir:uploads}") String uploadsDir) {
         this.jdbc = jdbc; this.access = access; this.blobs = blobs;
+        this.applicationStates = applicationStates;
         this.localRoot = Path.of(uploadsDir).toAbsolutePath().resolve("prekinder");
     }
 
     public DocumentView upload(UUID applicationId, String category, MultipartFile file) throws IOException {
         PrekinderActor actor = access.requireActor();
         assertAccess(applicationId, actor);
+        String normalizedCategory = normalizeCategory(category);
+        validateUploadScope(applicationId, normalizedCategory, actor);
         if (file == null || file.isEmpty()) throw new IllegalArgumentException("Selecciona un documento");
         if (file.getSize() > 20L * 1024 * 1024) throw new IllegalArgumentException("El archivo supera 20 MB");
         String mediaType = file.getContentType() == null ? "application/octet-stream" : file.getContentType();
@@ -57,25 +63,66 @@ public class PrekinderDocumentService {
             Files.copy(file.getInputStream(), target, StandardCopyOption.REPLACE_EXISTING);
             storageKey = target.toString();
         }
+        List<UUID> previous = jdbc.queryForList("""
+            SELECT document_id FROM document_metadata
+             WHERE application_id = :applicationId AND category = :category
+               AND review_status <> 'REPLACED'
+             ORDER BY created_at DESC LIMIT 1
+            """, Map.of("applicationId", applicationId, "category", normalizedCategory), UUID.class);
+        UUID replacedDocumentId = previous.isEmpty() ? null : previous.getFirst();
+        if (replacedDocumentId != null) {
+            jdbc.update("UPDATE document_metadata SET review_status = 'REPLACED', version = version + 1 WHERE document_id = :id",
+                Map.of("id", replacedDocumentId));
+        }
+        boolean restricted = normalizedCategory.startsWith("INCLUSION_")
+            || List.of("DIAGNOSTIC", "DAP", "CONSENT").contains(normalizedCategory);
         jdbc.update("""
             INSERT INTO document_metadata(document_id, application_id, category, storage_key, media_type,
-                size_bytes, sha256, scan_status, restricted, uploaded_by)
-            VALUES (:id, :applicationId, :category, :storageKey, :mediaType, :size, :sha256, 'PENDING', false, :actorId)
-            """, Map.of("id", id, "applicationId", applicationId, "category", normalizeCategory(category),
-            "storageKey", storageKey, "mediaType", mediaType, "size", file.getSize(),
-            "sha256", sha256(bytes), "actorId", actor.id()));
+                size_bytes, sha256, scan_status, restricted, uploaded_by, replaces_document_id)
+            VALUES (:id, :applicationId, :category, :storageKey, :mediaType, :size, :sha256,
+                'PENDING', :restricted, :actorId, :replacesDocumentId)
+            """, new org.springframework.jdbc.core.namedparam.MapSqlParameterSource()
+            .addValue("id", id).addValue("applicationId", applicationId).addValue("category", normalizedCategory)
+            .addValue("storageKey", storageKey).addValue("mediaType", mediaType).addValue("size", file.getSize())
+            .addValue("sha256", sha256(bytes)).addValue("restricted", restricted)
+            .addValue("actorId", actor.id()).addValue("replacesDocumentId", replacedDocumentId));
+        applicationStates.refresh(applicationId, actor.id());
         return document(id);
+    }
+
+    public DocumentView review(UUID documentId, String decision, String reason, long expectedVersion) {
+        PrekinderActor actor = access.requireAdmin();
+        String normalized = decision == null ? "" : decision.trim().toUpperCase();
+        if (!List.of("APPROVED", "REJECTED").contains(normalized))
+            throw new IllegalArgumentException("La revisión debe ser APPROVED o REJECTED");
+        if ("REJECTED".equals(normalized) && (reason == null || reason.isBlank()))
+            throw new IllegalArgumentException("El rechazo documental requiere motivo");
+        int updated = jdbc.update("""
+            UPDATE document_metadata SET review_status = :decision, review_reason = :reason,
+                reviewed_by = :actorId, reviewed_at = now(), version = version + 1
+             WHERE document_id = :id AND version = :version AND review_status = 'PENDING'
+            """, new org.springframework.jdbc.core.namedparam.MapSqlParameterSource()
+            .addValue("id", documentId).addValue("decision", normalized)
+            .addValue("reason", reason == null ? null : reason.trim()).addValue("actorId", actor.id())
+            .addValue("version", expectedVersion));
+        if (updated != 1) throw new VersionConflictException("El documento cambió o ya fue revisado");
+        UUID applicationId = jdbc.queryForObject("SELECT application_id FROM document_metadata WHERE document_id = :id",
+            Map.of("id", documentId), UUID.class);
+        applicationStates.refresh(applicationId, actor.id());
+        return document(documentId);
     }
 
     public List<DocumentView> list(UUID applicationId) {
         PrekinderActor actor = access.requireActor();
         assertAccess(applicationId, actor);
         return jdbc.query("""
-            SELECT document_id, application_id, category, media_type, size_bytes, scan_status, restricted, created_at
+            SELECT document_id, application_id, category, media_type, size_bytes, scan_status, restricted,
+                   review_status, review_reason, version, created_at
               FROM document_metadata WHERE application_id = :id ORDER BY created_at DESC
             """, Map.of("id", applicationId), (rs, row) -> new DocumentView(rs.getObject("document_id", UUID.class),
                 rs.getObject("application_id", UUID.class), rs.getString("category"), rs.getString("media_type"),
                 rs.getLong("size_bytes"), rs.getString("scan_status"), rs.getBoolean("restricted"),
+                rs.getString("review_status"), rs.getString("review_reason"), rs.getLong("version"),
                 rs.getTimestamp("created_at").toInstant()));
     }
 
@@ -93,7 +140,7 @@ public class PrekinderDocumentService {
     }
 
     private void assertAccess(UUID applicationId, PrekinderActor actor) {
-        if (List.of("ADMIN", "COORDINATOR", "CYCLE_DIRECTOR").contains(actor.role())) return;
+        if (List.of("ADMIN", "COORDINATOR", "CYCLE_DIRECTOR", "PK_ADMIN", "PK_COORDINATOR").contains(actor.role())) return;
         Long count = jdbc.queryForObject("""
             SELECT count(*) FROM applications a JOIN applicants ap ON ap.applicant_id = a.applicant_id
               JOIN families f ON f.family_id = ap.family_id
@@ -102,17 +149,37 @@ public class PrekinderDocumentService {
         if (count == null || count == 0) throw PrekinderDomainException.forbidden("NOT_ASSIGNED", "Documento no autorizado");
     }
 
+    private void validateUploadScope(UUID applicationId, String category, PrekinderActor actor) {
+        if (List.of("ADMIN", "COORDINATOR", "CYCLE_DIRECTOR", "PK_ADMIN", "PK_COORDINATOR").contains(actor.role())) return;
+        String status = jdbc.queryForObject("SELECT status FROM applications WHERE application_id = :id",
+            Map.of("id", applicationId), String.class);
+        if (List.of("PENDING_SEGMENT_VALIDATION", "PENDING_PAYMENT", "FORM_PENDING").contains(status)) return;
+        if ("REQUIRES_INFORMATION".equals(status)) {
+            Long allowed = jdbc.queryForObject("""
+                SELECT count(*) FROM application_correction_requests request
+                 WHERE request.application_id = :id AND request.status = 'OPEN'
+                   AND request.allowed_document_categories ? :category
+                """, Map.of("id", applicationId, "category", category), Long.class);
+            if (allowed != null && allowed > 0) return;
+        }
+        throw PrekinderDomainException.forbidden("DOCUMENT_UPLOAD_LOCKED",
+            "La categoría documental no está habilitada para modificación");
+    }
+
     private DocumentView document(UUID id) {
         return jdbc.queryForObject("""
-            SELECT document_id, application_id, category, media_type, size_bytes, scan_status, restricted, created_at
+            SELECT document_id, application_id, category, media_type, size_bytes, scan_status, restricted,
+                   review_status, review_reason, version, created_at
               FROM document_metadata WHERE document_id = :id
             """, Map.of("id", id), (rs, row) -> new DocumentView(id, rs.getObject("application_id", UUID.class),
                 rs.getString("category"), rs.getString("media_type"), rs.getLong("size_bytes"),
-                rs.getString("scan_status"), rs.getBoolean("restricted"), rs.getTimestamp("created_at").toInstant()));
+                rs.getString("scan_status"), rs.getBoolean("restricted"), rs.getString("review_status"),
+                rs.getString("review_reason"), rs.getLong("version"), rs.getTimestamp("created_at").toInstant()));
     }
 
     private static String normalizeCategory(String value) {
         String normalized = value == null ? "OTHER" : value.trim().toUpperCase().replaceAll("[^A-Z0-9_]", "_");
+        if (normalized.isBlank()) normalized = "OTHER";
         return normalized.substring(0, Math.min(normalized.length(), 64));
     }
     private static String extension(String name) {
@@ -126,5 +193,6 @@ public class PrekinderDocumentService {
     }
 
     public record DocumentView(UUID documentId, UUID applicationId, String category, String mediaType,
-                               long sizeBytes, String scanStatus, boolean restricted, java.time.Instant createdAt) {}
+                               long sizeBytes, String scanStatus, boolean restricted, String reviewStatus,
+                               String reviewReason, long version, java.time.Instant createdAt) {}
 }

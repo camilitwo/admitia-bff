@@ -1,8 +1,13 @@
 package cl.mtn.admitiabff.prekinder.service;
 
 import cl.mtn.admitiabff.prekinder.domain.PrekinderActor;
+import cl.mtn.admitiabff.prekinder.domain.PrekinderPolicyCodes;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.time.LocalDate;
+import java.time.LocalTime;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -19,10 +24,8 @@ import org.springframework.transaction.support.TransactionTemplate;
 @Service
 @ConditionalOnProperty(prefix = "app.prekinder", name = "enabled", havingValue = "true")
 public class PrekinderProcessLifecycleService {
-    public static final List<String> REQUIRED_INSTRUMENTS = List.of(
-        "ENTRY_INDICATORS", "ACADEMIC", "PSYCHOMOTOR", "PSYCHOLOGY",
-        "GROUP_OBSERVATION", "FAMILY_INTERVIEW", "LEARNING_SUPPORT", "DAP"
-    );
+    public static final List<String> REQUIRED_INSTRUMENTS = PrekinderPolicyCodes.REQUIRED_INSTRUMENTS;
+    private static final ObjectMapper JSON = new ObjectMapper().findAndRegisterModules();
     private static final List<String> RESULT_EVENTS = List.of(
         "RESULT_ACCEPTED", "RESULT_WAITLIST", "RESULT_REJECTED", "RESULT_RECTIFICATION"
     );
@@ -52,6 +55,8 @@ public class PrekinderProcessLifecycleService {
         return transactions.execute(status -> {
             ProcessConfiguration current = loadConfiguration(processId);
             long applications = count("SELECT count(*) FROM applications WHERE process_id = :id", processId);
+            long formalApplications = count(
+                "SELECT count(*) FROM applications WHERE process_id = :id AND formal_submitted_at IS NOT NULL", processId);
             boolean paymentChanged = current.paymentEnabled() != command.paymentEnabled()
                 || !java.util.Objects.equals(current.paymentAmount(), command.paymentAmount())
                 || !current.paymentCurrency().equalsIgnoreCase(command.paymentCurrency())
@@ -60,6 +65,10 @@ public class PrekinderProcessLifecycleService {
                 throw PrekinderDomainException.conflict("PROCESS_PAYMENT_IN_USE",
                     "No se puede cambiar la política de pago cuando el proceso ya tiene postulaciones");
             }
+            if (formalApplications > 0 && criticalPolicyChanged(current, command)) {
+                throw PrekinderDomainException.conflict("PROCESS_POLICY_FROZEN",
+                    "Crea una nueva versión de campaña: ya existen postulaciones formalizadas con esta política");
+            }
             int updated = jdbc.update("""
                 UPDATE prekinder_process_configuration
                    SET payment_enabled = :paymentEnabled, payment_amount = :paymentAmount,
@@ -67,7 +76,25 @@ public class PrekinderProcessLifecycleService {
                        payment_due_days = :paymentDueDays, inclusion_enabled = :inclusionEnabled,
                        inclusion_documents_required = :inclusionDocumentsRequired,
                        minimum_age_months = :minimumAgeMonths, maximum_age_months = :maximumAgeMonths,
-                       applicant_weight = :applicantWeight, family_weight = :familyWeight,
+                       age_reference_date = :ageReferenceDate,
+                       applicant_weight = 1.0000, family_weight = 0.0000,
+                       total_seats = :totalSeats, male_seats = :maleSeats, female_seats = :femaleSeats,
+                       incorporation_fee_amount = :incorporationFeeAmount,
+                       incorporation_fee_currency = :incorporationFeeCurrency,
+                       incorporation_fee_glosa = :incorporationFeeGlosa,
+                       required_documents = CAST(:requiredDocuments AS jsonb),
+                       schedule_timezone = :scheduleTimezone, schedule_day_start = :scheduleDayStart,
+                       schedule_day_end = :scheduleDayEnd, schedule_block_minutes = :scheduleBlockMinutes,
+                       schedule_max_blocks = :scheduleMaxBlocks,
+                       suggested_parallel_capacity = :suggestedParallelCapacity,
+                       academic_group_size = :academicGroupSize,
+                       psychomotor_group_size = :psychomotorGroupSize,
+                       academic_required_evaluators = :academicRequiredEvaluators,
+                       psychomotor_required_evaluators = :psychomotorRequiredEvaluators,
+                       initial_offer_hours = :initialOfferHours,
+                       waitlist_offer_hours = :waitlistOfferHours,
+                       advisory_threshold = :advisoryThreshold,
+                       result_channel = 'EMAIL_ONLY',
                        version = version + 1, updated_at = now()
                  WHERE process_id = :processId AND version = :expectedVersion
                 """, new MapSqlParameterSource()
@@ -81,10 +108,30 @@ public class PrekinderProcessLifecycleService {
                 .addValue("inclusionDocumentsRequired", command.inclusionDocumentsRequired())
                 .addValue("minimumAgeMonths", command.minimumAgeMonths())
                 .addValue("maximumAgeMonths", command.maximumAgeMonths())
-                .addValue("applicantWeight", command.applicantWeight())
-                .addValue("familyWeight", command.familyWeight())
+                .addValue("ageReferenceDate", command.ageReferenceDate())
+                .addValue("totalSeats", command.totalSeats())
+                .addValue("maleSeats", command.maleSeats())
+                .addValue("femaleSeats", command.femaleSeats())
+                .addValue("incorporationFeeAmount", command.incorporationFeeAmount())
+                .addValue("incorporationFeeCurrency", command.incorporationFeeCurrency().trim().toUpperCase())
+                .addValue("incorporationFeeGlosa", command.incorporationFeeGlosa().trim())
+                .addValue("requiredDocuments", writeJson(command.requiredDocuments()))
+                .addValue("scheduleTimezone", command.scheduleTimezone())
+                .addValue("scheduleDayStart", command.scheduleDayStart())
+                .addValue("scheduleDayEnd", command.scheduleDayEnd())
+                .addValue("scheduleBlockMinutes", command.scheduleBlockMinutes())
+                .addValue("scheduleMaxBlocks", command.scheduleMaxBlocks())
+                .addValue("suggestedParallelCapacity", command.suggestedParallelCapacity())
+                .addValue("academicGroupSize", command.academicGroupSize())
+                .addValue("psychomotorGroupSize", command.psychomotorGroupSize())
+                .addValue("academicRequiredEvaluators", command.academicRequiredEvaluators())
+                .addValue("psychomotorRequiredEvaluators", command.psychomotorRequiredEvaluators())
+                .addValue("initialOfferHours", command.initialOfferHours())
+                .addValue("waitlistOfferHours", command.waitlistOfferHours())
+                .addValue("advisoryThreshold", command.advisoryThreshold())
                 .addValue("expectedVersion", command.expectedVersion()));
             if (updated != 1) throw new VersionConflictException("La configuración del proceso cambió");
+            synchronizeSeatLedger(processId, command.maleSeats(), command.femaleSeats());
             ProcessConfiguration saved = loadConfiguration(processId);
             jdbc.update("""
                 INSERT INTO prekinder_process_configuration_versions(
@@ -101,12 +148,13 @@ public class PrekinderProcessLifecycleService {
             jdbc.update("""
                 INSERT INTO scoring_policies(scoring_policy_id, process_id, version, status,
                     applicant_weight, family_weight, formula_document, published_at)
-                VALUES (:id, :processId, :version, 'PUBLISHED', :applicantWeight, :familyWeight,
+                VALUES (:id, :processId, :version, 'PUBLISHED', 1.000000, 0.000000,
                     CAST(:formula AS jsonb), now())
                 """, new MapSqlParameterSource().addValue("id", UUID.randomUUID()).addValue("processId", processId)
-                .addValue("version", policyVersion).addValue("applicantWeight", saved.applicantWeight())
-                .addValue("familyWeight", saved.familyWeight())
-                .addValue("formula", "{\"source\":\"PROCESS_CONFIGURATION\",\"configurationVersion\":" + saved.version() + "}"));
+                .addValue("version", policyVersion)
+                .addValue("formula", "{\"formula\":\"ACADEMIC*0.34+PSYCHOLOGY*0.33+PSYCHOMOTOR*0.33\","
+                    + "\"familyInterview\":\"QUALITATIVE\",\"automaticDecision\":false,"
+                    + "\"configurationVersion\":" + saved.version() + "}"));
             audit(actor.id(), "PROCESS_CONFIGURATION_UPDATED", "PROCESS", processId);
             return saved;
         });
@@ -174,8 +222,21 @@ public class PrekinderProcessLifecycleService {
         List<ReadinessItem> items = new ArrayList<>();
 
         ProcessConfiguration config = loadConfiguration(processId);
-        items.add(item("OPEN_APPLICATIONS", "GENERAL_CONFIGURATION", "Configuración general", config != null,
-            "Define pago, inclusión, edad y ponderación."));
+        boolean configurationReady = config != null && config.incorporationFeeAmount() != null
+            && config.ageReferenceDate() != null
+            && config.requiredDocuments().contains("BIRTH_CERTIFICATE")
+            && config.totalSeats() == config.maleSeats() + config.femaleSeats();
+        items.add(item("OPEN_APPLICATIONS", "GENERAL_CONFIGURATION", "Configuración general", configurationReady,
+            "Define aranceles, cupos, edad, documentos, agenda y plazos."));
+
+        long publishedQuestionnaire = count("""
+            SELECT count(*) FROM form_templates template
+              JOIN form_template_versions version ON version.template_id = template.template_id
+             WHERE template.process_id = :id AND template.code = 'COMPLEMENTARY_FORM'
+               AND version.status = 'PUBLISHED'
+            """, processId);
+        items.add(item("OPEN_APPLICATIONS", "QUESTIONNAIRE", "Cuestionario de postulación",
+            publishedQuestionnaire > 0, "Debe existir una versión revisada y publicada."));
 
         long configuredWaves = count("""
             SELECT count(*) FROM process_waves
@@ -204,20 +265,36 @@ public class PrekinderProcessLifecycleService {
             """, new MapSqlParameterSource().addValue("id", processId)
             .addValue("instruments", REQUIRED_INSTRUMENTS), Long.class);
         long assignedRubrics = assignedRubricsValue == null ? 0 : assignedRubricsValue;
-        items.add(item("RUN_EVALUATIONS", "RUBRICS", "Pautas obligatorias",
+        items.add(item("OPEN_APPLICATIONS", "RUBRICS", "Pautas obligatorias",
+            assignedRubrics >= REQUIRED_INSTRUMENTS.size(),
+            assignedRubrics + " de " + REQUIRED_INSTRUMENTS.size() + " instrumentos asociados."));
+        items.add(item("RUN_EVALUATIONS", "RUBRICS_OPERATION", "Pautas operativas",
             assignedRubrics >= REQUIRED_INSTRUMENTS.size(),
             assignedRubrics + " de " + REQUIRED_INSTRUMENTS.size() + " instrumentos asociados."));
 
         long rooms = count("SELECT count(*) FROM prekinder_rooms WHERE process_id = :id AND active", processId);
-        items.add(item("RUN_EVALUATIONS", "ROOMS", "Salas", rooms > 0,
+        items.add(item("OPEN_APPLICATIONS", "ROOMS", "Salas", rooms > 0,
+            rooms == 0 ? "Crea al menos una sala." : rooms + " salas activas."));
+        items.add(item("RUN_EVALUATIONS", "ROOMS_OPERATION", "Salas operativas", rooms > 0,
             rooms == 0 ? "Crea al menos una sala." : rooms + " salas activas."));
 
         long professionals = count("""
             SELECT count(DISTINCT actor_id) FROM prekinder_actor_role_assignments
              WHERE process_id = :id AND active
             """, processId);
-        items.add(item("RUN_EVALUATIONS", "TEAM", "Equipo", professionals > 0,
+        items.add(item("OPEN_APPLICATIONS", "TEAM", "Equipo", professionals > 0,
             professionals == 0 ? "Asigna al menos un profesional." : professionals + " profesionales asignados."));
+        items.add(item("RUN_EVALUATIONS", "TEAM_OPERATION", "Equipo operativo", professionals > 0,
+            professionals == 0 ? "Asigna al menos un profesional." : professionals + " profesionales asignados."));
+
+        long familyInterviewers = count("""
+            SELECT count(*) FROM prekinder_actor_role_assignments
+             WHERE process_id = :id AND active AND role_code = 'PK_EVALUATOR_FAMILY_INTERVIEW'
+            """, processId);
+        items.add(item("OPEN_APPLICATIONS", "FAMILY_INTERVIEW_TEAM", "Entrevista familiar",
+            familyInterviewers > 0, "Debe existir al menos un entrevistador familiar asignado."));
+        items.add(item("RUN_EVALUATIONS", "FAMILY_INTERVIEW_OPERATION", "Entrevista familiar operativa",
+            familyInterviewers > 0, "Debe existir al menos un entrevistador familiar asignado."));
 
         long resultCommunications = jdbc.queryForObject("""
             SELECT count(DISTINCT template.event_code)
@@ -227,7 +304,10 @@ public class PrekinderProcessLifecycleService {
              WHERE template.process_id = :id AND template.event_code IN (:events)
                AND version.status = 'PUBLISHED'
             """, new MapSqlParameterSource().addValue("id", processId).addValue("events", RESULT_EVENTS), Long.class);
-        items.add(item("PUBLISH_RESULTS", "RESULT_COMMUNICATIONS", "Comunicaciones de resultado",
+        items.add(item("OPEN_APPLICATIONS", "RESULT_COMMUNICATIONS", "Comunicaciones de resultado",
+            resultCommunications == RESULT_EVENTS.size(),
+            resultCommunications + " de " + RESULT_EVENTS.size() + " plantillas publicadas."));
+        items.add(item("PUBLISH_RESULTS", "RESULT_COMMUNICATIONS_PUBLISH", "Comunicaciones de resultado",
             resultCommunications == RESULT_EVENTS.size(),
             resultCommunications + " de " + RESULT_EVENTS.size() + " plantillas publicadas."));
 
@@ -281,7 +361,15 @@ public class PrekinderProcessLifecycleService {
         return jdbc.queryForObject("""
             SELECT process_id, payment_enabled, payment_amount, payment_currency, payment_glosa,
                    payment_due_days, inclusion_enabled, inclusion_documents_required,
-                   minimum_age_months, maximum_age_months, applicant_weight, family_weight, version
+                   minimum_age_months, maximum_age_months, age_reference_date,
+                   applicant_weight, family_weight, configuration_schema_version,
+                   total_seats, male_seats, female_seats,
+                   incorporation_fee_amount, incorporation_fee_currency, incorporation_fee_glosa,
+                   required_documents, schedule_timezone, schedule_day_start, schedule_day_end,
+                   schedule_block_minutes, schedule_max_blocks, suggested_parallel_capacity,
+                   academic_group_size, psychomotor_group_size,
+                   academic_required_evaluators, psychomotor_required_evaluators, initial_offer_hours,
+                   waitlist_offer_hours, advisory_threshold, result_channel, version
               FROM prekinder_process_configuration WHERE process_id = :id
             """, Map.of("id", processId), (rs, row) -> new ProcessConfiguration(
                 rs.getObject("process_id", UUID.class), rs.getBoolean("payment_enabled"),
@@ -289,7 +377,19 @@ public class PrekinderProcessLifecycleService {
                 rs.getString("payment_glosa"), rs.getInt("payment_due_days"),
                 rs.getBoolean("inclusion_enabled"), rs.getBoolean("inclusion_documents_required"),
                 rs.getInt("minimum_age_months"), rs.getInt("maximum_age_months"),
+                rs.getObject("age_reference_date", LocalDate.class),
                 rs.getBigDecimal("applicant_weight"), rs.getBigDecimal("family_weight"),
+                rs.getInt("configuration_schema_version"), rs.getInt("total_seats"),
+                rs.getInt("male_seats"), rs.getInt("female_seats"),
+                rs.getBigDecimal("incorporation_fee_amount"), rs.getString("incorporation_fee_currency"),
+                rs.getString("incorporation_fee_glosa"), readStringList(rs.getString("required_documents")),
+                rs.getString("schedule_timezone"), rs.getObject("schedule_day_start", LocalTime.class),
+                rs.getObject("schedule_day_end", LocalTime.class), rs.getInt("schedule_block_minutes"),
+                rs.getInt("schedule_max_blocks"), rs.getInt("suggested_parallel_capacity"),
+                rs.getInt("academic_group_size"), rs.getInt("psychomotor_group_size"),
+                rs.getInt("academic_required_evaluators"), rs.getInt("psychomotor_required_evaluators"),
+                rs.getInt("initial_offer_hours"), rs.getInt("waitlist_offer_hours"),
+                rs.getBigDecimal("advisory_threshold"), rs.getString("result_channel"),
                 rs.getLong("version")));
     }
 
@@ -316,26 +416,80 @@ public class PrekinderProcessLifecycleService {
         if (command.minimumAgeMonths() > command.maximumAgeMonths()) {
             throw new IllegalArgumentException("La edad mínima no puede superar la máxima");
         }
-        if (command.applicantWeight() == null || command.familyWeight() == null
-            || command.applicantWeight().add(command.familyWeight()).compareTo(BigDecimal.ONE) != 0) {
-            throw new IllegalArgumentException("Las ponderaciones deben sumar 1");
-        }
+        if (command.totalSeats() <= 0 || command.maleSeats() < 0 || command.femaleSeats() < 0
+            || command.maleSeats() + command.femaleSeats() != command.totalSeats())
+            throw new IllegalArgumentException("Los cupos por sexo deben sumar el total de cupos");
+        if (command.incorporationFeeAmount() != null && command.incorporationFeeAmount().signum() <= 0)
+            throw new IllegalArgumentException("El arancel de incorporación debe ser mayor que cero");
+        if (command.incorporationFeeCurrency() == null || !command.incorporationFeeCurrency().matches("[A-Za-z]{3}"))
+            throw new IllegalArgumentException("La moneda de incorporación debe usar tres letras");
+        if (command.incorporationFeeGlosa() == null || command.incorporationFeeGlosa().isBlank())
+            throw new IllegalArgumentException("La glosa de incorporación es obligatoria");
+        if (command.requiredDocuments() == null || command.requiredDocuments().isEmpty()
+            || command.requiredDocuments().stream().anyMatch(value -> value == null || !value.matches("[A-Z0-9_]{2,64}")))
+            throw new IllegalArgumentException("Define al menos un documento obligatorio válido");
+        if (command.scheduleDayStart() == null || command.scheduleDayEnd() == null
+            || !command.scheduleDayEnd().isAfter(command.scheduleDayStart()))
+            throw new IllegalArgumentException("La jornada de evaluación es inválida");
+        if (command.academicGroupSize() < 1 || command.psychomotorGroupSize() < 1
+            || command.academicRequiredEvaluators() < 1 || command.psychomotorRequiredEvaluators() < 1)
+            throw new IllegalArgumentException("Los tamaños de grupo y equipos evaluadores deben ser mayores que cero");
+        if (command.advisoryThreshold() == null || command.advisoryThreshold().signum() < 0
+            || command.advisoryThreshold().compareTo(new BigDecimal("100")) > 0)
+            throw new IllegalArgumentException("El umbral orientativo debe estar entre 0 y 100");
     }
 
     private static String configurationJson(ProcessConfiguration configuration) {
-        return """
-            {"paymentEnabled":%s,"paymentAmount":%s,"paymentCurrency":"%s","paymentGlosa":"%s",
-             "paymentDueDays":%d,"inclusionEnabled":%s,"inclusionDocumentsRequired":%s,
-             "minimumAgeMonths":%d,"maximumAgeMonths":%d,"applicantWeight":%s,"familyWeight":%s}
-            """.formatted(configuration.paymentEnabled(), configuration.paymentAmount(),
-                jsonEscape(configuration.paymentCurrency()), jsonEscape(configuration.paymentGlosa()),
-                configuration.paymentDueDays(), configuration.inclusionEnabled(),
-                configuration.inclusionDocumentsRequired(), configuration.minimumAgeMonths(),
-                configuration.maximumAgeMonths(), configuration.applicantWeight(), configuration.familyWeight());
+        return writeJson(configuration);
     }
 
     private static String jsonEscape(String value) {
         return value == null ? "" : value.replace("\\", "\\\\").replace("\"", "\\\"");
+    }
+
+    private static String writeJson(Object value) {
+        try { return JSON.writeValueAsString(value); }
+        catch (Exception exception) { throw new IllegalArgumentException("La configuración no tiene un formato válido", exception); }
+    }
+
+    private static List<String> readStringList(String value) {
+        try { return JSON.readValue(value, new TypeReference<>() {}); }
+        catch (Exception exception) { throw new IllegalStateException("Los documentos configurados no son válidos", exception); }
+    }
+
+    private static boolean criticalPolicyChanged(ProcessConfiguration current, ConfigurationCommand next) {
+        return current.totalSeats() != next.totalSeats() || current.maleSeats() != next.maleSeats()
+            || current.femaleSeats() != next.femaleSeats()
+            || current.minimumAgeMonths() != next.minimumAgeMonths()
+            || current.maximumAgeMonths() != next.maximumAgeMonths()
+            || !java.util.Objects.equals(current.ageReferenceDate(), next.ageReferenceDate())
+            || !java.util.Objects.equals(current.paymentAmount(), next.paymentAmount())
+            || !java.util.Objects.equals(current.incorporationFeeAmount(), next.incorporationFeeAmount())
+            || !current.requiredDocuments().equals(next.requiredDocuments());
+    }
+
+    private void synchronizeSeatLedger(UUID processId, int maleSeats, int femaleSeats) {
+        for (Map.Entry<String, Integer> target : Map.of("MALE", maleSeats, "FEMALE", femaleSeats).entrySet()) {
+            Long occupiedOutsideRange = jdbc.queryForObject("""
+                SELECT count(*) FROM seat_ledger
+                 WHERE process_id = :processId AND sex = :sex AND seat_number > :target
+                   AND status <> 'AVAILABLE'
+                """, Map.of("processId", processId, "sex", target.getKey(), "target", target.getValue()), Long.class);
+            if (occupiedOutsideRange != null && occupiedOutsideRange > 0)
+                throw PrekinderDomainException.conflict("SEAT_QUOTA_IN_USE",
+                    "No se puede reducir el cupo porque existen asientos reservados o matriculados");
+            jdbc.update("""
+                DELETE FROM seat_ledger
+                 WHERE process_id = :processId AND sex = :sex AND seat_number > :target
+                   AND status = 'AVAILABLE'
+                """, Map.of("processId", processId, "sex", target.getKey(), "target", target.getValue()));
+            jdbc.update("""
+                INSERT INTO seat_ledger(seat_id, process_id, sex, seat_number)
+                SELECT gen_random_uuid(), :processId, :sex, number
+                  FROM generate_series(1, :target) number
+                ON CONFLICT (process_id, sex, seat_number) DO NOTHING
+                """, Map.of("processId", processId, "sex", target.getKey(), "target", target.getValue()));
+        }
     }
 
     private void audit(UUID actorId, String action, String type, UUID aggregateId) {
@@ -354,11 +508,26 @@ public class PrekinderProcessLifecycleService {
     public record ConfigurationCommand(boolean paymentEnabled, BigDecimal paymentAmount, String paymentCurrency,
         String paymentGlosa, int paymentDueDays, boolean inclusionEnabled,
         boolean inclusionDocumentsRequired, int minimumAgeMonths, int maximumAgeMonths,
-        BigDecimal applicantWeight, BigDecimal familyWeight, long expectedVersion) {}
+        LocalDate ageReferenceDate, int totalSeats, int maleSeats, int femaleSeats,
+        BigDecimal incorporationFeeAmount, String incorporationFeeCurrency, String incorporationFeeGlosa,
+        List<String> requiredDocuments, String scheduleTimezone, LocalTime scheduleDayStart,
+        LocalTime scheduleDayEnd, int scheduleBlockMinutes, int scheduleMaxBlocks,
+        int suggestedParallelCapacity, int academicGroupSize, int psychomotorGroupSize,
+        int academicRequiredEvaluators, int psychomotorRequiredEvaluators,
+        int initialOfferHours, int waitlistOfferHours, BigDecimal advisoryThreshold,
+        long expectedVersion) {}
     public record ProcessConfiguration(UUID processId, boolean paymentEnabled, BigDecimal paymentAmount,
         String paymentCurrency, String paymentGlosa, int paymentDueDays, boolean inclusionEnabled,
         boolean inclusionDocumentsRequired, int minimumAgeMonths, int maximumAgeMonths,
-        BigDecimal applicantWeight, BigDecimal familyWeight, long version) {}
+        LocalDate ageReferenceDate, BigDecimal applicantWeight, BigDecimal familyWeight,
+        int schemaVersion, int totalSeats, int maleSeats, int femaleSeats,
+        BigDecimal incorporationFeeAmount, String incorporationFeeCurrency, String incorporationFeeGlosa,
+        List<String> requiredDocuments, String scheduleTimezone, LocalTime scheduleDayStart,
+        LocalTime scheduleDayEnd, int scheduleBlockMinutes, int scheduleMaxBlocks,
+        int suggestedParallelCapacity, int academicGroupSize, int psychomotorGroupSize,
+        int academicRequiredEvaluators, int psychomotorRequiredEvaluators,
+        int initialOfferHours, int waitlistOfferHours, BigDecimal advisoryThreshold,
+        String resultChannel, long version) {}
     public record ProcessSummary(UUID processId, int academicYear, String name, String status,
         Instant startsAt, Instant endsAt, long version) {}
     public record ReadinessItem(String phase, String code, String label, boolean complete,

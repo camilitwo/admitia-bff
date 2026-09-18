@@ -30,7 +30,9 @@ public class PrekinderReportController {
     @PutMapping("/{reportId}/criteria/{criterionId}")
     public Map<String, Object> response(@PathVariable UUID reportId, @PathVariable UUID criterionId,
                                        @Valid @RequestBody ResponseCommand command) {
-        return ok(reports.saveResponse(reportId, criterionId, command.optionId(), command.notObserved(),
+        String observationState = command.observationState() == null
+            ? (command.notObserved() ? "NOT_OBSERVED" : "OBSERVED") : command.observationState();
+        return ok(reports.saveResponse(reportId, criterionId, command.optionId(), observationState,
             command.expectedVersion(), command.operationId()));
     }
 
@@ -44,16 +46,33 @@ public class PrekinderReportController {
         return ok(reports.complete(reportId, command.expectedVersion()));
     }
 
+    @PutMapping("/{reportId}/paper-capture")
+    public Map<String, Object> paperCapture(@PathVariable UUID reportId,
+        @Valid @RequestBody PaperCaptureCommand command) {
+        return ok(reports.markPaperCapture(reportId, command.observedAt(), command.expectedVersion()));
+    }
+
+    @PutMapping("/{reportId}/review")
+    public Map<String, Object> review(@PathVariable UUID reportId, @Valid @RequestBody ReviewCommand command) {
+        return ok(reports.review(reportId, command.decision(), command.reason(), command.expectedVersion()));
+    }
+
     @PutMapping("/{reportId}/extension")
     public Map<String, Object> extension(@PathVariable UUID reportId, @Valid @RequestBody ExtensionCommand command) {
         return ok(reports.extend(reportId, command.validUntil(), command.reason()));
     }
 
     private static Map<String, Object> ok(Object data) { return Map.of("success", true, "data", data); }
-    public record ResponseCommand(UUID optionId, boolean notObserved, @Min(0) long expectedVersion,
+    public record ResponseCommand(UUID optionId, boolean notObserved,
+                                  @jakarta.validation.constraints.Pattern(regexp = "OBSERVED|NOT_OBSERVED|NOT_APPLICABLE|PENDING")
+                                  String observationState, @Min(0) long expectedVersion,
                                   @NotNull UUID operationId) {}
     public record NoteCommand(@Size(max = 12000) String content, @Min(0) long expectedVersion,
                               @NotNull UUID operationId) {}
     public record VersionCommand(@Min(0) long expectedVersion) {}
+    public record PaperCaptureCommand(@NotNull Instant observedAt, @Min(0) long expectedVersion) {}
+    public record ReviewCommand(@NotNull @jakarta.validation.constraints.Pattern(regexp = "VALIDATED|RETURNED")
+                                String decision, @Size(max = 2000) String reason,
+                                @Min(0) long expectedVersion) {}
     public record ExtensionCommand(@NotNull @Future Instant validUntil, @NotNull @Size(min = 3, max = 2000) String reason) {}
 }

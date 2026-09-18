@@ -8,6 +8,7 @@ import static org.mockito.Mockito.when;
 import cl.mtn.admitiabff.prekinder.service.PrekinderFieldService;
 import cl.mtn.admitiabff.prekinder.service.PrekinderWorkspaceService;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -35,7 +36,8 @@ class PrekinderWorkspaceControllerTest {
     void exposesOnlyTheActiveApplicationOptionsToTheGuardianFlow() {
         var option = new PrekinderWorkspaceService.ApplicationOption(
             UUID.randomUUID(), 2027, "Prekínder 2027", UUID.randomUUID(), "NEW_FAMILIES",
-            Instant.parse("2026-08-05T12:00:00Z"), Instant.parse("2026-08-31T23:59:00Z"));
+            Instant.parse("2026-08-05T12:00:00Z"), Instant.parse("2026-08-31T23:59:00Z"),
+            LocalDate.of(2027, 3, 31), 48, 59);
         when(workspace.applicationOptions()).thenReturn(List.of(option));
 
         Map<String, Object> response = controller.applicationOptions();

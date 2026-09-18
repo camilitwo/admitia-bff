@@ -92,6 +92,27 @@ public class PrekinderControlTowerService {
                 .put(String.valueOf(row.get("instrument_code")), String.valueOf(row.get("progress")));
         }
 
+        Map<UUID, List<MemberAttendance>> attendanceMembers = new LinkedHashMap<>();
+        if (!groups.isEmpty()) {
+            jdbc.query("""
+                SELECT group_id, application_id, status, attendance_detail, attendance_reason_code, version,
+                       attendance_recorded_at
+                  FROM evaluation_group_members
+                 WHERE group_id IN (:groupIds) AND status NOT IN ('MOVED','CANCELLED')
+                 ORDER BY assigned_at
+                """, Map.of("groupIds", groups.stream().map(GroupRow::groupId).toList()), (rs, row) -> {
+                UUID groupId = rs.getObject("group_id", UUID.class);
+                String persisted = rs.getString("status");
+                String detail = rs.getString("attendance_detail");
+                attendanceMembers.computeIfAbsent(groupId, ignored -> new ArrayList<>()).add(new MemberAttendance(
+                    rs.getObject("application_id", UUID.class), AttendanceState.presented(persisted, detail),
+                    rs.getString("attendance_reason_code"), rs.getLong("version"),
+                    rs.getTimestamp("attendance_recorded_at") == null ? null
+                        : rs.getTimestamp("attendance_recorded_at").toInstant()));
+                return null;
+            });
+        }
+
         Map<UUID, RoomBuilder> rooms = new LinkedHashMap<>();
         for (GroupRow group : groups) {
             rooms.computeIfAbsent(group.roomId(), ignored -> new RoomBuilder(group.roomId(), group.roomName()))
@@ -99,7 +120,8 @@ public class PrekinderControlTowerService {
                     operationalStatus(group), group.capacity(), group.memberCount(),
                     new Attendance(group.present(), group.pending(), group.absent()),
                     progress.getOrDefault(group.groupId(), Map.of()), group.version(),
-                    clustersByGroup.getOrDefault(group.groupId(), List.of())));
+                    clustersByGroup.getOrDefault(group.groupId(), List.of()),
+                    attendanceMembers.getOrDefault(group.groupId(), List.of())));
         }
         int openIncidents = jdbc.queryForObject("""
             SELECT count(*) FROM prekinder_operational_incidents
@@ -234,6 +256,7 @@ public class PrekinderControlTowerService {
                 case "LATE" -> new AttendanceState("ATTENDED", "LATE", "LATE");
                 case "ABSENT" -> new AttendanceState("ABSENT", null, "ABSENT");
                 case "COULD_NOT_ENTER" -> new AttendanceState("ABSENT", "COULD_NOT_ENTER", "COULD_NOT_ENTER");
+                case "NOT_EVALUABLE" -> new AttendanceState("ABSENT", "NOT_EVALUABLE", "NOT_EVALUABLE");
                 default -> throw new IllegalArgumentException("Estado de asistencia inválido");
             };
         }
@@ -257,11 +280,14 @@ public class PrekinderControlTowerService {
     public record ControlTowerGroup(UUID groupId, String code, Instant startsAt, Instant endsAt,
                                     String status, int capacity, int memberCount, Attendance attendance,
                                     Map<String, String> instrumentProgress, long version,
-                                    List<PrekinderFlowService.ClusterRef> clusters) {}
+                                    List<PrekinderFlowService.ClusterRef> clusters,
+                                    List<MemberAttendance> members) {}
     public record ClusterAggregate(UUID clusterId, String name, String status, long version, List<UUID> groupIds,
                                    List<UUID> roomIds, Instant startsAt, Instant endsAt, Attendance attendance,
                                    Map<String, String> instrumentProgress, int openIncidents) {}
     public record Attendance(int present, int pending, int absent) {}
+    public record MemberAttendance(UUID applicationId, String status, String reasonCode,
+                                   long version, Instant recordedAt) {}
     public record AttendanceUpdate(UUID groupId, UUID applicationId, String status, String reasonCode,
                                    long version, Instant recordedAt) {}
 }
