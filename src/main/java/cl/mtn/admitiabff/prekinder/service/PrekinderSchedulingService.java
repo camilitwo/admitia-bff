@@ -236,12 +236,17 @@ public class PrekinderSchedulingService {
         List<UUID> candidates = jdbc.queryForList("""
             SELECT p.professional_id
               FROM professional_profiles p
-              JOIN prekinder_actor_role_assignments role
-                ON role.actor_id = p.professional_id AND role.process_id = :processId AND role.active
-              JOIN professional_instrument_authorizations authorization
-                ON authorization.professional_id = p.professional_id
-               AND authorization.process_id = :processId AND authorization.active
-             WHERE p.active AND authorization.instrument_code IN (:instruments)
+             WHERE p.active
+               AND CASE p.role_code
+                     WHEN 'PK_EVALUATOR_ACADEMIC' THEN 'ACADEMIC'
+                     WHEN 'PK_EVALUATOR_PSYCHOMOTOR' THEN 'PSYCHOMOTOR'
+                     WHEN 'PK_EVALUATOR_PSYCHOLOGY' THEN 'PSYCHOLOGY'
+                     WHEN 'PK_EVALUATOR_ENTRY_INDICATORS' THEN 'ENTRY_INDICATORS'
+                     WHEN 'PK_EVALUATOR_GROUP_OBSERVATION' THEN 'GROUP_OBSERVATION'
+                     WHEN 'PK_EVALUATOR_FAMILY_INTERVIEW' THEN 'FAMILY_INTERVIEW'
+                     WHEN 'PK_EVALUATOR_LEARNING_SUPPORT' THEN 'LEARNING_SUPPORT'
+                     WHEN 'PK_EVALUATOR_DAP' THEN 'DAP'
+                   END IN (:instruments)
                AND NOT EXISTS (
                    SELECT 1 FROM evaluator_group_bookings booking
                     WHERE booking.evaluator_id = p.professional_id AND booking.active
@@ -261,9 +266,9 @@ public class PrekinderSchedulingService {
                                  AND available.status = 'AVAILABLE'
                                  AND available.starts_at <= :startsAt AND available.ends_at >= :endsAt)
                )
-             ORDER BY authorization.instrument_code, p.display_name, p.professional_id
-            """, new MapSqlParameterSource().addValue("processId", processId)
-            .addValue("instruments", instruments).addValue("startsAt", Timestamp.from(slot.startsAt()))
+             ORDER BY p.role_code, p.display_name, p.professional_id
+            """, new MapSqlParameterSource().addValue("instruments", instruments)
+            .addValue("startsAt", Timestamp.from(slot.startsAt()))
             .addValue("endsAt", Timestamp.from(slot.endsAt())), UUID.class);
         return candidates.stream().filter(id -> planned.stream().noneMatch(item -> item.evaluatorId().equals(id)
             && overlaps(item.startsAt(), item.endsAt(), slot.startsAt(), slot.endsAt()))).toList();

@@ -386,14 +386,12 @@ public class PrekinderFlowService {
         if (processId != null) {
             return jdbc.query("""
                 SELECT p.professional_id, p.display_name, p.email, p.specialty, p.role_code, p.active, p.version,
-                       a.legacy_user_id, r.role_code as assignment_role
+                       a.legacy_user_id
                   FROM professional_profiles p
                   JOIN actors a ON a.actor_id = p.professional_id
-                  JOIN prekinder_actor_role_assignments r ON r.actor_id = p.professional_id
-                                                         AND r.process_id = :processId AND r.active
                  WHERE p.active
                 ORDER BY p.display_name
-                """, Map.of("processId", processId), (rs, row) -> professionalView(rs.getObject("professional_id", UUID.class),
+                """, Map.of(), (rs, row) -> professionalView(rs.getObject("professional_id", UUID.class),
                     (Long) rs.getObject("legacy_user_id"), rs.getString("display_name"), rs.getString("email"),
                     rs.getString("specialty"), rs.getString("role_code"), rs.getBoolean("active"), rs.getLong("version")));
         }
@@ -1329,17 +1327,16 @@ public class PrekinderFlowService {
             String roleCode = jdbc.queryForObject("""
                 SELECT p.role_code
                   FROM professional_profiles p
-                  JOIN prekinder_actor_role_assignments r
-                    ON r.actor_id = p.professional_id AND r.process_id = :processId AND r.active
                  WHERE p.professional_id = :evaluatorId AND p.active
-                   AND p.role_code LIKE 'PK_EVALUATOR_%' AND r.role_code = p.role_code
-                """, Map.of("processId", group.processId(), "evaluatorId", evaluatorId), String.class);
+                   AND p.role_code LIKE 'PK_EVALUATOR_%'
+                """, Map.of("evaluatorId", evaluatorId), String.class);
             if (roleCode == null) {
                 throw PrekinderDomainException.forbidden("PROFESSIONAL_ROLE_MISMATCH",
-                    "El profesional no tiene un rol evaluador homologado para este proceso");
+                    "El profesional no tiene un rol evaluador activo");
             }
-            ensureEvaluatorAvailable(evaluatorId, group.startsAt(), group.endsAt());
             ProfessionalRoleDefinition definition = professionalRole(roleCode);
+            ensureProfessionalProcessRole(group.processId(), evaluatorId, definition, actor.id());
+            ensureEvaluatorAvailable(evaluatorId, group.startsAt(), group.endsAt());
             String instrumentCode = definition.instrumentCode();
             if (group.evaluatorIds().size() >= group.requiredEvaluators()) {
                 throw PrekinderDomainException.conflict("EVALUATOR_CAPACITY", "El grupo ya tiene todos sus evaluadores");
@@ -1370,6 +1367,19 @@ public class PrekinderFlowService {
             touchGroupVersion(groupId);
             return group(groupId);
         });
+    }
+
+    private void ensureProfessionalProcessRole(UUID processId, UUID professionalId,
+                                               ProfessionalRoleDefinition definition, UUID adminId) {
+        Long activeAssignments = jdbc.queryForObject("""
+            SELECT count(*) FROM prekinder_actor_role_assignments
+             WHERE process_id = :processId AND actor_id = :professionalId
+               AND role_code = :roleCode AND active
+            """, Map.of("processId", processId, "professionalId", professionalId,
+                "roleCode", definition.roleCode()), Long.class);
+        if (activeAssignments == null || activeAssignments == 0) {
+            syncProfessionalRole(processId, professionalId, definition, adminId);
+        }
     }
 
     private void ensureEvaluatorAvailable(UUID evaluatorId, Instant startsAt, Instant endsAt) {
