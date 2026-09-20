@@ -26,6 +26,20 @@ public final class PrekinderAgePolicy {
     public static void validate(LocalDate birthDate, LocalDate referenceDate, int minimumMonths, int maximumMonths) {
         if (birthDate == null) throw new IllegalArgumentException("La fecha de nacimiento es obligatoria");
         LocalDate effectiveDate = referenceDate == null ? LocalDate.now(SANTIAGO) : referenceDate;
+        validateConfiguredRange(birthDate, effectiveDate, minimumMonths, maximumMonths);
+    }
+
+    public static void validate(LocalDate birthDate, LocalDate referenceDate, int academicYear,
+                                int minimumMonths, int maximumMonths) {
+        if (birthDate == null) throw new IllegalArgumentException("La fecha de nacimiento es obligatoria");
+        LocalDate effectiveDate = referenceDate == null
+            ? LocalDate.of(academicYear, 3, 31)
+            : referenceDate;
+        validateConfiguredRange(birthDate, effectiveDate, minimumMonths, maximumMonths);
+    }
+
+    private static void validateConfiguredRange(LocalDate birthDate, LocalDate effectiveDate,
+                                                int minimumMonths, int maximumMonths) {
         long months = ChronoUnit.MONTHS.between(birthDate, effectiveDate);
         if (birthDate.isAfter(effectiveDate) || months < minimumMonths || months > maximumMonths) {
             throw new PrekinderDomainException("AGE_NOT_ELIGIBLE",

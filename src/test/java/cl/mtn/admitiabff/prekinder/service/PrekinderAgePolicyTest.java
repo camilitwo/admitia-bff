@@ -33,4 +33,19 @@ class PrekinderAgePolicyTest {
         assertThatThrownBy(() -> PrekinderAgePolicy.validate(LocalDate.of(2023, 8, 6), stillAugustFifthInSantiago))
             .isInstanceOf(PrekinderDomainException.class);
     }
+
+    @Test
+    void usesMarch31OfAcademicYearWhenConfiguredReferenceDateIsMissing() {
+        assertThatCode(() -> PrekinderAgePolicy.validate(
+            LocalDate.of(2023, 1, 2), null, 2027, 48, 71))
+            .doesNotThrowAnyException();
+    }
+
+    @Test
+    void appliesMinimumAgeAgainstAcademicYearFallbackDate() {
+        assertThatThrownBy(() -> PrekinderAgePolicy.validate(
+            LocalDate.of(2023, 4, 1), null, 2027, 48, 71))
+            .isInstanceOf(PrekinderDomainException.class)
+            .extracting("code").isEqualTo("AGE_NOT_ELIGIBLE");
+    }
 }

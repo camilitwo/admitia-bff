@@ -124,11 +124,15 @@ public class PrekinderFlowService {
         PrekinderActor actor = access.requireActor();
         String rut = PrekinderRut.normalize(command.rut());
         Map<String, Object> agePolicy = jdbc.queryForMap("""
-            SELECT age_reference_date, minimum_age_months, maximum_age_months
-              FROM prekinder_process_configuration WHERE process_id = :id
+            SELECT config.age_reference_date, config.minimum_age_months, config.maximum_age_months,
+                   process.academic_year
+              FROM prekinder_process_configuration config
+              JOIN admission_processes process ON process.process_id = config.process_id
+             WHERE config.process_id = :id
             """, Map.of("id", command.processId()));
         PrekinderAgePolicy.validate(command.birthDate(),
             agePolicy.get("age_reference_date") == null ? null : ((java.sql.Date) agePolicy.get("age_reference_date")).toLocalDate(),
+            ((Number) agePolicy.get("academic_year")).intValue(),
             ((Number) agePolicy.get("minimum_age_months")).intValue(),
             ((Number) agePolicy.get("maximum_age_months")).intValue());
         String category = category(command.eligibility());
