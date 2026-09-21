@@ -855,12 +855,50 @@ public class ApplicationService {
         return Map.of("success", true, "data", data);
     }
 
-    private FamilyEntity resolveFamily(UserEntity applicant) {
-        FamilyEntity family = familyRepository.save(new FamilyEntity());
+    /**
+     * Una cuenta apoderado mantiene un único grupo familiar. La segunda postulación (hermano o
+     * hermana) reutiliza el formulario familiar ya emitido para el proceso en lugar de exigir
+     * uno nuevo, sin depender de la confirmación manual de asociación por RUT. Se prioriza el
+     * grupo familiar más reciente de la cuenta y luego sus membresías, de modo que la asociación
+     * explícita a otro hogar también se respete. Las cuentas internas que registran
+     * postulaciones por terceros conservan su aislamiento actual.
+     */
+    FamilyEntity resolveFamily(UserEntity applicant) {
+        Long reusable = reusableFamily(applicant);
+        FamilyEntity family = reusable == null ? null : familyRepository.findById(reusable).orElse(null);
+        if (family == null) family = familyRepository.save(new FamilyEntity());
         if (applicant != null) {
             jdbcTemplate.update("INSERT INTO family_members(family_id, user_id) VALUES (?, ?) ON CONFLICT DO NOTHING", family.getId(), applicant.getId());
         }
         return family;
+    }
+
+    private Long reusableFamily(UserEntity applicant) {
+        if (applicant == null || applicant.getRole() != Role.APODERADO) return null;
+        return familyToReuse(
+            jdbcTemplate.queryForList("""
+                SELECT family_id FROM applications
+                 WHERE applicant_user_id = ? AND family_id IS NOT NULL AND deleted_at IS NULL
+                 ORDER BY id DESC
+                """, Long.class, applicant.getId()),
+            jdbcTemplate.queryForList("""
+                SELECT family_id FROM family_members WHERE user_id = ?
+                 ORDER BY created_at DESC, family_id DESC
+                """, Long.class, applicant.getId()));
+    }
+
+    /** Prioriza el grupo familiar de las postulaciones de la cuenta y luego sus membresías. */
+    static Long familyToReuse(List<Long> applicationFamilies, List<Long> memberFamilies) {
+        Long fromApplications = firstFamily(applicationFamilies);
+        return fromApplications != null ? fromApplications : firstFamily(memberFamilies);
+    }
+
+    private static Long firstFamily(List<Long> families) {
+        if (families == null) return null;
+        for (Long familyId : families) {
+            if (familyId != null) return familyId;
+        }
+        return null;
     }
 
     private String processKey(ApplicationEntity application) {

@@ -48,6 +48,7 @@ public class PrekinderGuardianFormService {
     public Map<String, Object> get(UUID applicationId) {
         PrekinderActor actor = access.requireActor();
         ApplicationState application = assertOwned(applicationId, actor);
+        boolean correctionOpen = hasOpenCorrection(applicationId);
         List<Map<String, Object>> forms = jdbc.query("""
             SELECT form_id, application_id, template_version_id, ciphertext, iv, wrapped_dek, wrapped_dek_iv, key_version,
                    submitted, submitted_at, version, created_at, updated_at
@@ -62,6 +63,7 @@ public class PrekinderGuardianFormService {
                 data.put("familyId", application.familyId());
                 data.put("processKey", application.processId().toString());
                 data.put("processOpen", application.processOpen());
+                data.put("correctionOpen", correctionOpen);
                 data.put("templateVersionId", rs.getObject("template_version_id", UUID.class));
                 data.put("isSubmitted", rs.getBoolean("submitted"));
                 data.put("submittedAt", instant(rs.getTimestamp("submitted_at")));
@@ -93,6 +95,10 @@ public class PrekinderGuardianFormService {
                     "Debe pagar la postulación Prekínder antes de completar el formulario complementario");
             }
             ExistingForm existing = existing(application);
+            if (blocksRepeatCompletion(existing != null && existing.submitted(), hasOpenCorrection(applicationId))) {
+                throw new ResponseStatusException(HttpStatus.FORBIDDEN,
+                    "El formulario familiar ya fue enviado y se comparte con el resto del grupo familiar");
+            }
             boolean submitted = Boolean.parseBoolean(String.valueOf(payload.getOrDefault("isSubmitted", false)));
             UUID formId = existing == null ? UUID.randomUUID() : existing.formId();
             UUID templateVersionId = existing == null ? publishedTemplateVersion(applicationId) : null;
@@ -117,6 +123,23 @@ public class PrekinderGuardianFormService {
             applicationStates.refresh(applicationId, actor.id());
             return get(applicationId);
         });
+    }
+
+    /**
+     * El formulario complementario pertenece a la familia y al proceso: cuando ya fue enviado,
+     * el hermano o hermana comparte ese mismo formulario y no debe completarlo otra vez. Sólo se
+     * reabre cuando existe una solicitud de corrección vigente para la postulación.
+     */
+    static boolean blocksRepeatCompletion(boolean formSubmitted, boolean correctionOpen) {
+        return formSubmitted && !correctionOpen;
+    }
+
+    private boolean hasOpenCorrection(UUID applicationId) {
+        Integer open = jdbc.queryForObject("""
+            SELECT count(*) FROM application_correction_requests
+             WHERE application_id = :id AND status = 'OPEN'
+            """, Map.of("id", applicationId), Integer.class);
+        return open != null && open > 0;
     }
 
     private ApplicationState assertOwned(UUID applicationId, PrekinderActor actor) {

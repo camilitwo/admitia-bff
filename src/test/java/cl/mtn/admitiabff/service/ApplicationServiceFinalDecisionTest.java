@@ -10,6 +10,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import cl.mtn.admitiabff.domain.application.ApplicationEntity;
+import cl.mtn.admitiabff.domain.application.FamilyEntity;
 import cl.mtn.admitiabff.domain.common.ApplicationStatus;
 import cl.mtn.admitiabff.domain.common.PaymentStatus;
 import cl.mtn.admitiabff.domain.common.Role;
@@ -108,6 +109,9 @@ class ApplicationServiceFinalDecisionTest {
         application.setApplicantUser(applicant);
         application.setFather(father);
         application.setMother(mother);
+        FamilyEntity family = new FamilyEntity();
+        family.setId(40L);
+        application.setFamily(family);
         application.setStatus(ApplicationStatus.UNDER_REVIEW);
         application.setSubmissionDate(LocalDateTime.now());
 
