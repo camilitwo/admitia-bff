@@ -3,6 +3,7 @@ package cl.mtn.admitiabff.service;
 import cl.mtn.admitiabff.domain.application.ApplicationEntity;
 import cl.mtn.admitiabff.domain.common.EvaluationStatus;
 import cl.mtn.admitiabff.domain.common.InterviewStatus;
+import cl.mtn.admitiabff.domain.common.Role;
 import cl.mtn.admitiabff.domain.email.EmailRequestDTO;
 import cl.mtn.admitiabff.domain.evaluation.EvaluationEntity;
 import cl.mtn.admitiabff.domain.notification.EmailTemplate;
@@ -24,11 +25,13 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.server.ResponseStatusException;
 
 @Service
 @Transactional(readOnly = true)
@@ -72,6 +75,7 @@ public class EvaluationService {
     }
 
     public Map<String, Object> all() {
+        assertEvaluationAdmin();
         List<Map<String, Object>> data = evaluationRepository.findAllByOrderByCreatedAtDesc().stream().map(this::toResponse).toList();
         return Map.of("success", true, "data", data, "content", data, "count", data.size());
     }
@@ -105,7 +109,10 @@ public class EvaluationService {
         return ResponseEntity.ok(Map.of("success", true, "data", data));
     }
 
-    public Map<String, Object> byApplication(Long applicationId) { return wrap(evaluationRepository.findByApplicationIdOrderByCreatedAtDesc(applicationId)); }
+    public Map<String, Object> byApplication(Long applicationId) {
+        assertEvaluationReader();
+        return wrap(evaluationRepository.findByApplicationIdOrderByCreatedAtDesc(applicationId));
+    }
     public Map<String, Object> byEvaluator(Long evaluatorId) { return wrap(evaluationRepository.findByEvaluatorIdOrderByCreatedAtDesc(evaluatorId)); }
     public Map<String, Object> evaluatorPending(Long evaluatorId) { return wrap(evaluationRepository.findByEvaluatorIdAndStatusInOrderByCreatedAtDesc(evaluatorId, List.of(EvaluationStatus.PENDING, EvaluationStatus.IN_PROGRESS))); }
     public Map<String, Object> evaluatorCompleted(Long evaluatorId) { return wrap(evaluationRepository.findByEvaluatorIdAndStatusOrderByCreatedAtDesc(evaluatorId, EvaluationStatus.COMPLETED)); }
@@ -434,6 +441,32 @@ public class EvaluationService {
 
     private EvaluationEntity load(Long id) {
         return evaluationRepository.findById(id).orElseThrow(() -> new IllegalArgumentException("Evaluación no encontrada"));
+    }
+
+    /**
+     * Roles internos que pueden consultar las evaluaciones de una postulación como contexto del
+     * informe de evaluación. El listado completo sigue siendo exclusivo de administración.
+     */
+    private static final List<Role> EVALUATION_READER_ROLES = List.of(
+        Role.ADMIN, Role.COORDINATOR, Role.CYCLE_DIRECTOR, Role.TEACHER, Role.PSYCHOLOGIST,
+        Role.INTERVIEWER, Role.PREKINDER_PROFESSIONAL);
+
+    static boolean canReadApplicationEvaluations(String role) {
+        if (role == null) return false;
+        return EVALUATION_READER_ROLES.stream().anyMatch(candidate -> candidate.name().equalsIgnoreCase(role));
+    }
+
+    private void assertEvaluationReader() {
+        AuthService.AuthContextHolder auth = authService.requireAuth();
+        if (!canReadApplicationEvaluations(auth.role())) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Sin acceso a las evaluaciones de la postulación");
+        }
+    }
+
+    private void assertEvaluationAdmin() {
+        if (!authService.isAdminContext(authService.requireAuth())) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Sólo administración puede listar todas las evaluaciones");
+        }
     }
 
     private EvaluationEntity loadAccessible(Long id) {

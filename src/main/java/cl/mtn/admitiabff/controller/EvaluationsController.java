@@ -13,7 +13,14 @@ public class EvaluationsController {
 
     public EvaluationsController(EvaluationService evaluationService) { this.evaluationService = evaluationService; }
 
-    @GetMapping @PreAuthorize("hasRole('ADMIN')") public Map<String, Object> all() { return evaluationService.all(); }
+    /**
+     * Listado completo: sólo administración. Con `applicationId` devuelve las evaluaciones de la
+     * postulación para los equipos profesionales (la consola de informes las usa como contexto).
+     * La autorización vive en el servicio para responder 403 claro en vez de un 500 genérico.
+     */
+    @GetMapping public Map<String, Object> all(@RequestParam(required = false) Long applicationId) {
+        return applicationId == null ? evaluationService.all() : evaluationService.byApplication(applicationId);
+    }
     @GetMapping("/statistics") @PreAuthorize("hasRole('ADMIN')") public Map<String, Object> statistics() { return evaluationService.statistics(); }
     @GetMapping("/assignments") @PreAuthorize("hasRole('ADMIN')") public Map<String, Object> assignments() { return evaluationService.assignments(); }
     @GetMapping("/export") @PreAuthorize("hasRole('ADMIN')") public ResponseEntity<?> export(@RequestParam(required = false) String status, @RequestParam(required = false) String type, @RequestParam(defaultValue = "json") String format) { return evaluationService.export(status, type, format); }

@@ -192,7 +192,7 @@ public class ApplicationService {
 
     public Map<String, Object> complementaryForm(Long applicationId) {
         ApplicationEntity application = load(applicationId);
-        assertFamilyAccess(application);
+        assertFamilyReadAccess(application);
         return complementaryFormRepository.findByFamilyIdAndProcessKey(application.getFamily().getId(), processKey(application))
             .map(this::toComplementaryFormResponse)
             .orElseGet(() -> Map.of("success", true, "data", Map.of()));
@@ -906,13 +906,38 @@ public class ApplicationService {
         return "GENERAL:" + year;
     }
 
+    /**
+     * Roles internos del colegio que pueden consultar el cuestionario de los padres para conducir
+     * entrevistas familiares y evaluaciones. Un apoderado sólo accede si pertenece al grupo familiar.
+     */
+    private static final List<Role> FAMILY_QUESTIONNAIRE_READER_ROLES = List.of(
+        Role.ADMIN, Role.COORDINATOR, Role.CYCLE_DIRECTOR, Role.TEACHER, Role.PSYCHOLOGIST,
+        Role.INTERVIEWER, Role.PREKINDER_PROFESSIONAL);
+
+    /** Lectura del cuestionario familiar: equipos internos habilitados o el propio grupo familiar. */
+    private void assertFamilyReadAccess(ApplicationEntity application) {
+        AuthService.AuthContextHolder auth = authService.requireAuth();
+        if (canReadFamilyQuestionnaire(auth.role())) return;
+        assertFamilyMembership(application, auth);
+    }
+
+    /** Escritura del cuestionario familiar: el grupo familiar y los roles administrativos de siempre. */
     private void assertFamilyAccess(ApplicationEntity application) {
         AuthService.AuthContextHolder auth = authService.requireAuth();
         if (authService.hasAnyRoleContext(auth, Role.ADMIN, Role.COORDINATOR, Role.CYCLE_DIRECTOR)) return;
+        assertFamilyMembership(application, auth);
+    }
+
+    private void assertFamilyMembership(ApplicationEntity application, AuthService.AuthContextHolder auth) {
         Integer count = jdbcTemplate.queryForObject(
             "SELECT count(*) FROM family_members WHERE family_id = ? AND user_id = ?", Integer.class,
             application.getFamily().getId(), auth.id());
         if (count == null || count == 0) throw new ResponseStatusException(HttpStatus.FORBIDDEN, "No pertenece al grupo familiar");
+    }
+
+    static boolean canReadFamilyQuestionnaire(String role) {
+        if (role == null) return false;
+        return FAMILY_QUESTIONNAIRE_READER_ROLES.stream().anyMatch(candidate -> candidate.name().equalsIgnoreCase(role));
     }
 
     private boolean generalProcessIsOpen(Integer academicYear) {
