@@ -81,7 +81,7 @@ public class PrekinderGuardianFormService {
         PrekinderActor actor = access.requireActor();
         return transactions.execute(status -> {
             ApplicationState application = assertOwned(applicationId, actor);
-            if (!application.processOpen()) {
+            if (!canEditFamilyForm(application.processOpen())) {
                 throw new ResponseStatusException(HttpStatus.CONFLICT, "El proceso Prekínder está cerrado para edición");
             }
             Integer eligible = jdbc.queryForObject("""
@@ -95,10 +95,6 @@ public class PrekinderGuardianFormService {
                     "Debe pagar la postulación Prekínder antes de completar el formulario complementario");
             }
             ExistingForm existing = existing(application);
-            if (blocksRepeatCompletion(existing != null && existing.submitted(), hasOpenCorrection(applicationId))) {
-                throw new ResponseStatusException(HttpStatus.FORBIDDEN,
-                    "El formulario familiar ya fue enviado y se comparte con el resto del grupo familiar");
-            }
             boolean submitted = Boolean.parseBoolean(String.valueOf(payload.getOrDefault("isSubmitted", false)));
             UUID formId = existing == null ? UUID.randomUUID() : existing.formId();
             UUID templateVersionId = existing == null ? publishedTemplateVersion(applicationId) : null;
@@ -126,12 +122,12 @@ public class PrekinderGuardianFormService {
     }
 
     /**
-     * El formulario complementario pertenece a la familia y al proceso: cuando ya fue enviado,
-     * el hermano o hermana comparte ese mismo formulario y no debe completarlo otra vez. Sólo se
-     * reabre cuando existe una solicitud de corrección vigente para la postulación.
+     * El formulario familiar continúa editable mientras el proceso esté abierto, incluso después
+     * de su primer envío. Esto permite incorporar a hermanos postulados con posterioridad sin crear
+     * ni completar un segundo formulario.
      */
-    static boolean blocksRepeatCompletion(boolean formSubmitted, boolean correctionOpen) {
-        return formSubmitted && !correctionOpen;
+    static boolean canEditFamilyForm(boolean processOpen) {
+        return processOpen;
     }
 
     private boolean hasOpenCorrection(UUID applicationId) {
