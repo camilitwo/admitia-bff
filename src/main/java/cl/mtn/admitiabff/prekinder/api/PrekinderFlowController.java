@@ -102,6 +102,17 @@ public class PrekinderFlowController {
         return ok(inclusion.updateInterview(applicationId, command.status(), command.reason()));
     }
 
+    @GetMapping("/applications/{applicationId}/inclusion/administrative-view")
+    public Map<String, Object> inclusionAdministrativeView(@PathVariable UUID applicationId) {
+        return ok(inclusion.getForAdmin(applicationId));
+    }
+
+    @PutMapping("/applications/{applicationId}/inclusion/administrative-correction")
+    public Map<String, Object> correctInclusion(@PathVariable UUID applicationId,
+        @Valid @RequestBody InclusionCorrectionCommand command) {
+        return ok(inclusion.correctDirectly(applicationId, command.answers(), command.reason(), command.expectedVersion()));
+    }
+
     @GetMapping("/professionals")
     public Map<String, Object> professionals(@RequestParam(required = false) UUID processId) {
         return ok(flow.professionals(processId));
@@ -369,6 +380,8 @@ public class PrekinderFlowController {
     public record InclusionInterviewCommand(
         @NotBlank @Pattern(regexp = "PENDING|SCHEDULED|COMPLETED|WAIVED") String status,
         @Size(max = 2000) String reason) {}
+    public record InclusionCorrectionCommand(@NotNull Map<String, Object> answers,
+        @NotBlank @Size(max = 1000) String reason, @Min(0) long expectedVersion) {}
     public record ProfessionalCommand(@NotNull UUID processId, UUID professionalId, Long legacyUserId,
         @NotBlank @Size(max = 160) String displayName,
         @Email @NotBlank @Size(max = 254) String email, @Size(min = 6, max = 128) String password,

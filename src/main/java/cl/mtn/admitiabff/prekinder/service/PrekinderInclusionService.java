@@ -7,6 +7,7 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.sql.Timestamp;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.util.LinkedHashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -45,7 +46,15 @@ public class PrekinderInclusionService {
     public InclusionView get(UUID applicationId) {
         PrekinderActor actor = access.requireActor();
         ApplicationAccess application = assertOwner(applicationId, actor);
-        return read(applicationId, application.inclusionEnabled());
+        return read(applicationId, application.inclusionEnabled(), applicant(applicationId));
+    }
+
+    public AdminInclusionView getForAdmin(UUID applicationId) {
+        PrekinderActor actor = access.requireSensitiveAccess();
+        ApplicationAccess application = applicationAccess(applicationId);
+        InclusionView current = read(applicationId, application.inclusionEnabled(), applicant(applicationId));
+        return new AdminInclusionView(current, revisions(applicationId),
+            Set.of("ADMIN", "PK_ADMIN").contains(actor.role()), application.processOpen());
     }
 
     public InclusionView save(UUID applicationId, Map<String, Object> payload) {
@@ -75,9 +84,9 @@ public class PrekinderInclusionService {
             EncryptedPayload encrypted = encrypt(applicationId, payload);
             jdbc.update("""
                 INSERT INTO inclusion_record_revisions(inclusion_revision_id, inclusion_id, revision_number,
-                    state, ciphertext, iv, wrapped_dek, wrapped_dek_iv, key_version, authored_by)
+                    state, ciphertext, iv, wrapped_dek, wrapped_dek_iv, key_version, authored_by, change_origin)
                 VALUES (:revisionId, :inclusionId, :revision, :state, :ciphertext, :iv,
-                    :wrappedDek, :wrappedDekIv, :keyVersion, :actorId)
+                    :wrappedDek, :wrappedDekIv, :keyVersion, :actorId, 'FAMILY')
                 """, new MapSqlParameterSource().addValue("revisionId", UUID.randomUUID())
                 .addValue("inclusionId", inclusionId).addValue("revision", nextRevision)
                 .addValue("state", submitted ? "SUBMITTED" : "DRAFT")
@@ -110,7 +119,74 @@ public class PrekinderInclusionService {
             }
             audit(actor.id(), submitted ? "INCLUSION_DECLARATION_SUBMITTED" : "INCLUSION_DECLARATION_SAVED",
                 applicationId, Map.of("revision", nextRevision));
-            return read(applicationId, true);
+            return read(applicationId, true, applicant(applicationId));
+        });
+    }
+
+    public AdminInclusionView correctDirectly(UUID applicationId, Map<String, Object> answers,
+                                               String reason, long expectedVersion) {
+        PrekinderActor actor = access.requireSuperAdmin();
+        if (reason == null || reason.isBlank()) {
+            throw new IllegalArgumentException("La corrección administrativa requiere motivo");
+        }
+        Set<String> editable = Set.of("backgroundSummary", "currentSupports", "relevantDocuments");
+        Map<String, Object> requested = answers == null ? Map.of() : answers;
+        if (requested.isEmpty() || requested.keySet().stream().anyMatch(key -> !editable.contains(key))) {
+            throw new IllegalArgumentException("La corrección contiene campos no permitidos");
+        }
+        return transactions.execute(status -> {
+            List<RecordState> records = jdbc.query("""
+                SELECT record.inclusion_id, record.version, revision.ciphertext, revision.iv,
+                       revision.wrapped_dek, revision.wrapped_dek_iv, revision.key_version
+                  FROM inclusion_records record
+                  JOIN LATERAL (
+                      SELECT item.* FROM inclusion_record_revisions item
+                       WHERE item.inclusion_id = record.inclusion_id
+                       ORDER BY item.revision_number DESC LIMIT 1
+                  ) revision ON true
+                 WHERE record.application_id = :applicationId
+                 FOR UPDATE OF record
+                """, Map.of("applicationId", applicationId), (rs, row) -> new RecordState(
+                    rs.getObject("inclusion_id", UUID.class), rs.getLong("version"),
+                    new EncryptedPayload(rs.getString("ciphertext"), rs.getString("iv"),
+                        rs.getString("wrapped_dek"), rs.getString("wrapped_dek_iv"), rs.getString("key_version"))));
+            if (records.isEmpty()) throw PrekinderDomainException.conflict("INCLUSION_NOT_DECLARED",
+                "El postulante no posee una declaración de inclusión para corregir");
+            RecordState record = records.getFirst();
+            if (record.version() != expectedVersion) {
+                throw new VersionConflictException("La declaración de inclusión cambió; vuelve a cargarla");
+            }
+            Map<String, Object> corrected = decrypt(applicationId, record.payload());
+            requested.forEach(corrected::put);
+            UUID revisionId = UUID.randomUUID();
+            Integer nextRevision = jdbc.queryForObject("""
+                SELECT COALESCE(max(revision_number), 0) + 1
+                  FROM inclusion_record_revisions WHERE inclusion_id = :id
+                """, Map.of("id", record.inclusionId()), Integer.class);
+            EncryptedPayload encrypted = encrypt(applicationId, corrected);
+            EncryptedPayload encryptedReason = encryption.encrypt(reason.trim(), reasonAad(revisionId, applicationId));
+            jdbc.update("""
+                INSERT INTO inclusion_record_revisions(inclusion_revision_id, inclusion_id, revision_number,
+                    state, ciphertext, iv, wrapped_dek, wrapped_dek_iv, key_version, authored_by,
+                    change_origin, reason_ciphertext, reason_iv, reason_wrapped_dek, reason_wrapped_dek_iv,
+                    reason_key_version)
+                VALUES (:revisionId, :inclusionId, :revision, 'SUBMITTED', :ciphertext, :iv,
+                    :wrappedDek, :wrappedDekIv, :keyVersion, :actorId, 'ADMIN_DIRECT_EDIT',
+                    :reasonCiphertext, :reasonIv, :reasonWrappedDek, :reasonWrappedDekIv, :reasonKeyVersion)
+                """, new MapSqlParameterSource().addValue("revisionId", revisionId)
+                .addValue("inclusionId", record.inclusionId()).addValue("revision", nextRevision)
+                .addValue("ciphertext", encrypted.ciphertext()).addValue("iv", encrypted.iv())
+                .addValue("wrappedDek", encrypted.wrappedDek()).addValue("wrappedDekIv", encrypted.wrappedDekIv())
+                .addValue("keyVersion", encrypted.keyVersion()).addValue("actorId", actor.id())
+                .addValue("reasonCiphertext", encryptedReason.ciphertext()).addValue("reasonIv", encryptedReason.iv())
+                .addValue("reasonWrappedDek", encryptedReason.wrappedDek())
+                .addValue("reasonWrappedDekIv", encryptedReason.wrappedDekIv())
+                .addValue("reasonKeyVersion", encryptedReason.keyVersion()));
+            jdbc.update("UPDATE inclusion_records SET version = version + 1, updated_at = now() WHERE inclusion_id = :id",
+                Map.of("id", record.inclusionId()));
+            audit(actor.id(), "INCLUSION_ADMIN_DIRECT_CORRECTION", applicationId,
+                Map.of("revision", nextRevision, "processOpen", applicationAccess(applicationId).processOpen()));
+            return getForAdmin(applicationId);
         });
     }
 
@@ -133,7 +209,7 @@ public class PrekinderInclusionService {
         audit(actor.id(), "INCLUSION_INTERVIEW_STATUS_CHANGED", applicationId,
             reason == null || reason.isBlank() ? Map.of("status", normalized)
                 : Map.of("status", normalized, "reason", reason.trim()));
-        return read(applicationId, true);
+        return read(applicationId, true, applicant(applicationId));
     }
 
     private UUID lockOrCreate(UUID applicationId) {
@@ -195,7 +271,7 @@ public class PrekinderInclusionService {
             """, Map.of("id", UUID.randomUUID(), "applicationId", applicationId, "version", version));
     }
 
-    private InclusionView read(UUID applicationId, boolean enabled) {
+    private InclusionView read(UUID applicationId, boolean enabled, ApplicantSummary applicant) {
         List<InclusionView> rows = jdbc.query("""
             SELECT record.inclusion_id, record.consent_status, record.specific_interview_required,
                    record.specific_interview_status, record.declared_at, record.version,
@@ -217,26 +293,110 @@ public class PrekinderInclusionService {
                 return new InclusionView(enabled, true, rs.getObject("inclusion_id", UUID.class),
                     rs.getString("consent_status"), rs.getBoolean("specific_interview_required"),
                     rs.getString("specific_interview_status"), declaredAt == null ? null : declaredAt.toInstant(),
-                    rs.getLong("version"), revisionNumber, rs.getString("state"), declaration);
+                    rs.getLong("version"), revisionNumber, rs.getString("state"), declaration, applicant);
             });
         return rows.isEmpty() ? new InclusionView(enabled, false, null, "PENDING", false, "NOT_REQUIRED",
-            null, 0, null, null, Map.of()) : rows.getFirst();
+            null, 0, null, null, Map.of(), applicant) : rows.getFirst();
     }
 
     private ApplicationAccess assertOwner(UUID applicationId, PrekinderActor actor) {
         List<ApplicationAccess> rows = jdbc.query("""
-            SELECT config.inclusion_enabled, application.payment_required, application.payment_status
+            SELECT config.inclusion_enabled, application.payment_required, application.payment_status,
+                   (process.status NOT IN ('CLOSED','ARCHIVED')
+                    AND (process.ends_at IS NULL OR process.ends_at >= now())) AS process_open
               FROM applications application
               JOIN applicants applicant ON applicant.applicant_id = application.applicant_id
               JOIN families family ON family.family_id = applicant.family_id
               JOIN prekinder_process_configuration config ON config.process_id = application.process_id
+              JOIN admission_processes process ON process.process_id = application.process_id
              WHERE application.application_id = :applicationId AND family.external_reference = :actorReference
             """, Map.of("applicationId", applicationId, "actorReference", actor.id().toString()),
             (rs, row) -> new ApplicationAccess(rs.getBoolean("inclusion_enabled"),
-                rs.getBoolean("payment_required"), rs.getString("payment_status")));
+                rs.getBoolean("payment_required"), rs.getString("payment_status"), rs.getBoolean("process_open")));
         if (rows.isEmpty()) throw PrekinderDomainException.forbidden("APPLICATION_NOT_OWNED",
             "Postulación Prekínder no autorizada");
         return rows.getFirst();
+    }
+
+    private ApplicationAccess applicationAccess(UUID applicationId) {
+        List<ApplicationAccess> rows = jdbc.query("""
+            SELECT config.inclusion_enabled, application.payment_required, application.payment_status,
+                   (process.status NOT IN ('CLOSED','ARCHIVED')
+                    AND (process.ends_at IS NULL OR process.ends_at >= now())) AS process_open
+              FROM applications application
+              JOIN prekinder_process_configuration config ON config.process_id = application.process_id
+              JOIN admission_processes process ON process.process_id = application.process_id
+             WHERE application.application_id = :applicationId
+            """, Map.of("applicationId", applicationId), (rs, row) -> new ApplicationAccess(
+                rs.getBoolean("inclusion_enabled"), rs.getBoolean("payment_required"),
+                rs.getString("payment_status"), rs.getBoolean("process_open")));
+        if (rows.isEmpty()) throw PrekinderDomainException.conflict("APPLICATION_NOT_FOUND", "Postulación Prekínder no encontrada");
+        return rows.getFirst();
+    }
+
+    private ApplicantSummary applicant(UUID applicationId) {
+        return jdbc.query("""
+            SELECT application.application_id, application.folio, applicant.applicant_id,
+                   applicant.identity_ciphertext, applicant.identity_iv, applicant.identity_wrapped_dek,
+                   applicant.identity_wrapped_dek_iv, applicant.identity_key_version,
+                   process.name AS process_name, process.academic_year
+              FROM applications application
+              JOIN applicants applicant ON applicant.applicant_id = application.applicant_id
+              JOIN admission_processes process ON process.process_id = application.process_id
+             WHERE application.application_id = :applicationId
+            """, Map.of("applicationId", applicationId), (rs, row) -> {
+                UUID applicantId = rs.getObject("applicant_id", UUID.class);
+                EncryptedPayload identityPayload = new EncryptedPayload(rs.getString("identity_ciphertext"),
+                    rs.getString("identity_iv"), rs.getString("identity_wrapped_dek"),
+                    rs.getString("identity_wrapped_dek_iv"), rs.getString("identity_key_version"));
+                ApplicantIdentity identity = decryptIdentity(applicationId, applicantId, identityPayload);
+                return new ApplicantSummary(applicationId,
+                    java.util.stream.Stream.of(identity.firstName(), identity.paternalLastName(), identity.maternalLastName())
+                        .filter(value -> value != null && !value.isBlank()).collect(java.util.stream.Collectors.joining(" ")),
+                    maskRut(identity.rut()), rs.getString("process_name"), rs.getInt("academic_year"), rs.getString("folio"));
+            }).stream().findFirst().orElseThrow(() -> PrekinderDomainException.conflict(
+                "APPLICATION_NOT_FOUND", "Postulación Prekínder no encontrada"));
+    }
+
+    private List<RevisionView> revisions(UUID applicationId) {
+        return jdbc.query("""
+            SELECT revision.inclusion_revision_id, revision.revision_number, revision.state,
+                   revision.change_origin, revision.created_at, revision.ciphertext, revision.iv,
+                   revision.wrapped_dek, revision.wrapped_dek_iv, revision.key_version,
+                   revision.reason_ciphertext, revision.reason_iv, revision.reason_wrapped_dek,
+                   revision.reason_wrapped_dek_iv, revision.reason_key_version,
+                   actor.actor_id, actor.display_name, actor.role_code
+              FROM inclusion_records record
+              JOIN inclusion_record_revisions revision ON revision.inclusion_id = record.inclusion_id
+              JOIN actors actor ON actor.actor_id = revision.authored_by
+             WHERE record.application_id = :applicationId
+             ORDER BY revision.revision_number DESC
+            """, Map.of("applicationId", applicationId), (rs, row) -> {
+                UUID revisionId = rs.getObject("inclusion_revision_id", UUID.class);
+                Map<String, Object> declaration = decrypt(applicationId, new EncryptedPayload(
+                    rs.getString("ciphertext"), rs.getString("iv"), rs.getString("wrapped_dek"),
+                    rs.getString("wrapped_dek_iv"), rs.getString("key_version")));
+                String reason = null;
+                if (rs.getString("reason_ciphertext") != null) {
+                    reason = encryption.decrypt(new EncryptedPayload(rs.getString("reason_ciphertext"),
+                        rs.getString("reason_iv"), rs.getString("reason_wrapped_dek"),
+                        rs.getString("reason_wrapped_dek_iv"), rs.getString("reason_key_version")),
+                        reasonAad(revisionId, applicationId));
+                }
+                Timestamp createdAt = rs.getTimestamp("created_at");
+                return new RevisionView(revisionId, rs.getInt("revision_number"), rs.getString("state"),
+                    rs.getString("change_origin"), rs.getObject("actor_id", UUID.class), rs.getString("display_name"),
+                    rs.getString("role_code"), createdAt == null ? null : createdAt.toInstant(), reason, declaration);
+            });
+    }
+
+    private ApplicantIdentity decryptIdentity(UUID applicationId, UUID applicantId, EncryptedPayload payload) {
+        try {
+            String identityAad = "prekinder|applicants|" + applicantId + "|application:" + applicationId + "|identity";
+            return mapper.readValue(encryption.decrypt(payload, identityAad), ApplicantIdentity.class);
+        } catch (Exception exception) {
+            throw new IllegalStateException("La identidad cifrada de Prekínder no tiene un formato válido", exception);
+        }
     }
 
     private EncryptedPayload encrypt(UUID applicationId, Map<String, Object> payload) {
@@ -266,8 +426,30 @@ public class PrekinderInclusionService {
     }
 
     private static String aad(UUID applicationId) { return "prekinder|inclusion|application:" + applicationId; }
-    private record ApplicationAccess(boolean inclusionEnabled, boolean paymentRequired, String paymentStatus) {}
+    private static String reasonAad(UUID revisionId, UUID applicationId) {
+        return "prekinder|inclusion-reason|revision:" + revisionId + "|application:" + applicationId;
+    }
+    private static String maskRut(String rut) {
+        if (rut == null || rut.isBlank()) return "No informado";
+        String normalized = rut.replaceAll("[^0-9kK]", "");
+        if (normalized.length() <= 4) return "****";
+        return "****" + normalized.substring(normalized.length() - 4);
+    }
+    private record ApplicationAccess(boolean inclusionEnabled, boolean paymentRequired, String paymentStatus,
+                                     boolean processOpen) {}
+    private record RecordState(UUID inclusionId, long version, EncryptedPayload payload) {}
+    private record ApplicantIdentity(String rut, String firstName, String paternalLastName,
+                                     String maternalLastName, LocalDate birthDate, String familyEmail,
+                                     String fatherEmail, String motherEmail) {}
+    public record ApplicantSummary(UUID applicationId, String fullName, String maskedRut, String processName,
+                                   int academicYear, String folio) {}
+    public record RevisionView(UUID revisionId, int revisionNumber, String state, String changeOrigin,
+                               UUID authorId, String authorName, String authorRole, Instant createdAt,
+                               String reason, Map<String, Object> declaration) {}
+    public record AdminInclusionView(InclusionView current, List<RevisionView> revisions,
+                                     boolean canDirectEdit, boolean processOpen) {}
     public record InclusionView(boolean enabled, boolean declared, UUID inclusionId, String consentStatus,
         boolean specificInterviewRequired, String specificInterviewStatus, Instant declaredAt, long version,
-        Integer revisionNumber, String revisionState, Map<String, Object> declaration) {}
+        Integer revisionNumber, String revisionState, Map<String, Object> declaration,
+        ApplicantSummary applicant) {}
 }
