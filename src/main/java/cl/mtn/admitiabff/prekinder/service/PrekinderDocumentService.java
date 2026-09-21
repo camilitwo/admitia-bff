@@ -20,10 +20,13 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 @Service
 @ConditionalOnProperty(prefix = "app.prekinder", name = "enabled", havingValue = "true")
 public class PrekinderDocumentService {
+    private static final Logger log = LoggerFactory.getLogger(PrekinderDocumentService.class);
     private final NamedParameterJdbcTemplate jdbc;
     private final PrekinderAccessService access;
     private final VercelBlobService blobs;
@@ -56,12 +59,26 @@ public class PrekinderDocumentService {
         String objectKey = "prekinder/" + applicationId + "/" + id + extension;
         String storageKey;
         if (blobs.isEnabled()) {
-            storageKey = blobs.upload(bytes, objectKey, mediaType).url;
+            try {
+                storageKey = blobs.upload(bytes, objectKey, mediaType).url;
+            } catch (RuntimeException exception) {
+                log.warn("event=prekinder_document_upload_failed applicationId={} category={} storage=blob",
+                    applicationId, normalizedCategory, exception);
+                throw new PrekinderDomainException("DOCUMENT_UPLOAD_FAILED",
+                    "No fue posible almacenar el documento; inténtalo nuevamente",
+                    org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE);
+            }
         } else {
-            Files.createDirectories(localRoot.resolve(applicationId.toString()));
-            Path target = localRoot.resolve(applicationId.toString()).resolve(id + extension);
-            Files.copy(file.getInputStream(), target, StandardCopyOption.REPLACE_EXISTING);
-            storageKey = target.toString();
+            try {
+                Files.createDirectories(localRoot.resolve(applicationId.toString()));
+                Path target = localRoot.resolve(applicationId.toString()).resolve(id + extension);
+                Files.copy(file.getInputStream(), target, StandardCopyOption.REPLACE_EXISTING);
+                storageKey = target.toString();
+            } catch (IOException exception) {
+                log.warn("event=prekinder_document_upload_failed applicationId={} category={} storage=local",
+                    applicationId, normalizedCategory, exception);
+                throw exception;
+            }
         }
         List<UUID> previous = jdbc.queryForList("""
             SELECT document_id FROM document_metadata
@@ -87,6 +104,8 @@ public class PrekinderDocumentService {
             .addValue("sha256", sha256(bytes)).addValue("restricted", restricted)
             .addValue("actorId", actor.id()).addValue("replacesDocumentId", replacedDocumentId));
         applicationStates.refresh(applicationId, actor.id());
+        log.info("event=prekinder_document_uploaded applicationId={} documentId={} category={} sizeBytes={}",
+            applicationId, id, normalizedCategory, file.getSize());
         return document(id);
     }
 

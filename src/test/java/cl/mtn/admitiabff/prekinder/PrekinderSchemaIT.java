@@ -43,6 +43,16 @@ class PrekinderSchemaIT {
             try (var result = statement.executeQuery()) { result.next(); assertEquals(22, result.getInt(1)); }
         }
 
+        try (var connection = DriverManager.getConnection(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword());
+             var statement = connection.prepareStatement("""
+                 SELECT count(*) FROM pg_indexes
+                  WHERE schemaname = 'public'
+                    AND indexname = 'uq_prekinder_application_client_submission'
+                    AND indexdef LIKE '%submitted_by, process_id, client_submission_id%'
+                 """)) {
+            try (var result = statement.executeQuery()) { result.next(); assertEquals(1, result.getInt(1)); }
+        }
+
 
         try (var connection = DriverManager.getConnection(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword());
              var statement = connection.createStatement()) {

@@ -122,6 +122,12 @@ public class PrekinderFlowService {
 
     public ApplicationView submitApplication(SubmitApplication command) {
         PrekinderActor actor = access.requireActor();
+        ApplicationView repeated = applicationBySubmission(actor.id(), command.processId(), command.clientSubmissionId());
+        if (repeated != null) {
+            audit(actor.id(), "APPLICATION_SUBMISSION_REPLAYED", "APPLICATION", repeated.applicationId(),
+                Map.of("clientSubmissionId", command.clientSubmissionId().toString()));
+            return repeated;
+        }
         String rut = PrekinderRut.normalize(command.rut());
         Map<String, Object> agePolicy = jdbc.queryForMap("""
             SELECT config.age_reference_date, config.minimum_age_months, config.maximum_age_months,
@@ -143,9 +149,20 @@ public class PrekinderFlowService {
         }
         validateApplicationDetails(command, category);
         return transactions.execute(status -> {
+            if (command.clientSubmissionId() != null) {
+                jdbc.queryForObject("SELECT pg_advisory_xact_lock(:key)",
+                    Map.of("key", identityLock("submission:" + actor.id() + ":" + command.processId()
+                        + ":" + command.clientSubmissionId())), (rs, row) -> Boolean.TRUE);
+                ApplicationView existing = applicationBySubmission(actor.id(), command.processId(), command.clientSubmissionId());
+                if (existing != null) {
+                    audit(actor.id(), "APPLICATION_SUBMISSION_REPLAYED", "APPLICATION", existing.applicationId(),
+                        Map.of("clientSubmissionId", command.clientSubmissionId().toString()));
+                    return existing;
+                }
+            }
             jdbc.queryForObject("SELECT pg_advisory_xact_lock(:key)", Map.of("key", identityLock(rut)),
                 (rs, row) -> Boolean.TRUE);
-            UUID familyId = UUID.randomUUID();
+            UUID familyId = resolveFamily(actor);
             UUID applicantId = UUID.randomUUID();
             UUID applicationId = UUID.randomUUID();
             if (blank(command.familyEmail()) && blank(command.fatherEmail()) && blank(command.motherEmail())) {
@@ -156,8 +173,6 @@ public class PrekinderFlowService {
                 cleanNullable(command.fatherEmail()), cleanNullable(command.motherEmail()));
             EncryptedPayload encryptedIdentity = encryption.encrypt(json(identity),
                 "prekinder|applicants|" + applicantId + "|application:" + applicationId + "|identity");
-            jdbc.update("INSERT INTO families(family_id, external_reference) VALUES (:id, :external)",
-                Map.of("id", familyId, "external", actor.id().toString()));
             jdbc.update("""
                 INSERT INTO applicants(applicant_id, family_id, identity_ciphertext, identity_iv,
                     identity_wrapped_dek, identity_wrapped_dek_iv, identity_key_version)
@@ -167,18 +182,20 @@ public class PrekinderFlowService {
                 jdbc.update("""
                     INSERT INTO applications(application_id, applicant_id, process_id, wave_id, status,
                         eligibility_category, eligibility_status, applicant_identity_hash, submitted_by,
-                        payment_required, payment_status, applicant_sex, configuration_version)
+                        payment_required, payment_status, applicant_sex, configuration_version, client_submission_id)
                     VALUES (:id, :applicantId, :processId, :waveId, 'PENDING_SEGMENT_VALIDATION', :category, 'PENDING',
                         :identityHash, :actorId,
                         (SELECT payment_enabled FROM prekinder_process_configuration WHERE process_id = :processId),
                         CASE WHEN (SELECT payment_enabled FROM prekinder_process_configuration WHERE process_id = :processId)
                              THEN 'PENDING' ELSE 'NOT_REQUIRED' END,
                         :applicantSex,
-                        (SELECT version FROM prekinder_process_configuration WHERE process_id = :processId))
+                        (SELECT version FROM prekinder_process_configuration WHERE process_id = :processId),
+                        :clientSubmissionId)
                     """, new MapSqlParameterSource().addValue("id", applicationId).addValue("applicantId", applicantId)
                     .addValue("processId", command.processId()).addValue("waveId", wave.waveId())
                     .addValue("category", category).addValue("identityHash", sha256(rut))
-                    .addValue("actorId", actor.id()).addValue("applicantSex", command.applicationDetails().gender()));
+                    .addValue("actorId", actor.id()).addValue("applicantSex", command.applicationDetails().gender())
+                    .addValue("clientSubmissionId", command.clientSubmissionId()));
             } catch (DataIntegrityViolationException exception) {
                 throw PrekinderDomainException.conflict("DUPLICATE_APPLICATION",
                     "Ya existe una postulación activa para este postulante y proceso");
@@ -204,10 +221,42 @@ public class PrekinderFlowService {
                 .addValue("applicationId", applicationId).addValue("actorId", actor.id()));
             audit(actor.id(), "APPLICATION_SUBMITTED", "APPLICATION", applicationId,
                 Map.of("waveType", category));
-            jdbc.update("DELETE FROM guardian_application_drafts WHERE process_id = :processId AND actor_id = :actorId",
-                Map.of("processId", command.processId(), "actorId", actor.id()));
             return application(applicationId);
         });
+    }
+
+    UUID resolveFamily(PrekinderActor actor) {
+        String externalReference = actor.id().toString();
+        jdbc.queryForObject("SELECT pg_advisory_xact_lock(:key)",
+            Map.of("key", identityLock("family:" + externalReference)), (rs, row) -> Boolean.TRUE);
+        List<UUID> existing = jdbc.queryForList(
+            "SELECT family_id FROM families WHERE external_reference = :externalReference",
+            Map.of("externalReference", externalReference), UUID.class);
+        if (!existing.isEmpty()) {
+            UUID familyId = existing.getFirst();
+            audit(actor.id(), "FAMILY_REUSED", "FAMILY", familyId, Map.of());
+            return familyId;
+        }
+        UUID requestedFamilyId = UUID.randomUUID();
+        UUID familyId = jdbc.queryForObject("""
+            INSERT INTO families(family_id, external_reference) VALUES (:id, :externalReference)
+            ON CONFLICT (external_reference) WHERE external_reference IS NOT NULL
+            DO UPDATE SET updated_at = families.updated_at
+            RETURNING family_id
+            """, Map.of("id", requestedFamilyId, "externalReference", externalReference), UUID.class);
+        audit(actor.id(), "FAMILY_CREATED", "FAMILY", familyId, Map.of());
+        return familyId;
+    }
+
+    private ApplicationView applicationBySubmission(UUID actorId, UUID processId, UUID clientSubmissionId) {
+        if (clientSubmissionId == null) return null;
+        List<UUID> ids = jdbc.queryForList("""
+            SELECT application_id FROM applications
+             WHERE submitted_by = :actorId AND process_id = :processId
+               AND client_submission_id = :clientSubmissionId
+            """, Map.of("actorId", actorId, "processId", processId,
+                "clientSubmissionId", clientSubmissionId), UUID.class);
+        return ids.isEmpty() ? null : application(ids.getFirst());
     }
 
     public List<ApplicationView> applications(UUID processId) {
@@ -2017,7 +2066,7 @@ public class PrekinderFlowService {
 
     private ApplicationView application(UUID id) {
         return jdbc.queryForObject("""
-            SELECT a.application_id, a.applicant_id, a.process_id, a.wave_id, a.status,
+            SELECT a.application_id, a.applicant_id, a.process_id, a.wave_id, a.status, a.folio,
                    a.eligibility_category, a.eligibility_status, a.version, a.created_at,
                    ap.identity_ciphertext, ap.identity_iv, ap.identity_wrapped_dek,
                    ap.identity_wrapped_dek_iv, ap.identity_key_version,
@@ -2033,7 +2082,7 @@ public class PrekinderFlowService {
                 return new ApplicationView(id, applicantId, rs.getObject("process_id", UUID.class),
                     rs.getObject("wave_id", UUID.class), rs.getString("status"), rs.getString("eligibility_category"),
                     rs.getString("eligibility_status"), rs.getLong("version"), rs.getLong("declaration_version"),
-                    identity, applicationDetails(id), instant(rs.getTimestamp("created_at")));
+                    identity, applicationDetails(id), instant(rs.getTimestamp("created_at")), rs.getString("folio"));
             });
     }
 
@@ -2410,7 +2459,7 @@ public class PrekinderFlowService {
                                      String siblingsInSchoolDetails, FamilyAdultDetails father,
                                      FamilyAdultDetails mother, ResponsibleAdultDetails supporter,
                                      ResponsibleAdultDetails guardian) {}
-    public record SubmitApplication(UUID processId, String rut, String firstName, String paternalLastName,
+    public record SubmitApplication(UUID processId, UUID clientSubmissionId, String rut, String firstName, String paternalLastName,
                                     String maternalLastName, LocalDate birthDate, String familyEmail,
                                     String fatherEmail, String motherEmail, ApplicationDetails applicationDetails,
                                     EligibilityDeclaration eligibility) {}
@@ -2420,7 +2469,7 @@ public class PrekinderFlowService {
     public record ApplicationView(UUID applicationId, UUID applicantId, UUID processId, UUID waveId,
                                   String status, String eligibilityCategory, String eligibilityStatus,
                                   long version, long declarationVersion, ApplicantIdentity identity,
-                                  ApplicationDetails applicationDetails, Instant createdAt) {}
+                                  ApplicationDetails applicationDetails, Instant createdAt, String folio) {}
     public record ProfessionalCommand(UUID processId, UUID professionalId, Long legacyUserId, String displayName, String email,
                                       String password, String specialty, String roleCode, boolean active, long expectedVersion) {}
     public record ProfessionalRoleDefinition(String roleCode, String label, String groupCode,

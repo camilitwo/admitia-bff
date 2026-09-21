@@ -63,7 +63,7 @@ public class PrekinderFlowController {
         var eligibility = new PrekinderFlowService.EligibilityDeclaration(siblings,
             command.eligibility().employeeParent(), alumni(command.eligibility().fatherAlumni()),
             alumni(command.eligibility().motherAlumni()));
-        return ok(flow.submitApplication(new PrekinderFlowService.SubmitApplication(command.processId(), command.rut(),
+        return ok(flow.submitApplication(new PrekinderFlowService.SubmitApplication(command.processId(), command.clientSubmissionId(), command.rut(),
             command.firstName(), command.paternalLastName(), command.maternalLastName(), command.birthDate(),
             command.familyEmail(), command.fatherEmail(), command.motherEmail(), details(command.applicationDetails()), eligibility)));
     }
@@ -362,7 +362,7 @@ public class PrekinderFlowController {
         boolean hasSiblingsInSchool, @Size(max = 1000) String siblingsInSchoolDetails,
         @NotNull @Valid FamilyAdultDetails father, @NotNull @Valid FamilyAdultDetails mother,
         @NotNull @Valid ResponsibleAdultDetails supporter, @NotNull @Valid ResponsibleAdultDetails guardian) {}
-    public record SubmitApplication(@NotNull UUID processId, @NotBlank @Size(max = 16) String rut,
+    public record SubmitApplication(@NotNull UUID processId, UUID clientSubmissionId, @NotBlank @Size(max = 16) String rut,
         @NotBlank @Size(max = 100) String firstName, @NotBlank @Size(max = 100) String paternalLastName,
         @Size(max = 100) String maternalLastName, @NotNull LocalDate birthDate,
         @Email @Size(max = 254) String familyEmail,

@@ -8,6 +8,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.dao.EmptyResultDataAccessException;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.ResponseStatus;
@@ -45,6 +46,12 @@ public class PrekinderErrorHandler {
     @ResponseStatus(HttpStatus.NOT_FOUND)
     Map<String, Object> notFound(Exception ignored, HttpServletRequest request) {
         return error("RESOURCE_NOT_FOUND", "El recurso solicitado no existe", request);
+    }
+
+    @ExceptionHandler(DataIntegrityViolationException.class)
+    @ResponseStatus(HttpStatus.CONFLICT)
+    Map<String, Object> dataConflict(Exception ignored, HttpServletRequest request) {
+        return error("DATA_CONFLICT", "La operación entra en conflicto con información ya registrada", request);
     }
 
     private static Map<String, Object> error(String code, String message, HttpServletRequest request) {

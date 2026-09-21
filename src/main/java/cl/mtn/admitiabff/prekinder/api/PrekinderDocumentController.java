@@ -1,12 +1,14 @@
 package cl.mtn.admitiabff.prekinder.api;
 
 import cl.mtn.admitiabff.prekinder.service.PrekinderDocumentService;
+import cl.mtn.admitiabff.prekinder.service.PrekinderDomainException;
 import java.io.IOException;
 import java.util.Map;
 import java.util.UUID;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.core.io.ByteArrayResource;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -27,7 +29,12 @@ public class PrekinderDocumentController {
     @PostMapping("/applications/{applicationId}/documents")
     public Map<String, Object> upload(@PathVariable UUID applicationId, @RequestParam String category,
         @RequestParam("file") MultipartFile file) throws IOException {
-        return Map.of("success", true, "data", documents.upload(applicationId, category, file));
+        try {
+            return Map.of("success", true, "data", documents.upload(applicationId, category, file));
+        } catch (IOException exception) {
+            throw new PrekinderDomainException("DOCUMENT_UPLOAD_FAILED",
+                "No fue posible almacenar el documento; inténtalo nuevamente", HttpStatus.SERVICE_UNAVAILABLE);
+        }
     }
 
     @GetMapping("/applications/{applicationId}/documents")
