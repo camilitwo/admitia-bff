@@ -189,6 +189,9 @@ app:
   # Email de admisiones para notificaciones de confirmación/rechazo de entrevistas
   admissions:
     email: ${APP_ADMISSIONS_EMAIL:camilo.igv@gmail.com}
+  family-form:
+    # Vacío mantiene abierto el año vigente; en producción usar YYYY-MM-DD.
+    general-close-date: ${APP_FAMILY_FORM_GENERAL_CLOSE_DATE:}
   integrations:
     mtn-admission:
       enabled: ${MTN_ADMISSION_ENABLED:false}

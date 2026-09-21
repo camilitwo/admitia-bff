@@ -2,6 +2,7 @@ package cl.mtn.admitiabff.service;
 
 import cl.mtn.admitiabff.domain.application.ApplicationEntity;
 import cl.mtn.admitiabff.domain.application.ComplementaryFormEntity;
+import cl.mtn.admitiabff.domain.application.FamilyEntity;
 import cl.mtn.admitiabff.domain.common.ApplicationStatus;
 import cl.mtn.admitiabff.domain.common.DocumentApprovalStatus;
 import cl.mtn.admitiabff.domain.common.PaymentStatus;
@@ -19,6 +20,7 @@ import cl.mtn.admitiabff.repository.ComplementaryFormRepository;
 import cl.mtn.admitiabff.repository.DocumentRepository;
 import cl.mtn.admitiabff.repository.EvaluationRepository;
 import cl.mtn.admitiabff.repository.GradeAvailabilityRepository;
+import cl.mtn.admitiabff.repository.FamilyRepository;
 import cl.mtn.admitiabff.repository.GuardianRepository;
 import cl.mtn.admitiabff.repository.InterviewRepository;
 import cl.mtn.admitiabff.repository.ParentRepository;
@@ -47,6 +49,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
+import org.springframework.jdbc.core.JdbcTemplate;
 
 @Service
 @Transactional(readOnly = true)
@@ -70,6 +73,12 @@ public class ApplicationService {
     private final String uploadsDir;
     @org.springframework.beans.factory.annotation.Autowired
     private GradeAvailabilityRepository gradeAvailabilityRepository;
+    @org.springframework.beans.factory.annotation.Autowired
+    private FamilyRepository familyRepository;
+    @org.springframework.beans.factory.annotation.Autowired
+    private JdbcTemplate jdbcTemplate;
+    @Value("${app.family-form.general-close-date:}")
+    private String familyFormCloseDate;
 
     public ApplicationService(ApplicationRepository applicationRepository, StudentRepository studentRepository, ParentRepository parentRepository, GuardianRepository guardianRepository, SupporterRepository supporterRepository, UserRepository userRepository, DocumentRepository documentRepository, ComplementaryFormRepository complementaryFormRepository, EvaluationRepository evaluationRepository, InterviewRepository interviewRepository, AuthService authService, NotificationService notificationService, cl.mtn.admitiabff.service.notification.EmailComposerService emailComposerService, JsonSupport jsonSupport, @Value("${app.uploads-dir}") String uploadsDir) {
         this.applicationRepository = applicationRepository;
@@ -182,7 +191,9 @@ public class ApplicationService {
     }
 
     public Map<String, Object> complementaryForm(Long applicationId) {
-        return complementaryFormRepository.findByApplicationId(applicationId)
+        ApplicationEntity application = load(applicationId);
+        assertFamilyAccess(application);
+        return complementaryFormRepository.findByFamilyIdAndProcessKey(application.getFamily().getId(), processKey(application))
             .map(this::toComplementaryFormResponse)
             .orElseGet(() -> Map.of("success", true, "data", Map.of()));
     }
@@ -211,6 +222,7 @@ public class ApplicationService {
         entity.setGuardian(resolveGuardian(payload));
         entity.setSupporter(resolveSupporter(payload));
         entity.setApplicantUser(resolveApplicant(payload));
+        entity.setFamily(resolveFamily(entity.getApplicantUser()));
         entity.setStatus(parseStatus(value(payload.getOrDefault("status", "PENDING"))));
         entity.setNotes(value(payload.get("notes")));
         entity.setSubmissionDate(LocalDateTime.now());
@@ -425,24 +437,38 @@ public class ApplicationService {
     @Transactional
     public Map<String, Object> upsertComplementaryForm(Long applicationId, Map<String, Object> payload) {
         ApplicationEntity application = load(applicationId);
-        if (application.isPaymentRequired() && application.getPaymentStatus() != PaymentStatus.PAID) {
+        assertFamilyAccess(application);
+        String processKey = processKey(application);
+        List<ApplicationEntity> familyApplications = applicationRepository
+            .findByFamilyIdAndAcademicYearAndDeletedAtIsNullOrderByCreatedAtAsc(application.getFamily().getId(), application.getAcademicYear());
+        boolean eligible = familyApplications.stream().anyMatch(item -> !item.isPaymentRequired() || item.getPaymentStatus() == PaymentStatus.PAID);
+        if (!eligible) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Debe pagar la postulación antes de completar el formulario complementario");
         }
-        ComplementaryFormEntity form = complementaryFormRepository.findByApplicationId(applicationId).orElseGet(() -> {
+        if (!generalProcessIsOpen(application.getAcademicYear())) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "El proceso de admisión está cerrado para edición");
+        }
+        jdbcTemplate.queryForList("SELECT pg_advisory_xact_lock(?)", application.getFamily().getId());
+        ComplementaryFormEntity form = complementaryFormRepository
+            .findByFamilyIdAndProcessKey(application.getFamily().getId(), processKey).orElseGet(() -> {
             ComplementaryFormEntity entity = new ComplementaryFormEntity();
             entity.setApplication(application);
+            entity.setFamily(application.getFamily());
+            entity.setProcessKey(processKey);
             entity.setCreatedAt(LocalDateTime.now());
             return entity;
         });
-        if (form.isSubmitted()) {
-            throw new IllegalArgumentException("El formulario complementario ya fue enviado y no admite edición");
+        boolean submitted = form.isSubmitted() || Boolean.parseBoolean(String.valueOf(payload.getOrDefault("isSubmitted", false)));
+        if (form.getId() != null) {
+            jdbcTemplate.update("INSERT INTO complementary_form_revisions(form_id, version, form_data, submitted, changed_by) VALUES (?, ?, ?::jsonb, ?, ?)",
+                form.getId(), form.getVersion(), form.getFormData(), form.isSubmitted(), authService.requireAuth().id());
         }
-        boolean submitted = Boolean.parseBoolean(String.valueOf(payload.getOrDefault("isSubmitted", false)));
         form.setFormData(jsonSupport.write(payload));
         form.setSubmitted(submitted);
-        form.setSubmittedAt(submitted ? LocalDateTime.now() : null);
+        if (submitted && form.getSubmittedAt() == null) form.setSubmittedAt(LocalDateTime.now());
+        form.setVersion(form.getVersion() + 1);
         form.setUpdatedAt(LocalDateTime.now());
-        return toComplementaryFormResponse(complementaryFormRepository.save(form));
+        return toComplementaryFormResponse(complementaryFormRepository.saveAndFlush(form));
     }
 
     public Map<String, Object> clearCache() {
@@ -669,7 +695,10 @@ public class ApplicationService {
         response.put("documents", documentsArray);
 
         // Complementary form status
-        response.put("hasComplementaryForm", complementaryFormRepository.existsByApplicationIdAndSubmittedTrue(entity.getId()));
+        response.put("familyId", entity.getFamily().getId());
+        response.put("processKey", processKey(entity));
+        response.put("hasComplementaryForm", complementaryFormRepository
+            .existsByFamilyIdAndProcessKeyAndSubmittedTrue(entity.getFamily().getId(), processKey(entity)));
 
         // Applicant user
         if (entity.getApplicantUser() != null) {
@@ -688,12 +717,15 @@ public class ApplicationService {
         response.put("supporterId", entity.getSupporter() == null ? null : entity.getSupporter().getId());
         response.put("guardianId", entity.getGuardian() == null ? null : entity.getGuardian().getId());
         response.put("applicantUserId", entity.getApplicantUser() == null ? null : entity.getApplicantUser().getId());
+        response.put("familyId", entity.getFamily().getId());
+        response.put("processKey", processKey(entity));
         response.put("status", entity.getStatus().name());
         response.put("paymentStatus", entity.getPaymentStatus().name());
         response.put("paymentRequired", entity.isPaymentRequired());
         response.put("paidAt", entity.getPaidAt());
         response.put("canFillComplementaryForm", !entity.isPaymentRequired() || entity.getPaymentStatus() == PaymentStatus.PAID);
-        response.put("hasComplementaryForm", complementaryFormRepository.existsByApplicationIdAndSubmittedTrue(entity.getId()));
+        response.put("hasComplementaryForm", complementaryFormRepository
+            .existsByFamilyIdAndProcessKeyAndSubmittedTrue(entity.getFamily().getId(), processKey(entity)));
         response.put("submissionDate", entity.getSubmissionDate());
         response.put("createdAt", entity.getCreatedAt());
         response.put("updatedAt", entity.getUpdatedAt());
@@ -805,12 +837,51 @@ public class ApplicationService {
     private Map<String, Object> toComplementaryFormResponse(ComplementaryFormEntity form) {
         Map<String, Object> data = new LinkedHashMap<>(jsonSupport.readMap(form.getFormData()));
         data.put("id", form.getId());
-        data.put("applicationId", form.getApplication().getId());
+        data.put("applicationId", form.getApplication() == null ? null : form.getApplication().getId());
+        data.put("familyId", form.getFamily().getId());
+        data.put("processKey", form.getProcessKey());
+        data.put("version", form.getVersion());
+        Integer academicYear = form.getProcessKey().startsWith("GENERAL:")
+            ? Integer.valueOf(form.getProcessKey().substring("GENERAL:".length())) : null;
+        data.put("applicants", academicYear == null ? List.of() : applicationRepository
+            .findByFamilyIdAndAcademicYearAndDeletedAtIsNullOrderByCreatedAtAsc(form.getFamily().getId(), academicYear).stream()
+            .map(item -> Map.of("applicationId", item.getId(), "studentName", fullStudentName(item.getStudent()),
+                "gradeApplied", value(item.getStudent().getGradeApplied()))).toList());
+        data.put("processOpen", academicYear != null && generalProcessIsOpen(academicYear));
         data.put("isSubmitted", form.isSubmitted());
         data.put("submittedAt", form.getSubmittedAt());
         data.put("createdAt", form.getCreatedAt());
         data.put("updatedAt", form.getUpdatedAt());
         return Map.of("success", true, "data", data);
+    }
+
+    private FamilyEntity resolveFamily(UserEntity applicant) {
+        FamilyEntity family = familyRepository.save(new FamilyEntity());
+        if (applicant != null) {
+            jdbcTemplate.update("INSERT INTO family_members(family_id, user_id) VALUES (?, ?) ON CONFLICT DO NOTHING", family.getId(), applicant.getId());
+        }
+        return family;
+    }
+
+    private String processKey(ApplicationEntity application) {
+        int year = application.getAcademicYear() == null ? application.getSubmissionDate().getYear() : application.getAcademicYear();
+        return "GENERAL:" + year;
+    }
+
+    private void assertFamilyAccess(ApplicationEntity application) {
+        AuthService.AuthContextHolder auth = authService.requireAuth();
+        if (authService.hasAnyRoleContext(auth, Role.ADMIN, Role.COORDINATOR, Role.CYCLE_DIRECTOR)) return;
+        Integer count = jdbcTemplate.queryForObject(
+            "SELECT count(*) FROM family_members WHERE family_id = ? AND user_id = ?", Integer.class,
+            application.getFamily().getId(), auth.id());
+        if (count == null || count == 0) throw new ResponseStatusException(HttpStatus.FORBIDDEN, "No pertenece al grupo familiar");
+    }
+
+    private boolean generalProcessIsOpen(Integer academicYear) {
+        if (familyFormCloseDate != null && !familyFormCloseDate.isBlank()) {
+            return !LocalDate.now().isAfter(LocalDate.parse(familyFormCloseDate));
+        }
+        return academicYear == null || academicYear >= LocalDate.now().getYear();
     }
 
     private Map<String, Object> pageResponse(Page<Map<String, Object>> page) {

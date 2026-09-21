@@ -46,7 +46,8 @@ public class PrekinderGuardianService {
                    fv.wrapped_dek AS form_wrapped_dek, fv.wrapped_dek_iv AS form_wrapped_dek_iv,
                    fv.key_version AS form_key_version,
                    EXISTS (SELECT 1 FROM prekinder_complementary_forms cf
-                            WHERE cf.application_id = a.application_id AND cf.submitted) AS has_complementary_form
+                            WHERE cf.family_id = f.family_id AND cf.process_id = a.process_id
+                              AND cf.submitted) AS has_complementary_form
               FROM families f
               JOIN applicants ap ON ap.family_id = f.family_id
               JOIN applications a ON a.applicant_id = ap.applicant_id

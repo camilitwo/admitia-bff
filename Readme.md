@@ -27,6 +27,7 @@ mvn spring-boot:run
 - `APP_APPLICATION_REMINDERS_ACADEMIC_YEAR` (`2027` por defecto)
 - `APP_APPLICATION_REMINDERS_CRON` (`0 0 11 * * MON,THU` por defecto)
 - `APP_APPLICATION_REMINDERS_ZONE` (`America/Santiago` por defecto)
+- `APP_FAMILY_FORM_GENERAL_CLOSE_DATE` (`YYYY-MM-DD`; vacío mantiene abierto el año vigente)
 - `PORT`
 
 ## Recordatorios de postulación

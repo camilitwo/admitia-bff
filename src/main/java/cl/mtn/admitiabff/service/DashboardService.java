@@ -383,13 +383,21 @@ public class DashboardService {
     }
 
     private Map<String, Object> familyQuestionnaire(Long applicationId, String reportLink) {
-        ComplementaryFormEntity form = complementaryFormRepository.findByApplicationId(applicationId).orElse(null);
+        ApplicationEntity application = applicationRepository.findById(applicationId).orElse(null);
+        String processKey = application == null ? null : "GENERAL:" + (application.getAcademicYear() == null
+            ? application.getSubmissionDate().getYear() : application.getAcademicYear());
+        ComplementaryFormEntity form = application == null || application.getFamily() == null
+            ? complementaryFormRepository.findByApplicationId(applicationId).orElse(null)
+            : complementaryFormRepository.findByFamilyIdAndProcessKey(application.getFamily().getId(), processKey)
+                .orElseGet(() -> complementaryFormRepository.findByApplicationId(applicationId).orElse(null));
         Map<String, Object> questionnaire = new LinkedHashMap<>();
         questionnaire.put("status", form == null ? "NOT_STARTED" : form.isSubmitted() ? "SUBMITTED" : "DRAFT");
         questionnaire.put("received", (form != null && form.isSubmitted()) || reportLink != null);
         questionnaire.put("submittedAt", form == null ? null : form.getSubmittedAt());
         questionnaire.put("updatedAt", form == null ? null : form.getUpdatedAt());
         questionnaire.put("reportLink", reportLink);
+        questionnaire.put("familyId", application == null || application.getFamily() == null ? null : application.getFamily().getId());
+        questionnaire.put("processKey", processKey);
         if (form != null && form.isSubmitted()) {
             questionnaire.put("answers", questionnaireAnswers(jsonSupport.readMap(form.getFormData())));
         }

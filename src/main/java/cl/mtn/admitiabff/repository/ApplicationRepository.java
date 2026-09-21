@@ -115,4 +115,6 @@ public interface ApplicationRepository extends JpaRepository<ApplicationEntity, 
     List<ApplicationEntity> findBetween(@Param("start") LocalDateTime start, @Param("end") LocalDateTime end);
 
     boolean existsByStudentIdAndDeletedAtIsNull(Long studentId);
+
+    List<ApplicationEntity> findByFamilyIdAndAcademicYearAndDeletedAtIsNullOrderByCreatedAtAsc(Long familyId, Integer academicYear);
 }

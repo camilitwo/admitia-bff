@@ -54,7 +54,8 @@ class ApplicationReminderRepository {
           LEFT JOIN latest_payment lp ON lp.application_id = app.id
           LEFT JOIN users u ON u.id = COALESCE(lp.guardian_user_id, app.applicant_user_id, guardian.user_id)
           LEFT JOIN payment_facts pf ON pf.application_id = app.id
-          LEFT JOIN complementary_forms cf ON cf.application_id = app.id
+          LEFT JOIN complementary_forms cf ON cf.family_id = app.family_id
+           AND cf.process_key = 'GENERAL:' || app.academic_year::TEXT
         """;
 
     private final NamedParameterJdbcTemplate jdbc;
@@ -74,7 +75,9 @@ class ApplicationReminderRepository {
     }
 
     List<ApplicationState> findActiveStates(int academicYear) {
-        return jdbc.query(STATE_QUERY + " WHERE app.deleted_at IS NULL AND app.is_archived = FALSE AND app.academic_year = :academicYear",
+        return jdbc.query(STATE_QUERY + " WHERE app.deleted_at IS NULL AND app.is_archived = FALSE AND app.academic_year = :academicYear"
+                + " AND app.id = (SELECT MIN(sibling.id) FROM applications sibling WHERE sibling.family_id = app.family_id"
+                + " AND sibling.academic_year = app.academic_year AND sibling.deleted_at IS NULL AND sibling.is_archived = FALSE)",
             Map.of("academicYear", academicYear), this::mapState);
     }
 

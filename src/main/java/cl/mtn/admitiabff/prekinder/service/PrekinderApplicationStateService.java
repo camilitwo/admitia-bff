@@ -36,7 +36,9 @@ public class PrekinderApplicationStateService {
                    application.formal_submitted_at, process.academic_year,
                    EXISTS (
                        SELECT 1 FROM prekinder_complementary_forms form
-                        WHERE form.application_id = application.application_id AND form.submitted
+                        JOIN applicants form_applicant ON form_applicant.family_id = form.family_id
+                        WHERE form_applicant.applicant_id = application.applicant_id
+                          AND form.process_id = application.process_id AND form.submitted
                    ) AS form_complete,
                    NOT EXISTS (
                        SELECT 1
