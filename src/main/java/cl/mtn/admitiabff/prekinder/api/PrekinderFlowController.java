@@ -368,7 +368,8 @@ public class PrekinderFlowController {
         @Email @Size(max = 254) String familyEmail,
         @Email @Size(max = 254) String fatherEmail, @Email @Size(max = 254) String motherEmail,
         @NotNull @Valid ApplicationDetails applicationDetails,
-        @NotNull @Valid EligibilityDeclaration eligibility) {}
+        @NotNull @Valid EligibilityDeclaration eligibility,
+        Boolean inclusionStudent) {}
     public record EligibilityReview(@NotBlank String decision, @Size(max = 2000) String reason,
                                     @Min(0) long expectedVersion) {}
     public record EligibilityReclassification(@NotNull UUID waveId,
