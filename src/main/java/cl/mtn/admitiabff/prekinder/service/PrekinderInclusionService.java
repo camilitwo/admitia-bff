@@ -271,6 +271,48 @@ public class PrekinderInclusionService {
             """, Map.of("id", UUID.randomUUID(), "applicationId", applicationId, "version", version));
     }
 
+    private record CorrectionScope(List<String> allowedFields, String reason) {}
+
+    private CorrectionScope loadCorrectionScope(UUID applicationId) {
+        List<Map<String, Object>> rows = jdbc.query("""
+            SELECT allowed_fields, reason_ciphertext, reason_iv,
+                   reason_wrapped_dek, reason_wrapped_dek_iv, reason_key_version
+              FROM application_correction_requests
+             WHERE application_id = :applicationId AND status = 'OPEN'
+            """, Map.of("applicationId", applicationId), (rs, row) -> Map.of(
+                "allowedFields", rs.getObject("allowed_fields"),
+                "reasonCiphertext", rs.getString("reason_ciphertext"),
+                "reasonIv", rs.getString("reason_iv"),
+                "reasonWrappedDek", rs.getString("reason_wrapped_dek"),
+                "reasonWrappedDekIv", rs.getString("reason_wrapped_dek_iv"),
+                "reasonKeyVersion", rs.getString("reason_key_version")));
+        if (rows.isEmpty()) return new CorrectionScope(List.of(), null);
+        Map<String, Object> row = rows.getFirst();
+        @SuppressWarnings("unchecked")
+        List<String> allowedFields = (List<String>) row.get("allowedFields");
+        List<String> inclusionFields = allowedFields.stream()
+            .filter(f -> f.startsWith("inclusion."))
+            .map(f -> f.substring("inclusion.".length()))
+            .toList();
+        String reason = decryptReason(applicationId,
+            new EncryptedPayload(
+                (String) row.get("reasonCiphertext"),
+                (String) row.get("reasonIv"),
+                (String) row.get("reasonWrappedDek"),
+                (String) row.get("reasonWrappedDekIv"),
+                (String) row.get("reasonKeyVersion")));
+        return new CorrectionScope(inclusionFields, reason);
+    }
+
+    private String decryptReason(UUID applicationId, EncryptedPayload payload) {
+        try {
+            String aad = "prekinder|correction|application:" + applicationId;
+            return mapper.readValue(encryption.decrypt(payload, aad), String.class);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
     private InclusionView read(UUID applicationId, boolean enabled, ApplicantSummary applicant) {
         List<InclusionView> rows = jdbc.query("""
             SELECT record.inclusion_id, record.consent_status, record.specific_interview_required,
@@ -290,13 +332,15 @@ public class PrekinderInclusionService {
                     new EncryptedPayload(rs.getString("ciphertext"), rs.getString("iv"),
                         rs.getString("wrapped_dek"), rs.getString("wrapped_dek_iv"), rs.getString("key_version")));
                 Timestamp declaredAt = rs.getTimestamp("declared_at");
+                CorrectionScope correction = loadCorrectionScope(applicationId);
                 return new InclusionView(enabled, true, rs.getObject("inclusion_id", UUID.class),
                     rs.getString("consent_status"), rs.getBoolean("specific_interview_required"),
                     rs.getString("specific_interview_status"), declaredAt == null ? null : declaredAt.toInstant(),
-                    rs.getLong("version"), revisionNumber, rs.getString("state"), declaration, applicant);
+                    rs.getLong("version"), revisionNumber, rs.getString("state"), declaration, applicant,
+                    correction.allowedFields(), correction.reason());
             });
         return rows.isEmpty() ? new InclusionView(enabled, false, null, "PENDING", false, "NOT_REQUIRED",
-            null, 0, null, null, Map.of(), applicant) : rows.getFirst();
+            null, 0, null, null, Map.of(), applicant, List.of(), null) : rows.getFirst();
     }
 
     private ApplicationAccess assertOwner(UUID applicationId, PrekinderActor actor) {
@@ -451,5 +495,6 @@ public class PrekinderInclusionService {
     public record InclusionView(boolean enabled, boolean declared, UUID inclusionId, String consentStatus,
         boolean specificInterviewRequired, String specificInterviewStatus, Instant declaredAt, long version,
         Integer revisionNumber, String revisionState, Map<String, Object> declaration,
-        ApplicantSummary applicant) {}
+        ApplicantSummary applicant,
+        List<String> allowedFields, String correctionRequestReason) {}
 }
