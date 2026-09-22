@@ -136,13 +136,14 @@ public class PrekinderFlowService {
               JOIN admission_processes process ON process.process_id = config.process_id
              WHERE config.process_id = :id
             """, Map.of("id", command.processId()));
+        int academicYear = ((Number) agePolicy.get("academic_year")).intValue();
         PrekinderAgePolicy.validate(command.birthDate(),
             agePolicy.get("age_reference_date") == null ? null : ((java.sql.Date) agePolicy.get("age_reference_date")).toLocalDate(),
-            ((Number) agePolicy.get("academic_year")).intValue(),
+            academicYear,
             ((Number) agePolicy.get("minimum_age_months")).intValue(),
             ((Number) agePolicy.get("maximum_age_months")).intValue());
-        String category = category(command.eligibility());
         WaveView wave = activeWave(command.processId());
+        Integer alumniParentYear = extractAlumniParentYear(command.eligibility(), academicYear);
         if (!wave.waveType().equals(category)) {
             throw PrekinderDomainException.forbidden("WAVE_RESTRICTION",
                 "La etapa vigente corresponde a " + waveLabel(wave.waveType()) + " y la declaración no cumple sus requisitos");
@@ -168,14 +169,6 @@ public class PrekinderFlowService {
             if (blank(command.familyEmail()) && blank(command.fatherEmail()) && blank(command.motherEmail())) {
                 throw new IllegalArgumentException("Registra al menos un correo de apoderado");
             }
-            Integer alumniParentYear = null;
-            if (command.eligibility() != null) {
-                if (command.eligibility().fatherAlumni() != null && command.eligibility().fatherAlumni().graduationYear() != null) {
-                    alumniParentYear = command.eligibility().fatherAlumni().graduationYear();
-                } else if (command.eligibility().motherAlumni() != null && command.eligibility().motherAlumni().graduationYear() != null) {
-                    alumniParentYear = command.eligibility().motherAlumni().graduationYear();
-                }
-            }
             ApplicantIdentity identity = new ApplicantIdentity(rut, clean(command.firstName()), clean(command.paternalLastName()),
                 cleanNullable(command.maternalLastName()), command.birthDate(), cleanNullable(command.familyEmail()),
                 cleanNullable(command.fatherEmail()), cleanNullable(command.motherEmail()));
@@ -191,7 +184,7 @@ public class PrekinderFlowService {
                     INSERT INTO applications(application_id, applicant_id, process_id, wave_id, status,
                         eligibility_category, eligibility_status, applicant_identity_hash, submitted_by,
                         payment_required, payment_status, applicant_sex, configuration_version, client_submission_id,
-                        inclusion_student, alumni_parent_year)
+                        is_inclusion_student, is_alumni_parent_year)
                     VALUES (:id, :applicantId, :processId, :waveId, 'PENDING_SEGMENT_VALIDATION', :category, 'PENDING',
                         :identityHash, :actorId,
                         (SELECT payment_enabled FROM prekinder_process_configuration WHERE process_id = :processId),
@@ -200,14 +193,14 @@ public class PrekinderFlowService {
                         :applicantSex,
                         (SELECT version FROM prekinder_process_configuration WHERE process_id = :processId),
                         :clientSubmissionId,
-                        :inclusionStudent,
-                        :alumniParentYear)
+                        :isInclusionStudent,
+                        :isAlumniParentYear)
                     """, new MapSqlParameterSource().addValue("id", applicationId).addValue("applicantId", applicantId)
                     .addValue("processId", command.processId()).addValue("waveId", wave.waveId())
                     .addValue("category", category).addValue("identityHash", sha256(rut))
                     .addValue("actorId", actor.id()).addValue("applicantSex", command.applicationDetails().gender())
-                    .addValue("inclusionStudent", Boolean.TRUE.equals(command.inclusionStudent()))
-                    .addValue("alumniParentYear", alumniParentYear)
+                    .addValue("isInclusionStudent", Boolean.TRUE.equals(command.inclusionStudent()))
+                    .addValue("isAlumniParentYear", alumniParentYear)
                     .addValue("clientSubmissionId", command.clientSubmissionId()));
             } catch (DataIntegrityViolationException exception) {
                 throw PrekinderDomainException.conflict("DUPLICATE_APPLICATION",
@@ -2401,6 +2394,22 @@ public class PrekinderFlowService {
             if (blank(declaration.lastGrade()) || blank(declaration.withdrawalReason())) {
                 throw new IllegalArgumentException("Indica último curso y motivo de retiro");
             }
+        return true;
+    }
+
+    static Integer extractAlumniParentYear(EligibilityDeclaration eligibility, int academicYear) {
+        if (eligibility == null) return null;
+        Integer year = null;
+        if (eligibility.fatherAlumni() != null && eligibility.fatherAlumni().graduationYear() != null) {
+            year = eligibility.fatherAlumni().graduationYear();
+        } else if (eligibility.motherAlumni() != null && eligibility.motherAlumni().graduationYear() != null) {
+            year = eligibility.motherAlumni().graduationYear();
+        }
+        if (year != null && (year < 1900 || year > academicYear)) {
+            throw new IllegalArgumentException("Año de egreso inválido: " + year + " (debe estar entre 1900 y " + academicYear + ")");
+        }
+        return year;
+    }
             return true;
         }
         throw new IllegalArgumentException("Estado de exalumno inválido");

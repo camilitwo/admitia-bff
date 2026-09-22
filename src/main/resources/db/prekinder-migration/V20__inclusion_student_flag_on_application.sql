@@ -1,11 +1,10 @@
--- Agrega columna para guardar la intención de inclusión declarada por el apoderado
--- en el momento de la postulación. Esto permite al dashboard saber si debe
--- mostrar el formulario de inclusión sin depender del proceso de configuración.
+-- Agrega columnas para guardar intención de inclusión y año de egreso del exalumno
+-- declarados por el apoderado al momento de la postulación.
+-- Nota: estas columnas pertenecen al modelo Prekinder (applications), no al modelo
+-- general (students). No hay duplicación con StudentEntity porque Prekinder no lo usa.
 ALTER TABLE applications
-    ADD COLUMN inclusion_student BOOLEAN NOT NULL DEFAULT FALSE;
+    ADD COLUMN is_inclusion_student BOOLEAN NOT NULL DEFAULT FALSE;
 
--- Agrega columna para guardar el año de egreso del exalumno (familiar que fue alumno del colegio).
--- Se extrae de EligibilityDeclaration.fatherAlumni.graduationYear al momento de la postulación.
--- Si vienen ambos (padre y madre exalumnos), se guarda el del padre.
+-- Año de egreso del familiar que fue alumno del colegio (prioridad: padre → madre).
 ALTER TABLE applications
-    ADD COLUMN alumni_parent_year INTEGER;
+    ADD COLUMN is_alumni_parent_year INTEGER;
