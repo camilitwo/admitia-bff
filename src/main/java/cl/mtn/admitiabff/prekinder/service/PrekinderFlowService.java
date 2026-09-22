@@ -143,6 +143,7 @@ public class PrekinderFlowService {
             ((Number) agePolicy.get("minimum_age_months")).intValue(),
             ((Number) agePolicy.get("maximum_age_months")).intValue());
         WaveView wave = activeWave(command.processId());
+        String category = category(command.eligibility());
         Integer alumniParentYear = extractAlumniParentYear(command.eligibility(), academicYear);
         if (!wave.waveType().equals(category)) {
             throw PrekinderDomainException.forbidden("WAVE_RESTRICTION",
@@ -2482,7 +2483,7 @@ public class PrekinderFlowService {
     public record SubmitApplication(UUID processId, UUID clientSubmissionId, String rut, String firstName, String paternalLastName,
                                     String maternalLastName, LocalDate birthDate, String familyEmail,
                                     String fatherEmail, String motherEmail, ApplicationDetails applicationDetails,
-                                    EligibilityDeclaration eligibility) {}
+                                    EligibilityDeclaration eligibility, Boolean inclusionStudent) {}
     public record ApplicantIdentity(String rut, String firstName, String paternalLastName,
                                     String maternalLastName, LocalDate birthDate, String familyEmail,
                                     String fatherEmail, String motherEmail) {}

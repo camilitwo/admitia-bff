@@ -65,7 +65,8 @@ public class PrekinderFlowController {
             alumni(command.eligibility().motherAlumni()));
         return ok(flow.submitApplication(new PrekinderFlowService.SubmitApplication(command.processId(), command.clientSubmissionId(), command.rut(),
             command.firstName(), command.paternalLastName(), command.maternalLastName(), command.birthDate(),
-            command.familyEmail(), command.fatherEmail(), command.motherEmail(), details(command.applicationDetails()), eligibility)));
+            command.familyEmail(), command.fatherEmail(), command.motherEmail(), details(command.applicationDetails()), eligibility,
+            command.inclusionStudent())));
     }
 
     @GetMapping("/applications")
