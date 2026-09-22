@@ -37,7 +37,7 @@ public class PrekinderGuardianService {
         PrekinderActor actor = access.requireActor();
         return jdbc.query("""
             SELECT a.application_id, a.applicant_id, a.status, a.eligibility_status, a.created_at,
-                   a.payment_required, a.payment_status, a.paid_at,
+                   a.payment_required, a.payment_status, a.paid_at, a.is_inclusion_student,
                    p.name AS process_name, p.academic_year,
                    config.payment_amount, config.payment_currency,
                    ap.identity_ciphertext, ap.identity_iv, ap.identity_wrapped_dek,
@@ -75,7 +75,8 @@ public class PrekinderGuardianService {
                     rs.getTimestamp("created_at").toInstant(), details, paymentRequired, paymentStatus,
                     rs.getTimestamp("paid_at") == null ? null : rs.getTimestamp("paid_at").toInstant(),
                     !paymentRequired || "PAID".equals(paymentStatus), rs.getBoolean("has_complementary_form"),
-                    rs.getBigDecimal("payment_amount"), rs.getString("payment_currency"));
+                    rs.getBigDecimal("payment_amount"), rs.getString("payment_currency"),
+                    rs.getBoolean("is_inclusion_student"));
             });
     }
 
@@ -111,5 +112,6 @@ public class PrekinderGuardianService {
                                           Map<String, Object> applicationDetails,
                                           boolean paymentRequired, String paymentStatus, Instant paidAt,
                                           boolean canFillComplementaryForm, boolean hasComplementaryForm,
-                                          java.math.BigDecimal paymentAmount, String paymentCurrency) {}
+                                          java.math.BigDecimal paymentAmount, String paymentCurrency,
+                                          boolean isInclusionStudent) {}
 }
