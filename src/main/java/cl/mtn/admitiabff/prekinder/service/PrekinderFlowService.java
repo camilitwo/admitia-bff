@@ -2074,7 +2074,7 @@ public class PrekinderFlowService {
     private ApplicationView application(UUID id) {
         return jdbc.queryForObject("""
             SELECT a.application_id, a.applicant_id, a.process_id, a.wave_id, a.status, a.folio,
-                   a.eligibility_category, a.eligibility_status, a.version, a.created_at,
+                   a.eligibility_category, a.eligibility_status, a.version, a.created_at, a.is_inclusion_student,
                    ap.identity_ciphertext, ap.identity_iv, ap.identity_wrapped_dek,
                    ap.identity_wrapped_dek_iv, ap.identity_key_version,
                    coalesce(ed.version, 0) AS declaration_version
@@ -2089,7 +2089,8 @@ public class PrekinderFlowService {
                 return new ApplicationView(id, applicantId, rs.getObject("process_id", UUID.class),
                     rs.getObject("wave_id", UUID.class), rs.getString("status"), rs.getString("eligibility_category"),
                     rs.getString("eligibility_status"), rs.getLong("version"), rs.getLong("declaration_version"),
-                    identity, applicationDetails(id), instant(rs.getTimestamp("created_at")), rs.getString("folio"));
+                    identity, applicationDetails(id), instant(rs.getTimestamp("created_at")), rs.getString("folio"),
+                    rs.getBoolean("is_inclusion_student"));
             });
     }
 
@@ -2490,7 +2491,8 @@ public class PrekinderFlowService {
     public record ApplicationView(UUID applicationId, UUID applicantId, UUID processId, UUID waveId,
                                   String status, String eligibilityCategory, String eligibilityStatus,
                                   long version, long declarationVersion, ApplicantIdentity identity,
-                                  ApplicationDetails applicationDetails, Instant createdAt, String folio) {}
+                                  ApplicationDetails applicationDetails, Instant createdAt, String folio,
+                                  boolean isInclusionStudent) {}
     public record ProfessionalCommand(UUID processId, UUID professionalId, Long legacyUserId, String displayName, String email,
                                       String password, String specialty, String roleCode, boolean active, long expectedVersion) {}
     public record ProfessionalRoleDefinition(String roleCode, String label, String groupCode,
