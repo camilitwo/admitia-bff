@@ -168,6 +168,14 @@ public class PrekinderFlowService {
             if (blank(command.familyEmail()) && blank(command.fatherEmail()) && blank(command.motherEmail())) {
                 throw new IllegalArgumentException("Registra al menos un correo de apoderado");
             }
+            Integer alumniParentYear = null;
+            if (command.eligibility() != null) {
+                if (command.eligibility().fatherAlumni() != null && command.eligibility().fatherAlumni().graduationYear() != null) {
+                    alumniParentYear = command.eligibility().fatherAlumni().graduationYear();
+                } else if (command.eligibility().motherAlumni() != null && command.eligibility().motherAlumni().graduationYear() != null) {
+                    alumniParentYear = command.eligibility().motherAlumni().graduationYear();
+                }
+            }
             ApplicantIdentity identity = new ApplicantIdentity(rut, clean(command.firstName()), clean(command.paternalLastName()),
                 cleanNullable(command.maternalLastName()), command.birthDate(), cleanNullable(command.familyEmail()),
                 cleanNullable(command.fatherEmail()), cleanNullable(command.motherEmail()));
@@ -182,7 +190,8 @@ public class PrekinderFlowService {
                 jdbc.update("""
                     INSERT INTO applications(application_id, applicant_id, process_id, wave_id, status,
                         eligibility_category, eligibility_status, applicant_identity_hash, submitted_by,
-                        payment_required, payment_status, applicant_sex, configuration_version, client_submission_id)
+                        payment_required, payment_status, applicant_sex, configuration_version, client_submission_id,
+                        inclusion_student, alumni_parent_year)
                     VALUES (:id, :applicantId, :processId, :waveId, 'PENDING_SEGMENT_VALIDATION', :category, 'PENDING',
                         :identityHash, :actorId,
                         (SELECT payment_enabled FROM prekinder_process_configuration WHERE process_id = :processId),
@@ -190,11 +199,15 @@ public class PrekinderFlowService {
                              THEN 'PENDING' ELSE 'NOT_REQUIRED' END,
                         :applicantSex,
                         (SELECT version FROM prekinder_process_configuration WHERE process_id = :processId),
-                        :clientSubmissionId)
+                        :clientSubmissionId,
+                        :inclusionStudent,
+                        :alumniParentYear)
                     """, new MapSqlParameterSource().addValue("id", applicationId).addValue("applicantId", applicantId)
                     .addValue("processId", command.processId()).addValue("waveId", wave.waveId())
                     .addValue("category", category).addValue("identityHash", sha256(rut))
                     .addValue("actorId", actor.id()).addValue("applicantSex", command.applicationDetails().gender())
+                    .addValue("inclusionStudent", Boolean.TRUE.equals(command.inclusionStudent()))
+                    .addValue("alumniParentYear", alumniParentYear)
                     .addValue("clientSubmissionId", command.clientSubmissionId()));
             } catch (DataIntegrityViolationException exception) {
                 throw PrekinderDomainException.conflict("DUPLICATE_APPLICATION",
