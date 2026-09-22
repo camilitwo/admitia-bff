@@ -2412,10 +2412,6 @@ public class PrekinderFlowService {
         }
         return year;
     }
-            return true;
-        }
-        throw new IllegalArgumentException("Estado de exalumno inválido");
-    }
 
     private static String waveLabel(String type) {
         return switch (type) {
