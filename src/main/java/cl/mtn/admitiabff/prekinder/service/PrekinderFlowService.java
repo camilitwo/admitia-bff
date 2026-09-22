@@ -2394,7 +2394,9 @@ public class PrekinderFlowService {
             if (blank(declaration.lastGrade()) || blank(declaration.withdrawalReason())) {
                 throw new IllegalArgumentException("Indica último curso y motivo de retiro");
             }
-        return true;
+            return true;
+        }
+        throw new IllegalArgumentException("Estado de exalumno inválido");
     }
 
     static Integer extractAlumniParentYear(EligibilityDeclaration eligibility, int academicYear) {
