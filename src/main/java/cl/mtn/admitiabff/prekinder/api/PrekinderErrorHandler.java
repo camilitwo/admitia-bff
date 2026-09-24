@@ -1,6 +1,5 @@
 package cl.mtn.admitiabff.prekinder.api;
 
-import cl.mtn.admitiabff.prekinder.service.PrekinderApplicationDraftService;
 import cl.mtn.admitiabff.prekinder.service.VersionConflictException;
 import cl.mtn.admitiabff.prekinder.service.PrekinderDomainException;
 import java.util.Map;
@@ -41,12 +40,6 @@ public class PrekinderErrorHandler {
     @ResponseStatus(HttpStatus.FORBIDDEN)
     Map<String, Object> forbidden(Exception ignored, HttpServletRequest request) {
         return error("INSUFFICIENT_PERMISSION", "Acceso denegado", request);
-    }
-
-    @ExceptionHandler(PrekinderApplicationDraftService.DraftNotFoundException.class)
-    @ResponseStatus(HttpStatus.NOT_FOUND)
-    Map<String, Object> draftNotFound(Exception ignored, HttpServletRequest request) {
-        return error("DRAFT_NOT_FOUND", "No draft found for the given process", request);
     }
 
     @ExceptionHandler(EmptyResultDataAccessException.class)
