@@ -80,22 +80,6 @@ public class PrekinderApplicationDraftService {
             Map.of("processId", processId, "actorId", actor.id()));
     }
 
-    public void assertExists(UUID processId) {
-        PrekinderActor actor = access.requireActor();
-        Integer count = jdbc.queryForObject("""
-            SELECT COUNT(*) FROM guardian_application_drafts
-             WHERE process_id = :processId AND actor_id = :actorId
-            """, Map.of("processId", processId, "actorId", actor.id()), Integer.class);
-        if (count == null || count == 0) {
-            throw new DraftNotFoundException("No draft found for process " + processId);
-        }
-    }
-
-    @org.springframework.web.bind.annotation.ResponseStatus(org.springframework.http.HttpStatus.NOT_FOUND)
-    public static class DraftNotFoundException extends RuntimeException {
-        public DraftNotFoundException(String message) { super(message); }
-    }
-
     private EncryptedPayload encrypt(UUID draftId, Map<String, Object> data) {
         try { return encryption.encrypt(mapper.writeValueAsString(data), aad(draftId)); }
         catch (Exception exception) { throw new IllegalArgumentException("El borrador no tiene un formato válido", exception); }

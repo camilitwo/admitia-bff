@@ -46,9 +46,7 @@ public class PrekinderGuardianService {
                    fv.wrapped_dek AS form_wrapped_dek, fv.wrapped_dek_iv AS form_wrapped_dek_iv,
                    fv.key_version AS form_key_version,
                    EXISTS (SELECT 1 FROM prekinder_complementary_forms cf
-                            WHERE cf.family_id = f.family_id AND cf.process_id = a.process_id) AS has_complementary_form,
-                   EXISTS (SELECT 1 FROM guardian_application_drafts d
-                            WHERE d.process_id = a.process_id AND d.actor_id = f.external_reference::UUID) AS has_draft
+                            WHERE cf.family_id = f.family_id AND cf.process_id = a.process_id) AS has_complementary_form
               FROM families f
               JOIN applicants ap ON ap.family_id = f.family_id
               JOIN applications a ON a.applicant_id = ap.applicant_id
@@ -78,7 +76,7 @@ public class PrekinderGuardianService {
                     rs.getTimestamp("paid_at") == null ? null : rs.getTimestamp("paid_at").toInstant(),
                     !paymentRequired || "PAID".equals(paymentStatus), rs.getBoolean("has_complementary_form"),
                     rs.getBigDecimal("payment_amount"), rs.getString("payment_currency"),
-                    rs.getBoolean("is_inclusion_student"), rs.getBoolean("has_draft"));
+                    rs.getBoolean("is_inclusion_student"));
             });
     }
 
@@ -115,5 +113,5 @@ public class PrekinderGuardianService {
                                           boolean paymentRequired, String paymentStatus, Instant paidAt,
                                           boolean canFillComplementaryForm, boolean hasComplementaryForm,
                                           java.math.BigDecimal paymentAmount, String paymentCurrency,
-                                          boolean isInclusionStudent, boolean hasDraft) {}
+                                          boolean isInclusionStudent) {}
 }
