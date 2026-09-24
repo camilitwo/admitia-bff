@@ -48,7 +48,7 @@ public class PrekinderGuardianService {
                    EXISTS (SELECT 1 FROM prekinder_complementary_forms cf
                             WHERE cf.family_id = f.family_id AND cf.process_id = a.process_id) AS has_complementary_form,
                    EXISTS (SELECT 1 FROM guardian_application_drafts d
-                            WHERE d.process_id = a.process_id AND d.actor_id = f.external_reference::UUID) AS has_draft
+                            WHERE d.process_id = a.process_id AND d.actor_id = :actorId) AS has_draft
               FROM families f
               JOIN applicants ap ON ap.family_id = f.family_id
               JOIN applications a ON a.applicant_id = ap.applicant_id
@@ -58,7 +58,7 @@ public class PrekinderGuardianService {
                    AND fv.aggregate_id = a.application_id AND fv.field_code = 'APPLICATION_FORM'
              WHERE f.external_reference = :actorReference
              ORDER BY a.created_at DESC
-            """, Map.of("actorReference", actor.id().toString()), (rs, row) -> {
+            """, Map.of("actorReference", actor.id().toString(), "actorId", actor.id()), (rs, row) -> {
                 UUID applicationId = rs.getObject("application_id", UUID.class);
                 UUID applicantId = rs.getObject("applicant_id", UUID.class);
                 ApplicantIdentity identity = decryptIdentity(applicationId, applicantId, new EncryptedPayload(
