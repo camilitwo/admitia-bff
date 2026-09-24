@@ -37,7 +37,7 @@ class PrekinderWorkspaceControllerTest {
         var option = new PrekinderWorkspaceService.ApplicationOption(
             UUID.randomUUID(), 2027, "Prekínder 2027", UUID.randomUUID(), "NEW_FAMILIES",
             Instant.parse("2026-08-05T12:00:00Z"), Instant.parse("2026-08-31T23:59:00Z"),
-            LocalDate.of(2027, 3, 31), 48, 59);
+            LocalDate.of(2027, 3, 31), 48, 59, List.of("BIRTH_CERTIFICATE"));
         when(workspace.applicationOptions()).thenReturn(List.of(option));
 
         Map<String, Object> response = controller.applicationOptions();

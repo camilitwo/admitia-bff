@@ -168,11 +168,22 @@ public class PrekinderDocumentService {
         if (count == null || count == 0) throw PrekinderDomainException.forbidden("NOT_ASSIGNED", "Documento no autorizado");
     }
 
-    private void validateUploadScope(UUID applicationId, String category, PrekinderActor actor) {
+    void validateUploadScope(UUID applicationId, String category, PrekinderActor actor) {
         if (List.of("ADMIN", "COORDINATOR", "CYCLE_DIRECTOR", "PK_ADMIN", "PK_COORDINATOR").contains(actor.role())) return;
         String status = jdbc.queryForObject("SELECT status FROM applications WHERE application_id = :id",
             Map.of("id", applicationId), String.class);
-        if (List.of("PENDING_SEGMENT_VALIDATION", "PENDING_PAYMENT", "FORM_PENDING").contains(status)) return;
+        if (List.of("PENDING_SEGMENT_VALIDATION", "PENDING_PAYMENT", "FORM_PENDING").contains(status)) {
+            Long required = jdbc.queryForObject("""
+                SELECT count(*)
+                  FROM applications application
+                  JOIN prekinder_process_configuration config ON config.process_id = application.process_id
+                 WHERE application.application_id = :id
+                   AND config.required_documents ? :category
+                """, Map.of("id", applicationId, "category", category), Long.class);
+            if (required != null && required > 0) return;
+            throw PrekinderDomainException.forbidden("DOCUMENT_CATEGORY_NOT_REQUIRED",
+                "La categoría documental no es requerida por este proceso");
+        }
         if ("REQUIRES_INFORMATION".equals(status)) {
             Long allowed = jdbc.queryForObject("""
                 SELECT count(*) FROM application_correction_requests request

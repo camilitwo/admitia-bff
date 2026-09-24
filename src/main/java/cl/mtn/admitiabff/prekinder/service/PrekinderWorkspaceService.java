@@ -100,7 +100,8 @@ public class PrekinderWorkspaceService {
             )
             SELECT p.process_id, p.academic_year, p.name,
                    w.wave_id, w.wave_type, w.opens_at, w.closes_at,
-                   config.age_reference_date, config.minimum_age_months, config.maximum_age_months
+                   config.age_reference_date, config.minimum_age_months, config.maximum_age_months,
+                   config.required_documents::text AS required_documents
               FROM admission_processes p
               JOIN active_waves w ON w.process_id = p.process_id AND w.active_count = 1
               JOIN prekinder_process_configuration config ON config.process_id = p.process_id
@@ -113,7 +114,7 @@ public class PrekinderWorkspaceService {
                 rs.getObject("wave_id", UUID.class), rs.getString("wave_type"),
                 instant(rs.getTimestamp("opens_at")), instant(rs.getTimestamp("closes_at")),
                 rs.getObject("age_reference_date", LocalDate.class), rs.getInt("minimum_age_months"),
-                rs.getInt("maximum_age_months")));
+                rs.getInt("maximum_age_months"), readStringList(rs.getString("required_documents"))));
     }
 
     public ProcessView publishProcess(UUID processId, Instant startsAt, Instant endsAt) {
@@ -543,12 +544,19 @@ public class PrekinderWorkspaceService {
         catch (JsonProcessingException exception) { throw new IllegalArgumentException("Identidad inválida"); }
     }
 
+    private List<String> readStringList(String value) {
+        try { return mapper.readValue(value, new com.fasterxml.jackson.core.type.TypeReference<>() {}); }
+        catch (JsonProcessingException exception) {
+            throw new IllegalStateException("Los documentos configurados no son válidos", exception);
+        }
+    }
+
     public record Identity(String rut, String firstName, String paternalLastName, String maternalLastName) {}
     public record ProcessView(UUID processId, int academicYear, String name, String status, Instant startsAt,
                               Instant endsAt, long version, long applicationCount, boolean acceptingApplications) {}
     public record ApplicationOption(UUID processId, int academicYear, String name, UUID waveId, String waveType,
                                     Instant opensAt, Instant closesAt, LocalDate ageReferenceDate,
-                                    int minimumAgeMonths, int maximumAgeMonths) {}
+                                    int minimumAgeMonths, int maximumAgeMonths, List<String> requiredDocuments) {}
     public record ApplicationView(UUID applicationId, UUID applicantId, UUID processId, String status,
                                   Identity identity, Instant createdAt) {}
     public record EvaluationView(UUID evaluationId, UUID applicationId, String typeCode, String status,
