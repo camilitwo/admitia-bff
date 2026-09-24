@@ -14,6 +14,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestMethod;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
@@ -30,5 +31,6 @@ public class PrekinderApplicationDraftController {
         return Map.of("success", true, "data", drafts.save(processId, request.currentSection(), request.data(), request.expectedVersion()));
     }
     @DeleteMapping public Map<String, Object> delete(@PathVariable UUID processId) { drafts.delete(processId); return Map.of("success", true); }
+    @RequestMapping(method = RequestMethod.HEAD) public void exists(@PathVariable UUID processId) { drafts.assertExists(processId); }
     public record SaveDraft(@Min(0) @Max(20) int currentSection, @NotEmpty Map<String, Object> data, Long expectedVersion) {}
 }
