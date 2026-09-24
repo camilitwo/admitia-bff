@@ -1,5 +1,6 @@
 package cl.mtn.admitiabff.prekinder.api;
 
+import cl.mtn.admitiabff.prekinder.service.PrekinderApplicationDraftService;
 import cl.mtn.admitiabff.prekinder.service.PrekinderFlowService;
 import cl.mtn.admitiabff.prekinder.service.PrekinderInclusionService;
 import cl.mtn.admitiabff.prekinder.service.PrekinderSchedulingService;
@@ -37,12 +38,15 @@ public class PrekinderFlowController {
     private final PrekinderFlowService flow;
     private final PrekinderSchedulingService scheduling;
     private final PrekinderInclusionService inclusion;
+    private final PrekinderApplicationDraftService drafts;
 
     public PrekinderFlowController(PrekinderFlowService flow, PrekinderSchedulingService scheduling,
-                                   PrekinderInclusionService inclusion) {
+                                   PrekinderInclusionService inclusion,
+                                   PrekinderApplicationDraftService drafts) {
         this.flow = flow;
         this.scheduling = scheduling;
         this.inclusion = inclusion;
+        this.drafts = drafts;
     }
 
     @GetMapping("/processes/{processId}/waves")
@@ -63,10 +67,12 @@ public class PrekinderFlowController {
         var eligibility = new PrekinderFlowService.EligibilityDeclaration(siblings,
             command.eligibility().employeeParent(), alumni(command.eligibility().fatherAlumni()),
             alumni(command.eligibility().motherAlumni()));
-        return ok(flow.submitApplication(new PrekinderFlowService.SubmitApplication(command.processId(), command.clientSubmissionId(), command.rut(),
+        var result = flow.submitApplication(new PrekinderFlowService.SubmitApplication(command.processId(), command.clientSubmissionId(), command.rut(),
             command.firstName(), command.paternalLastName(), command.maternalLastName(), command.birthDate(),
             command.familyEmail(), command.fatherEmail(), command.motherEmail(), details(command.applicationDetails()), eligibility,
-            command.inclusionStudent())));
+            command.inclusionStudent()));
+        try { drafts.delete(command.processId()); } catch (Exception ignored) { /* best-effort */ }
+        return ok(result);
     }
 
     @GetMapping("/applications")

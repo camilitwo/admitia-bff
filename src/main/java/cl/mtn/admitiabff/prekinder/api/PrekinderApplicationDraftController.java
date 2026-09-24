@@ -10,6 +10,7 @@ import java.util.UUID;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.HeadMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -30,5 +31,6 @@ public class PrekinderApplicationDraftController {
         return Map.of("success", true, "data", drafts.save(processId, request.currentSection(), request.data(), request.expectedVersion()));
     }
     @DeleteMapping public Map<String, Object> delete(@PathVariable UUID processId) { drafts.delete(processId); return Map.of("success", true); }
+    @HeadMapping public void exists(@PathVariable UUID processId) { drafts.assertExists(processId); }
     public record SaveDraft(@Min(0) @Max(20) int currentSection, @NotEmpty Map<String, Object> data, Long expectedVersion) {}
 }
