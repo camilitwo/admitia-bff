@@ -368,8 +368,12 @@ public class PrekinderWorkspaceService {
         List<String[]> templates = List.of(
             new String[]{"APPLICATION_SUBMITTED", "Postulación recibida", "Postulación Prekínder recibida",
                 "<h1>Postulación recibida</h1><p>Recibimos la postulación de {{applicantName}}.</p>"},
-            new String[]{"SCHEDULE_ASSIGNED", "Jornada agendada", "Jornada de evaluación Prekínder",
-                "<h1>Jornada agendada</h1><p>Revisa en el portal la fecha asignada a {{applicantName}}.</p>"},
+            new String[]{"SCHEDULE_ASSIGNED", "Jornada agendada", "Asignación evaluación Prekínder",
+                scheduleTemplate("Evaluación programada", "La evaluación de {{applicantName}} fue programada.", false)},
+            new String[]{"SCHEDULE_RESCHEDULED", "Jornada reagendada", "Reagendamiento evaluación Prekínder",
+                scheduleTemplate("Evaluación reagendada", "La evaluación de {{applicantName}} fue reagendada. Esta información reemplaza la cita anterior.", false)},
+            new String[]{"SCHEDULE_CANCELLED", "Jornada cancelada", "Cancelación evaluación Prekínder",
+                scheduleTemplate("Evaluación cancelada", "La evaluación de {{applicantName}} fue cancelada.", true)},
             new String[]{"RESULT_ACCEPTED", "Resultado aceptado", "Resultado proceso de admisión Prekínder",
                 "<h1>Resultado de admisión</h1><p>{{applicantName}} fue aceptado/a. Este correo es el canal oficial del resultado.</p>"},
             new String[]{"RESULT_WAITLIST", "Resultado lista de espera", "Resultado proceso de admisión Prekínder",
@@ -397,10 +401,20 @@ public class PrekinderWorkspaceService {
                     CAST(:variables AS jsonb), now())
                 """, Map.of("id", UUID.randomUUID(), "templateId", templateId,
                     "subject", template[2], "body", template[3],
-                    "variables", template[0].startsWith("RESULT_")
-                        ? "[\"applicantName\",\"processName\"]"
-                        : "[\"applicantName\",\"processName\",\"portalUrl\"]"));
+                    "variables", template[0].startsWith("SCHEDULE_")
+                        ? "[\"applicantName\",\"processName\",\"portalUrl\",\"scheduleDate\",\"startTime\",\"endTime\",\"modality\",\"location\",\"groupCode\",\"evaluationDetail\",\"reason\",\"institutionalImage\",\"institutionalImageUrl\"]"
+                        : template[0].startsWith("RESULT_")
+                            ? "[\"applicantName\",\"processName\"]"
+                            : "[\"applicantName\",\"processName\",\"portalUrl\"]"));
         }
+    }
+
+    private static String scheduleTemplate(String title, String notice, boolean cancellation) {
+        return "{{institutionalImage}}<h1>" + title + "</h1><p>Estimados apoderados:</p><p>" + notice
+            + "</p><p><strong>Fecha:</strong> {{scheduleDate}}<br><strong>Horario:</strong> {{startTime}} a {{endTime}} horas<br>"
+            + "<strong>Modalidad:</strong> {{modality}}<br><strong>Lugar:</strong> {{location}}<br>"
+            + "<strong>Grupo:</strong> {{groupCode}}<br><strong>Detalle:</strong> {{evaluationDetail}}"
+            + (cancellation ? "<br><strong>Motivo:</strong> {{reason}}" : "") + "</p>";
     }
 
     private List<String> openingBlockers(UUID processId) {

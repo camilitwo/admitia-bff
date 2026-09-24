@@ -20,7 +20,9 @@ import org.springframework.transaction.support.TransactionTemplate;
 @ConditionalOnProperty(prefix = "app.prekinder", name = "enabled", havingValue = "true")
 public class PrekinderCommunicationTemplateService {
     private static final Set<String> ALLOWED_VARIABLES = Set.of(
-        "applicantName", "processName", "portalUrl", "deadline"
+        "applicantName", "processName", "portalUrl", "deadline", "scheduleDate",
+        "startTime", "endTime", "modality", "location", "groupCode", "evaluationDetail",
+        "reason", "institutionalImage", "institutionalImageUrl"
     );
     private static final Pattern VARIABLE = Pattern.compile("\\{\\{([A-Za-z][A-Za-z0-9]*)}}", Pattern.CASE_INSENSITIVE);
     private final NamedParameterJdbcTemplate jdbc;
@@ -200,8 +202,16 @@ public class PrekinderCommunicationTemplateService {
     }
 
     static String render(String value, String applicantName, String processName, String portalUrl, String deadline) {
-        return value.replace("{{applicantName}}", applicantName).replace("{{processName}}", processName)
-            .replace("{{portalUrl}}", portalUrl).replace("{{deadline}}", deadline);
+        return render(value, Map.of("applicantName", applicantName, "processName", processName,
+            "portalUrl", portalUrl, "deadline", deadline));
+    }
+
+    static String render(String value, Map<String, String> variables) {
+        String rendered = value;
+        for (String variable : ALLOWED_VARIABLES) {
+            rendered = rendered.replace("{{" + variable + "}}", variables.getOrDefault(variable, ""));
+        }
+        return rendered;
     }
 
     private String json(Object value) {

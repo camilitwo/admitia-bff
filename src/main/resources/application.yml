@@ -189,6 +189,9 @@ app:
   # Email de admisiones para notificaciones de confirmación/rechazo de entrevistas
   admissions:
     email: ${APP_ADMISSIONS_EMAIL:camilo.igv@gmail.com}
+  prekinder-notifications:
+    # Imagen institucional opcional incluida en las comunicaciones de agenda.
+    institutional-image-url: ${APP_PREKINDER_INSTITUTIONAL_IMAGE_URL:}
   family-form:
     # Vacío mantiene abierto el año vigente; en producción usar YYYY-MM-DD.
     general-close-date: ${APP_FAMILY_FORM_GENERAL_CLOSE_DATE:}

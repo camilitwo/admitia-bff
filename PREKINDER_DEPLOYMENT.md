@@ -51,6 +51,7 @@ PREKINDER_DATASOURCE_USERNAME=prekinder_app
 PREKINDER_DATASOURCE_PASSWORD=<secreto runtime diferente, mínimo 24 caracteres>
 PREKINDER_REDIS_URL=redis://default:...@...railway.internal:6379
 PREKINDER_ALLOWED_ORIGINS=https://admitia.cl
+APP_PREKINDER_INSTITUTIONAL_IMAGE_URL=https://admitia.cl/assets/email/prekinder-banner.png
 
 PREKINDER_ENCRYPTION_ACTIVE_VERSION=V1
 PREKINDER_ENCRYPTION_KEY_V1=<32 bytes aleatorios codificados Base64>

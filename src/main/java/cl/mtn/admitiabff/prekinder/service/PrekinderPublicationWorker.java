@@ -36,13 +36,16 @@ public class PrekinderPublicationWorker {
     private final ResendEmailSender sender;
     private final boolean mockMode;
     private final String portalUrl;
+    private final String institutionalImageUrl;
 
     public PrekinderPublicationWorker(@Qualifier("prekinderJdbc") NamedParameterJdbcTemplate jdbc,
         EnvelopeEncryptionService encryption, ObjectMapper mapper, ResendEmailSender sender,
         @Value("${app.email.mock-mode:false}") boolean mockMode,
-        @Value("${app.frontend.url:https://admitia.cl}") String portalUrl) {
+        @Value("${app.frontend.url:https://admitia.cl}") String portalUrl,
+        @Value("${app.prekinder-notifications.institutional-image-url:}") String institutionalImageUrl) {
         this.jdbc = jdbc; this.encryption = encryption; this.mapper = mapper; this.sender = sender;
         this.mockMode = mockMode; this.portalUrl = portalUrl;
+        this.institutionalImageUrl = validInstitutionalImageUrl(institutionalImageUrl);
     }
 
     @Scheduled(fixedDelayString = "${app.prekinder.publication.worker-delay-ms:3000}")
@@ -194,17 +197,21 @@ public class PrekinderPublicationWorker {
 
     private void dispatchScheduleEmails() {
         List<Map<String, Object>> intents = jdbc.queryForList("""
-            SELECT n.notification_id, n.application_id, n.recipient_actor_id, n.template_code,
+            SELECT n.notification_id, n.application_id, n.recipient_actor_id, n.recipient_kind, n.template_code,
                    n.payload::text AS payload_text, a.applicant_id,
                    ap.identity_ciphertext, ap.identity_iv, ap.identity_wrapped_dek,
                    ap.identity_wrapped_dek_iv, ap.identity_key_version,
-                   p.email AS professional_email
+                   p.email AS professional_email, a.process_id, process.name AS process_name
               FROM notification_intents n
               LEFT JOIN applications a ON a.application_id = n.application_id
               LEFT JOIN applicants ap ON ap.applicant_id = a.applicant_id
+              LEFT JOIN admission_processes process ON process.process_id = a.process_id
               LEFT JOIN professional_profiles p ON p.professional_id = n.recipient_actor_id
-             WHERE n.batch_id IS NULL AND n.template_code IN ('PREKINDER_GROUP_ASSIGNED','PREKINDER_GROUP_RESCHEDULED')
-               AND n.status IN ('PENDING','FAILED') AND n.attempts < 5
+             WHERE n.batch_id IS NULL AND n.template_code IN (
+                    'PREKINDER_GROUP_ASSIGNED','PREKINDER_GROUP_RESCHEDULED','PREKINDER_GROUP_CANCELLED')
+               AND (n.status IN ('PENDING','FAILED')
+                    OR (n.status = 'PROCESSING' AND n.processing_started_at < now() - interval '10 minutes'))
+               AND n.attempts < 5
                AND coalesce(n.next_attempt_at, now()) <= now()
              ORDER BY n.created_at LIMIT 50
             """, Map.of());
@@ -256,8 +263,16 @@ public class PrekinderPublicationWorker {
 
     private void dispatchSchedule(Map<String, Object> row) {
         UUID notificationId = (UUID) row.get("notification_id");
+        int claimed = jdbc.update("""
+            UPDATE notification_intents SET status = 'PROCESSING', processing_started_at = now()
+             WHERE notification_id = :id AND attempts < 5
+               AND (status IN ('PENDING','FAILED')
+                    OR (status = 'PROCESSING' AND processing_started_at < now() - interval '10 minutes'))
+            """, Map.of("id", notificationId));
+        if (claimed != 1) return;
         try {
             Set<String> recipients = new LinkedHashSet<>();
+            Map<String, Object> identity = Map.of();
             if (row.get("application_id") != null) {
                 UUID applicationId = (UUID) row.get("application_id");
                 UUID applicantId = (UUID) row.get("applicant_id");
@@ -266,18 +281,40 @@ public class PrekinderPublicationWorker {
                     String.valueOf(row.get("identity_wrapped_dek_iv")), String.valueOf(row.get("identity_key_version"))),
                     "prekinder|applicants|" + applicantId + "|application:" + applicationId + "|identity");
                 @SuppressWarnings("unchecked")
-                Map<String, Object> identity = mapper.readValue(plaintext, Map.class);
-                recipients.addAll(parentEmails(identity));
+                Map<String, Object> decodedIdentity = mapper.readValue(plaintext, Map.class);
+                identity = decodedIdentity;
+                String recipientKind = row.get("recipient_kind") == null ? null : String.valueOf(row.get("recipient_kind"));
+                if ("FATHER".equals(recipientKind)) addRecipient(recipients, identity.get("fatherEmail"));
+                else if ("MOTHER".equals(recipientKind)) addRecipient(recipients, identity.get("motherEmail"));
+                else recipients.addAll(parentEmails(identity));
             } else if (row.get("professional_email") != null) {
-                String email = String.valueOf(row.get("professional_email")).trim();
-                if (!email.isBlank()) recipients.add(email);
+                addRecipient(recipients, row.get("professional_email"));
             }
-            if (recipients.isEmpty()) throw new IllegalStateException("RECIPIENT_MISSING");
+            if (recipients.isEmpty()) {
+                markSkipped(notificationId, "RECIPIENT_MISSING");
+                return;
+            }
             @SuppressWarnings("unchecked")
             Map<String, Object> payload = mapper.readValue(String.valueOf(row.get("payload_text")), Map.class);
-            boolean rescheduled = "PREKINDER_GROUP_RESCHEDULED".equals(row.get("template_code"));
-            String subject = rescheduled ? "Reagendamiento evaluación Prekínder" : "Asignación evaluación Prekínder";
-            String body = scheduleEmailBody(payload, rescheduled);
+            String templateCode = String.valueOf(row.get("template_code"));
+            if (row.get("application_id") == null) {
+                boolean rescheduled = "PREKINDER_GROUP_RESCHEDULED".equals(templateCode);
+                String subject = rescheduled ? "Reagendamiento evaluación Prekínder" : "Asignación evaluación Prekínder";
+                String body = scheduleEmailBody(payload, rescheduled);
+                if (!mockMode) for (String recipient : recipients) sender.send(recipient, subject, body);
+                markSent(notificationId);
+                return;
+            }
+            String eventCode = switch (templateCode) {
+                case "PREKINDER_GROUP_RESCHEDULED" -> "SCHEDULE_RESCHEDULED";
+                case "PREKINDER_GROUP_CANCELLED" -> "SCHEDULE_CANCELLED";
+                default -> "SCHEDULE_ASSIGNED";
+            };
+            CommunicationContent content = communicationSnapshot(null, (UUID) row.get("process_id"), eventCode);
+            Map<String, String> variables = scheduleVariables(payload, identity,
+                String.valueOf(row.getOrDefault("process_name", "Admisión Prekínder")));
+            String subject = PrekinderCommunicationTemplateService.render(content.subject(), variables);
+            String body = PrekinderCommunicationTemplateService.render(content.bodyHtml(), variables);
             if (!mockMode) for (String recipient : recipients) sender.send(recipient, subject, body);
             markSent(notificationId);
         } catch (Exception exception) {
@@ -288,27 +325,91 @@ public class PrekinderPublicationWorker {
 
     static Set<String> parentEmails(Map<String, Object> identity) {
         Set<String> recipients = new LinkedHashSet<>();
-        for (String field : List.of("fatherEmail", "motherEmail", "familyEmail")) {
+        for (String field : List.of("fatherEmail", "motherEmail")) {
             Object value = identity.get(field);
-            if (value != null && !String.valueOf(value).isBlank()) recipients.add(String.valueOf(value).trim().toLowerCase());
+            String email = normalizedEmail(value);
+            if (email != null) recipients.add(email);
         }
         return recipients;
+    }
+
+    private static String normalizedEmail(Object value) {
+        if (value == null || String.valueOf(value).isBlank()) return null;
+        return String.valueOf(value).trim().toLowerCase(Locale.ROOT);
+    }
+
+    private static void addRecipient(Set<String> recipients, Object value) {
+        String email = normalizedEmail(value);
+        if (email != null) recipients.add(email);
     }
 
     private void markSent(UUID notificationId) {
         jdbc.update("""
             UPDATE notification_intents SET status = 'SENT', sent_at = now(), attempts = attempts + 1,
-                last_error_code = NULL WHERE notification_id = :id
+                last_error_code = NULL, processing_started_at = NULL WHERE notification_id = :id
             """, Map.of("id", notificationId));
     }
 
     private void markFailed(UUID notificationId) {
         jdbc.update("""
             UPDATE notification_intents SET status = 'FAILED', attempts = attempts + 1,
-                next_attempt_at = :retryAt, last_error_code = 'EMAIL_PROVIDER_ERROR'
+                next_attempt_at = :retryAt, last_error_code = 'EMAIL_PROVIDER_ERROR', processing_started_at = NULL
              WHERE notification_id = :id
             """, new MapSqlParameterSource().addValue("id", notificationId)
             .addValue("retryAt", Timestamp.from(Instant.now().plus(5, ChronoUnit.MINUTES))));
+    }
+
+    private void markSkipped(UUID notificationId, String errorCode) {
+        jdbc.update("""
+            UPDATE notification_intents SET status = 'SKIPPED', last_error_code = :error,
+                next_attempt_at = NULL, processing_started_at = NULL WHERE notification_id = :id
+            """, Map.of("id", notificationId, "error", errorCode));
+    }
+
+    private Map<String, String> scheduleVariables(Map<String, Object> payload, Map<String, Object> identity,
+                                                  String processName) {
+        ZoneId zone = ZoneId.of("America/Santiago");
+        ZonedDateTime startsAt = Instant.parse(String.valueOf(payload.get("startsAt"))).atZone(zone);
+        ZonedDateTime endsAt = Instant.parse(String.valueOf(payload.get("endsAt"))).atZone(zone);
+        DateTimeFormatter date = DateTimeFormatter.ofPattern("EEEE d 'de' MMMM 'de' yyyy", Locale.forLanguageTag("es-CL"));
+        DateTimeFormatter time = DateTimeFormatter.ofPattern("HH:mm", Locale.forLanguageTag("es-CL"));
+        String location = (String.valueOf(payload.getOrDefault("roomName", "Sala por confirmar")) + " ("
+            + String.valueOf(payload.getOrDefault("roomCode", "")) + ")").replace(" ()", "");
+        String image = institutionalImageUrl.isBlank() ? "" : "<img src=\"" + escapeHtml(institutionalImageUrl)
+            + "\" alt=\"Imagen institucional MTN\" width=\"600\" style=\"display:block;max-width:100%;height:auto\">";
+        return Map.ofEntries(
+            Map.entry("applicantName", applicantName(identity)),
+            Map.entry("processName", escapeHtml(processName)),
+            Map.entry("portalUrl", escapeHtml(portalUrl)),
+            Map.entry("scheduleDate", startsAt.format(date)),
+            Map.entry("startTime", startsAt.format(time)),
+            Map.entry("endTime", endsAt.format(time)),
+            Map.entry("modality", "Presencial"),
+            Map.entry("location", escapeHtml(location)),
+            Map.entry("groupCode", escapeHtml(String.valueOf(payload.getOrDefault("groupCode", "")))),
+            Map.entry("evaluationDetail", escapeHtml(stageLabel(String.valueOf(payload.getOrDefault("stage", ""))))),
+            Map.entry("reason", escapeHtml(String.valueOf(payload.getOrDefault("reason", "")))),
+            Map.entry("institutionalImage", image),
+            Map.entry("institutionalImageUrl", escapeHtml(institutionalImageUrl))
+        );
+    }
+
+    private static String stageLabel(String stage) {
+        return switch (stage) {
+            case "GROUP_3" -> "Evaluación académica, psicológica e indicadores de ingreso";
+            case "GROUP_9" -> "Evaluación psicomotriz y observación grupal";
+            case "FAMILY_INTERVIEW" -> "Entrevista familiar";
+            default -> "Evaluación Prekínder";
+        };
+    }
+
+    private static String validInstitutionalImageUrl(String value) {
+        if (value == null || value.isBlank()) return "";
+        String normalized = value.trim();
+        if (!normalized.startsWith("https://")) {
+            throw new IllegalArgumentException("APP_PREKINDER_INSTITUTIONAL_IMAGE_URL debe usar HTTPS");
+        }
+        return normalized;
     }
 
     static String scheduleEmailBody(Map<String, Object> payload, boolean rescheduled) {
@@ -326,14 +427,16 @@ public class PrekinderPublicationWorker {
               <ul>
                 <li><strong>Fecha:</strong> %s</li>
                 <li><strong>Horario:</strong> %s a %s horas</li>
+                <li><strong>Modalidad:</strong> Presencial</li>
                 <li><strong>Ubicación:</strong> %s (%s)</li>
                 <li><strong>Grupo:</strong> %s</li>
+                <li><strong>Detalle:</strong> %s</li>
               </ul>
               <p>Recomendamos llegar con anticipación al establecimiento.</p>
             </div>
             """.formatted(title, notice, startsAt.format(date), startsAt.format(time), endsAt.format(time),
                 payload.getOrDefault("roomName", "Sala por confirmar"), payload.getOrDefault("roomCode", ""),
-                payload.getOrDefault("groupCode", ""));
+                payload.getOrDefault("groupCode", ""), stageLabel(String.valueOf(payload.getOrDefault("stage", ""))));
     }
 
     private static String applicationStatus(String decision) {

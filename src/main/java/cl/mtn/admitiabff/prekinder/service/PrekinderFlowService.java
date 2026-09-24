@@ -18,10 +18,14 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
+import java.util.regex.Pattern;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -36,6 +40,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 @ConditionalOnProperty(prefix = "app.prekinder", name = "enabled", havingValue = "true")
 public class PrekinderFlowService {
     private static final ZoneId SANTIAGO = ZoneId.of("America/Santiago");
+    private static final Pattern EMAIL = Pattern.compile("^[A-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?(?:\\.[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?)+$", Pattern.CASE_INSENSITIVE);
     private static final List<ProfessionalRoleDefinition> PROFESSIONAL_ROLES = List.of(
         new ProfessionalRoleDefinition("PK_ADMIN", "Administrador/a del proceso", "ADMINISTRACION", null, 1),
         new ProfessionalRoleDefinition("PK_COORDINATOR", "Coordinador/a Prekínder", "ADMINISTRACION", null, 2),
@@ -1143,6 +1148,53 @@ public class PrekinderFlowService {
         });
     }
 
+    public GroupView cancelGroup(UUID groupId, String reason, long expectedVersion) {
+        PrekinderActor actor = access.requireAdmin();
+        if (blank(reason)) throw new IllegalArgumentException("El motivo de cancelación es obligatorio");
+        String cancellationReason = reason.trim();
+        return transactions.execute(status -> {
+            GroupView current = group(groupId);
+            if (current.version() != expectedVersion) throw new VersionConflictException("El grupo cambió");
+            if (!List.of("DRAFT", "CONFIRMED").contains(current.status())) {
+                throw PrekinderDomainException.conflict("GROUP_LOCKED",
+                    "Sólo se pueden cancelar grupos en preparación o listos para evaluación");
+            }
+            if (!Instant.now().isBefore(current.startsAt())) {
+                throw PrekinderDomainException.conflict("GROUP_ALREADY_STARTED",
+                    "No se puede cancelar un grupo cuyo bloque ya comenzó");
+            }
+
+            if ("CONFIRMED".equals(current.status())) {
+                enqueueFamilyScheduleNotifications(groupId, "PREKINDER_GROUP_CANCELLED", cancellationReason);
+            }
+            jdbc.update("""
+                UPDATE applicant_group_bookings SET active = false
+                 WHERE member_id IN (SELECT member_id FROM evaluation_group_members WHERE group_id = :groupId)
+                """, Map.of("groupId", groupId));
+            jdbc.update("""
+                UPDATE evaluator_group_bookings SET active = false
+                 WHERE assignment_id IN (SELECT assignment_id FROM group_evaluator_assignments WHERE group_id = :groupId)
+                """, Map.of("groupId", groupId));
+            jdbc.update("""
+                UPDATE evaluation_group_members SET status = 'CANCELLED', version = version + 1, updated_at = now()
+                 WHERE group_id = :groupId AND status IN ('ASSIGNED','ATTENDED','ABSENT')
+                """, Map.of("groupId", groupId));
+            jdbc.update("""
+                UPDATE group_evaluator_assignments SET status = 'CANCELLED', version = version + 1, ended_at = now()
+                 WHERE group_id = :groupId AND status = 'ACTIVE'
+                """, Map.of("groupId", groupId));
+            int updated = jdbc.update("""
+                UPDATE evaluation_groups SET status = 'CANCELLED', version = version + 1, updated_at = now()
+                 WHERE group_id = :groupId AND version = :version AND status IN ('DRAFT','CONFIRMED')
+                """, Map.of("groupId", groupId, "version", expectedVersion));
+            if (updated != 1) throw new VersionConflictException("El grupo cambió");
+            history(actor.id(), groupId, "GROUP", groupId, "CANCELLED", cancellationReason);
+            audit(actor.id(), "GROUP_CANCELLED", "GROUP", groupId,
+                Map.of("previousStatus", current.status(), "reason", cancellationReason));
+            return group(groupId);
+        });
+    }
+
     private GroupView cloneForReschedule(PrekinderActor actor, GroupView current, UUID roomId,
                                          Instant startsAt, Instant endsAt, String reason) {
         UUID replacementId = UUID.randomUUID();
@@ -1221,19 +1273,11 @@ public class PrekinderFlowService {
     }
 
     private void enqueueScheduleNotifications(UUID groupId, String template) {
-        jdbc.update("""
-            INSERT INTO notification_intents(notification_id, application_id, template_code, channel, status,
-                idempotency_key, payload)
-            SELECT gen_random_uuid(), m.application_id, :template, 'EMAIL', 'PENDING',
-                   :template || ':' || CAST(:groupId AS text) || ':family:' || CAST(m.application_id AS text)
-                       || ':' || extract(epoch FROM g.starts_at)::bigint,
-                   jsonb_build_object('groupCode', g.code, 'stage', g.stage, 'roomName', room.name,
-                       'roomCode', room.code, 'startsAt', g.starts_at, 'endsAt', g.ends_at)
-              FROM evaluation_group_members m JOIN evaluation_groups g ON g.group_id = m.group_id
-              JOIN prekinder_rooms room ON room.room_id = g.room_id
-             WHERE m.group_id = :groupId AND m.status = 'ASSIGNED'
-            ON CONFLICT (idempotency_key) DO NOTHING
-            """, Map.of("groupId", groupId, "template", template));
+        enqueueScheduleNotifications(groupId, template, null);
+    }
+
+    private void enqueueScheduleNotifications(UUID groupId, String template, String reason) {
+        enqueueFamilyScheduleNotifications(groupId, template, reason);
         jdbc.update("""
             INSERT INTO notification_intents(notification_id, recipient_actor_id, template_code, channel, status,
                 idempotency_key, payload)
@@ -1249,19 +1293,91 @@ public class PrekinderFlowService {
             """, Map.of("groupId", groupId, "template", template));
     }
 
-    private void enqueueApplicationScheduleNotification(UUID groupId, UUID applicationId, String template) {
-        jdbc.update("""
-            INSERT INTO notification_intents(notification_id, application_id, template_code, channel, status,
-                idempotency_key, payload)
-            SELECT gen_random_uuid(), :applicationId, :template, 'EMAIL', 'PENDING',
-                   :template || ':' || CAST(:groupId AS text) || ':family:' || CAST(:applicationId AS text)
-                       || ':' || extract(epoch FROM g.starts_at)::bigint,
-                   jsonb_build_object('groupCode', g.code, 'stage', g.stage, 'roomName', room.name,
-                       'roomCode', room.code, 'startsAt', g.starts_at, 'endsAt', g.ends_at)
+    private void enqueueFamilyScheduleNotifications(UUID groupId, String template, String reason) {
+        String payload = schedulePayload(groupId, reason);
+        List<UUID> applications = jdbc.queryForList("""
+            SELECT application_id FROM evaluation_group_members
+             WHERE group_id = :groupId AND status = 'ASSIGNED'
+             ORDER BY application_id
+            """, Map.of("groupId", groupId), UUID.class);
+        for (UUID applicationId : applications) enqueueParentScheduleNotifications(
+            groupId, applicationId, template, payload);
+    }
+
+    private void enqueueParentScheduleNotifications(UUID groupId, UUID applicationId, String template,
+                                                     String payload) {
+        ApplicantIdentity identity = applicantIdentity(applicationId);
+        for (ParentDelivery contact : parentDeliveries(identity.fatherEmail(), identity.motherEmail())) {
+            MapSqlParameterSource parameters = new MapSqlParameterSource()
+                .addValue("id", UUID.randomUUID()).addValue("applicationId", applicationId)
+                .addValue("template", template).addValue("status", contact.status()).addValue("error", contact.errorCode())
+                .addValue("recipientKind", contact.recipientKind()).addValue("payload", payload)
+                .addValue("key", template + ":" + groupId + ":" + applicationId + ":"
+                    + contact.recipientKind() + ":" + scheduleVersion(groupId));
+            jdbc.update("""
+                INSERT INTO notification_intents(notification_id, application_id, template_code, channel,
+                    status, idempotency_key, payload, recipient_kind, last_error_code, next_attempt_at)
+                VALUES (:id, :applicationId, :template, 'EMAIL', :status, :key,
+                    CAST(:payload AS jsonb), :recipientKind, :error,
+                    CASE WHEN :status = 'PENDING' THEN now() ELSE NULL END)
+                ON CONFLICT (idempotency_key) DO NOTHING
+                """, parameters);
+        }
+    }
+
+    static List<ParentDelivery> parentDeliveries(String fatherEmail, String motherEmail) {
+        Set<String> accepted = new HashSet<>();
+        Map<String, String> contacts = new LinkedHashMap<>();
+        contacts.put("FATHER", fatherEmail);
+        contacts.put("MOTHER", motherEmail);
+        List<ParentDelivery> deliveries = new ArrayList<>();
+        for (Map.Entry<String, String> contact : contacts.entrySet()) {
+            String email = normalizeEmail(contact.getValue());
+            if (email == null) deliveries.add(new ParentDelivery(contact.getKey(), "SKIPPED", "RECIPIENT_MISSING"));
+            else if (!EMAIL.matcher(email).matches()) deliveries.add(new ParentDelivery(contact.getKey(), "SKIPPED", "RECIPIENT_INVALID"));
+            else if (!accepted.add(email)) deliveries.add(new ParentDelivery(contact.getKey(), "SKIPPED", "RECIPIENT_DUPLICATE"));
+            else deliveries.add(new ParentDelivery(contact.getKey(), "PENDING", null));
+        }
+        return List.copyOf(deliveries);
+    }
+
+    private ApplicantIdentity applicantIdentity(UUID applicationId) {
+        Map<String, Object> row = jdbc.queryForMap("""
+            SELECT a.applicant_id, ap.identity_ciphertext, ap.identity_iv, ap.identity_wrapped_dek,
+                   ap.identity_wrapped_dek_iv, ap.identity_key_version
+              FROM applications a JOIN applicants ap ON ap.applicant_id = a.applicant_id
+             WHERE a.application_id = :id
+            """, Map.of("id", applicationId));
+        UUID applicantId = (UUID) row.get("applicant_id");
+        String plaintext = encryption.decrypt(new EncryptedPayload(String.valueOf(row.get("identity_ciphertext")),
+            String.valueOf(row.get("identity_iv")), String.valueOf(row.get("identity_wrapped_dek")),
+            String.valueOf(row.get("identity_wrapped_dek_iv")), String.valueOf(row.get("identity_key_version"))),
+            "prekinder|applicants|" + applicantId + "|application:" + applicationId + "|identity");
+        try { return mapper.readValue(plaintext, ApplicantIdentity.class); }
+        catch (JsonProcessingException exception) { throw new IllegalStateException("Identidad de postulante inválida", exception); }
+    }
+
+    private String schedulePayload(UUID groupId, String reason) {
+        String payload = jdbc.queryForObject("""
+            SELECT jsonb_build_object('groupCode', g.code, 'stage', g.stage, 'roomName', room.name,
+                       'roomCode', room.code, 'startsAt', g.starts_at, 'endsAt', g.ends_at,
+                       'modality', 'Presencial', 'reason', coalesce(:reason, ''))::text
               FROM evaluation_groups g JOIN prekinder_rooms room ON room.room_id = g.room_id
              WHERE g.group_id = :groupId
-            ON CONFLICT (idempotency_key) DO NOTHING
-            """, Map.of("groupId", groupId, "applicationId", applicationId, "template", template));
+            """, new MapSqlParameterSource().addValue("groupId", groupId).addValue("reason", reason), String.class);
+        if (payload == null) throw new IllegalArgumentException("Grupo no encontrado");
+        return payload;
+    }
+
+    private long scheduleVersion(UUID groupId) {
+        Long version = jdbc.queryForObject("SELECT version FROM evaluation_groups WHERE group_id = :id",
+            Map.of("id", groupId), Long.class);
+        return version == null ? 0 : version;
+    }
+
+    private static String normalizeEmail(String value) {
+        if (value == null || value.isBlank()) return null;
+        return value.trim().toLowerCase(Locale.ROOT);
     }
 
     private void enqueueProfessionalScheduleNotification(UUID groupId, UUID evaluatorId, String template) {
@@ -1340,7 +1456,6 @@ public class PrekinderFlowService {
             }
             history(actor.id(), groupId, "MEMBER", memberId, "ASSIGNED", null);
             createReportsForMemberIfNeeded(group, applicationId);
-            enqueueApplicationScheduleNotification(groupId, applicationId, "PREKINDER_GROUP_ASSIGNED");
             touchGroupVersion(groupId);
             return group(groupId);
         });
@@ -1690,6 +1805,8 @@ public class PrekinderFlowService {
                   WHERE group_id = :groupId AND status = 'ASSIGNED'
              ) AND status = 'READY_TO_SCHEDULE'
             """, Map.of("groupId", groupId));
+
+        enqueueFamilyScheduleNotifications(groupId, "PREKINDER_GROUP_ASSIGNED", null);
 
         return group(groupId);
     });
@@ -2488,6 +2605,7 @@ public class PrekinderFlowService {
     public record ApplicantIdentity(String rut, String firstName, String paternalLastName,
                                     String maternalLastName, LocalDate birthDate, String familyEmail,
                                     String fatherEmail, String motherEmail) {}
+    record ParentDelivery(String recipientKind, String status, String errorCode) {}
     public record ApplicationView(UUID applicationId, UUID applicantId, UUID processId, UUID waveId,
                                   String status, String eligibilityCategory, String eligibilityStatus,
                                   long version, long declarationVersion, ApplicantIdentity identity,

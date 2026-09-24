@@ -259,6 +259,12 @@ public class PrekinderFlowController {
         return ok(flow.deleteGroup(groupId, expectedVersion));
     }
 
+    @PutMapping("/groups/{groupId}/cancellation")
+    public Map<String, Object> cancelGroup(@PathVariable UUID groupId,
+        @Valid @RequestBody CancellationCommand command) {
+        return ok(flow.cancelGroup(groupId, command.reason(), command.expectedVersion()));
+    }
+
     @PostMapping("/groups/{groupId}/members/{applicationId}")
     public Map<String, Object> member(@PathVariable UUID groupId, @PathVariable UUID applicationId) {
         return ok(flow.addMember(groupId, applicationId));
@@ -421,6 +427,8 @@ public class PrekinderFlowController {
                                             @Min(1) @Max(12) int requiredEvaluators,
                                             @Size(max = 2000) String reason,
                                             @Min(0) long expectedVersion) {}
+    public record CancellationCommand(@NotBlank @Size(max = 2000) String reason,
+                                      @Min(0) long expectedVersion) {}
     public record UpdateGroupCommand(@NotNull UUID roomId, @NotNull Instant startsAt,
                                      @Min(10) @Max(240) Integer durationMinutes,
                                      @Min(1) @Max(30) int capacity,
