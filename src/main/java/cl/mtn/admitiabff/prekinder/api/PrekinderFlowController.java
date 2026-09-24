@@ -71,7 +71,7 @@ public class PrekinderFlowController {
             command.firstName(), command.paternalLastName(), command.maternalLastName(), command.birthDate(),
             command.familyEmail(), command.fatherEmail(), command.motherEmail(), details(command.applicationDetails()), eligibility,
             command.inclusionStudent()));
-        drafts.delete(command.processId());
+        try { drafts.delete(command.processId()); } catch (Exception ignored) { /* best-effort */ }
         return ok(result);
     }
 

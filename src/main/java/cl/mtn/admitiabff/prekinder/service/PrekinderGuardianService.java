@@ -48,7 +48,7 @@ public class PrekinderGuardianService {
                    EXISTS (SELECT 1 FROM prekinder_complementary_forms cf
                             WHERE cf.family_id = f.family_id AND cf.process_id = a.process_id) AS has_complementary_form,
                    EXISTS (SELECT 1 FROM guardian_application_drafts d
-                            WHERE d.process_id = a.process_id AND d.actor_id = f.guardian_actor_id) AS has_draft
+                            WHERE d.process_id = a.process_id AND d.actor_id = f.external_reference::UUID) AS has_draft
               FROM families f
               JOIN applicants ap ON ap.family_id = f.family_id
               JOIN applications a ON a.applicant_id = ap.applicant_id
