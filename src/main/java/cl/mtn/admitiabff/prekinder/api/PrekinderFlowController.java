@@ -419,7 +419,7 @@ public class PrekinderFlowController {
                                @Min(1) @Max(30) Integer capacity,
                                @Min(1) @Max(12) Integer requiredEvaluators,
                                @Size(max = 30) List<@NotNull UUID> memberIds,
-                               @Size(max = 12) List<@NotNull UUID> evaluatorIds) {}
+                               List<@NotNull UUID> evaluatorIds) {}
     public record RescheduleCommand(@NotNull UUID roomId, @NotNull Instant startsAt,
                                     @Min(10) @Max(240) Integer durationMinutes,
                                     @Size(max = 2000) String reason, @Min(0) long expectedVersion) {}
@@ -434,7 +434,7 @@ public class PrekinderFlowController {
                                      @Min(1) @Max(30) int capacity,
                                      @Min(1) @Max(12) int requiredEvaluators,
                                      @NotNull @Size(min = 1, max = 30) List<@NotNull UUID> memberIds,
-                                     @NotNull @Size(min = 1, max = 12) List<@NotNull UUID> evaluatorIds,
+                                     @NotNull @Size(min = 1) List<@NotNull UUID> evaluatorIds,
                                      @Size(max = 2000) String reason,
                                      @Min(0) long expectedVersion) {}
     public record VersionCommand(@Min(0) long expectedVersion) {}

@@ -925,10 +925,6 @@ public class PrekinderFlowService {
             ? ("GROUP_3".equals(command.stage()) ? defaults.academicGroupSize()
                 : "GROUP_9".equals(command.stage()) ? defaults.psychomotorGroupSize() : 1)
             : command.capacity();
-        int requiredEvaluators = command.requiredEvaluators() == null
-            ? ("GROUP_3".equals(command.stage()) ? defaults.academicRequiredEvaluators()
-                : "GROUP_9".equals(command.stage()) ? defaults.psychomotorRequiredEvaluators() : 1)
-            : command.requiredEvaluators();
 
         if (children.isEmpty()) {
             throw new IllegalArgumentException("Selecciona al menos un postulante para formar el grupo");
@@ -939,8 +935,8 @@ public class PrekinderFlowService {
         if (children.stream().distinct().count() != children.size()) {
             throw new IllegalArgumentException("Un postulante no puede repetirse dentro del grupo");
         }
-        if (evaluators.size() != requiredEvaluators) {
-            throw new IllegalArgumentException("El equipo debe completar la cantidad de evaluadores requeridos");
+        if (evaluators.isEmpty()) {
+            throw new IllegalArgumentException("Selecciona al menos un evaluador para el equipo");
         }
         if (evaluators.stream().distinct().count() != evaluators.size()) {
             throw new IllegalArgumentException("Un evaluador no puede repetirse dentro del equipo");
@@ -974,8 +970,8 @@ public class PrekinderFlowService {
         if (members.isEmpty()) throw new IllegalArgumentException("El grupo debe conservar al menos un postulante");
         if (members.size() > capacity) throw new IllegalArgumentException("Los postulantes superan la capacidad del grupo");
         if (members.stream().distinct().count() != members.size()) throw new IllegalArgumentException("Hay postulantes repetidos");
-        if (evaluators.size() != requiredEvaluators) {
-            throw new IllegalArgumentException("El equipo debe completar la cantidad de evaluadores requeridos");
+        if (evaluators.isEmpty()) {
+            throw new IllegalArgumentException("Selecciona al menos un evaluador para el equipo");
         }
         if (evaluators.stream().distinct().count() != evaluators.size()) throw new IllegalArgumentException("Hay evaluadores repetidos");
 
@@ -1511,9 +1507,6 @@ public class PrekinderFlowService {
             ensureProfessionalProcessRole(group.processId(), evaluatorId, definition, actor.id());
             ensureEvaluatorAvailable(evaluatorId, group.startsAt(), group.endsAt());
             String instrumentCode = definition.instrumentCode();
-            if (group.evaluatorIds().size() >= group.requiredEvaluators()) {
-                throw PrekinderDomainException.conflict("EVALUATOR_CAPACITY", "El grupo ya tiene todos sus evaluadores");
-            }
             UUID assignmentId = UUID.randomUUID();
             try {
                 jdbc.update("""
@@ -1645,10 +1638,10 @@ public class PrekinderFlowService {
             );
         }
 
-        if (current.evaluatorIds().size() != current.requiredEvaluators()) {
+        if (current.evaluatorIds().isEmpty()) {
             throw PrekinderDomainException.conflict(
                 "EVALUATORS_REQUIRED",
-                "Completa el equipo evaluador antes de confirmar"
+                "Agrega al menos un evaluador antes de confirmar"
             );
         }
 
