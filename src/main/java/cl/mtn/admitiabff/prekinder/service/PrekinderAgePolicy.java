@@ -35,7 +35,7 @@ public final class PrekinderAgePolicy {
         LocalDate effectiveDate = referenceDate == null
             ? LocalDate.of(academicYear, 3, 31)
             : referenceDate;
-        validateConfiguredRange(birthDate, effectiveDate, minimumMonths, maximumMonths, false, false);
+        validateConfiguredRange(birthDate, effectiveDate, minimumMonths, maximumMonths);
     }
 
     public static void validate(LocalDate birthDate, LocalDate referenceDate, int academicYear,
