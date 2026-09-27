@@ -35,15 +35,42 @@ public final class PrekinderAgePolicy {
         LocalDate effectiveDate = referenceDate == null
             ? LocalDate.of(academicYear, 3, 31)
             : referenceDate;
-        validateConfiguredRange(birthDate, effectiveDate, minimumMonths, maximumMonths);
+        validateConfiguredRange(birthDate, effectiveDate, minimumMonths, maximumMonths, false, false);
+    }
+
+    public static void validate(LocalDate birthDate, LocalDate referenceDate, int academicYear,
+                                int minimumMonths, int maximumMonths,
+                                boolean inclusionStudent, boolean noMaxAgeForInclusion) {
+        if (birthDate == null) throw new IllegalArgumentException("La fecha de nacimiento es obligatoria");
+        LocalDate effectiveDate = referenceDate == null
+            ? LocalDate.of(academicYear, 3, 31)
+            : referenceDate;
+        boolean skipMaxAge = inclusionStudent && noMaxAgeForInclusion;
+        validateConfiguredRange(birthDate, effectiveDate, minimumMonths, maximumMonths, skipMaxAge, false);
     }
 
     private static void validateConfiguredRange(LocalDate birthDate, LocalDate effectiveDate,
                                                 int minimumMonths, int maximumMonths) {
+        validateConfiguredRange(birthDate, effectiveDate, minimumMonths, maximumMonths, false, false);
+    }
+
+    private static void validateConfiguredRange(LocalDate birthDate, LocalDate effectiveDate,
+                                                int minimumMonths, int maximumMonths,
+                                                boolean skipMaxAge, boolean skipMinAge) {
         long months = ChronoUnit.MONTHS.between(birthDate, effectiveDate);
-        if (birthDate.isAfter(effectiveDate) || months < minimumMonths || months > maximumMonths) {
+        if (birthDate.isAfter(effectiveDate)) {
             throw new PrekinderDomainException("AGE_NOT_ELIGIBLE",
-                "El postulante no cumple la edad configurada para la fecha de referencia",
+                "La fecha de nacimiento no puede ser posterior a la fecha de referencia",
+                HttpStatus.UNPROCESSABLE_ENTITY);
+        }
+        if (!skipMinAge && months < minimumMonths) {
+            throw new PrekinderDomainException("AGE_NOT_ELIGIBLE",
+                "El postulante no cumple la edad mínima requerida (" + minimumMonths + " meses)",
+                HttpStatus.UNPROCESSABLE_ENTITY);
+        }
+        if (!skipMaxAge && months > maximumMonths) {
+            throw new PrekinderDomainException("AGE_NOT_ELIGIBLE",
+                "El postulante excede la edad máxima permitida (" + maximumMonths + " meses)",
                 HttpStatus.UNPROCESSABLE_ENTITY);
         }
     }

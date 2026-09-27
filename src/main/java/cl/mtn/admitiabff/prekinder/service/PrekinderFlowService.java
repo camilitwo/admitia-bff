@@ -136,7 +136,7 @@ public class PrekinderFlowService {
         String rut = PrekinderRut.normalize(command.rut());
         Map<String, Object> agePolicy = jdbc.queryForMap("""
             SELECT config.age_reference_date, config.minimum_age_months, config.maximum_age_months,
-                   process.academic_year
+                   config.no_max_age_for_inclusion, process.academic_year
               FROM prekinder_process_configuration config
               JOIN admission_processes process ON process.process_id = config.process_id
              WHERE config.process_id = :id
@@ -146,7 +146,9 @@ public class PrekinderFlowService {
             agePolicy.get("age_reference_date") == null ? null : ((java.sql.Date) agePolicy.get("age_reference_date")).toLocalDate(),
             academicYear,
             ((Number) agePolicy.get("minimum_age_months")).intValue(),
-            ((Number) agePolicy.get("maximum_age_months")).intValue());
+            ((Number) agePolicy.get("maximum_age_months")).intValue(),
+            Boolean.TRUE.equals(command.inclusionStudent()),
+            ((Boolean) agePolicy.get("no_max_age_for_inclusion")).booleanValue());
         WaveView wave = activeWave(command.processId());
         String category = category(command.eligibility());
         Integer alumniParentYear = extractAlumniParentYear(command.eligibility(), academicYear);

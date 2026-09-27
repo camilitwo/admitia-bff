@@ -76,6 +76,7 @@ public class PrekinderProcessLifecycleService {
                        payment_due_days = :paymentDueDays, inclusion_enabled = :inclusionEnabled,
                        inclusion_documents_required = :inclusionDocumentsRequired,
                        minimum_age_months = :minimumAgeMonths, maximum_age_months = :maximumAgeMonths,
+                       no_max_age_for_inclusion = :noMaxAgeForInclusion,
                        age_reference_date = :ageReferenceDate,
                        applicant_weight = 1.0000, family_weight = 0.0000,
                        total_seats = :totalSeats, male_seats = :maleSeats, female_seats = :femaleSeats,
@@ -108,6 +109,7 @@ public class PrekinderProcessLifecycleService {
                 .addValue("inclusionDocumentsRequired", command.inclusionDocumentsRequired())
                 .addValue("minimumAgeMonths", command.minimumAgeMonths())
                 .addValue("maximumAgeMonths", command.maximumAgeMonths())
+                .addValue("noMaxAgeForInclusion", command.noMaxAgeForInclusion())
                 .addValue("ageReferenceDate", command.ageReferenceDate())
                 .addValue("totalSeats", command.totalSeats())
                 .addValue("maleSeats", command.maleSeats())
@@ -361,7 +363,7 @@ public class PrekinderProcessLifecycleService {
         return jdbc.queryForObject("""
             SELECT process_id, payment_enabled, payment_amount, payment_currency, payment_glosa,
                    payment_due_days, inclusion_enabled, inclusion_documents_required,
-                   minimum_age_months, maximum_age_months, age_reference_date,
+                   minimum_age_months, maximum_age_months, no_max_age_for_inclusion, age_reference_date,
                    applicant_weight, family_weight, configuration_schema_version,
                    total_seats, male_seats, female_seats,
                    incorporation_fee_amount, incorporation_fee_currency, incorporation_fee_glosa,
@@ -377,6 +379,7 @@ public class PrekinderProcessLifecycleService {
                 rs.getString("payment_glosa"), rs.getInt("payment_due_days"),
                 rs.getBoolean("inclusion_enabled"), rs.getBoolean("inclusion_documents_required"),
                 rs.getInt("minimum_age_months"), rs.getInt("maximum_age_months"),
+                rs.getBoolean("no_max_age_for_inclusion"),
                 rs.getObject("age_reference_date", LocalDate.class),
                 rs.getBigDecimal("applicant_weight"), rs.getBigDecimal("family_weight"),
                 rs.getInt("configuration_schema_version"), rs.getInt("total_seats"),
@@ -508,6 +511,7 @@ public class PrekinderProcessLifecycleService {
     public record ConfigurationCommand(boolean paymentEnabled, BigDecimal paymentAmount, String paymentCurrency,
         String paymentGlosa, int paymentDueDays, boolean inclusionEnabled,
         boolean inclusionDocumentsRequired, int minimumAgeMonths, int maximumAgeMonths,
+        boolean noMaxAgeForInclusion,
         LocalDate ageReferenceDate, int totalSeats, int maleSeats, int femaleSeats,
         BigDecimal incorporationFeeAmount, String incorporationFeeCurrency, String incorporationFeeGlosa,
         List<String> requiredDocuments, String scheduleTimezone, LocalTime scheduleDayStart,
@@ -519,6 +523,7 @@ public class PrekinderProcessLifecycleService {
     public record ProcessConfiguration(UUID processId, boolean paymentEnabled, BigDecimal paymentAmount,
         String paymentCurrency, String paymentGlosa, int paymentDueDays, boolean inclusionEnabled,
         boolean inclusionDocumentsRequired, int minimumAgeMonths, int maximumAgeMonths,
+        boolean noMaxAgeForInclusion,
         LocalDate ageReferenceDate, BigDecimal applicantWeight, BigDecimal familyWeight,
         int schemaVersion, int totalSeats, int maleSeats, int femaleSeats,
         BigDecimal incorporationFeeAmount, String incorporationFeeCurrency, String incorporationFeeGlosa,
