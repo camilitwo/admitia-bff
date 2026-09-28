@@ -86,20 +86,24 @@ class ApplicationReminderRepositoryIntegrationTest {
             """, Map.of());
         for (long id = 10; id <= 14; id++) {
             jdbc.update("""
+                INSERT INTO families(id)
+                VALUES (:id)
+                """, Map.of("id", id));
+            jdbc.update("""
                 INSERT INTO students(id, first_name, paternal_last_name, grade_applied)
                 VALUES (:id, 'Ana', 'Pérez', '1° Básico')
                 """, Map.of("id", id));
             String status = id == 14 ? "REJECTED" : "PENDING";
             String payment = id == 11 || id == 13 ? "PAID" : "UNPAID";
             jdbc.update("""
-                INSERT INTO applications(id, student_id, applicant_user_id, status, academic_year,
+                INSERT INTO applications(id, student_id, applicant_user_id, family_id, status, academic_year,
                     payment_required, payment_status)
-                VALUES (:id, :id, 100, :status, 2027, TRUE, :payment)
+                VALUES (:id, :id, 100, :id, :status, 2027, TRUE, :payment)
                 """, Map.of("id", id, "status", status, "payment", payment));
         }
         jdbc.update("""
-            INSERT INTO complementary_forms(application_id, form_data, is_submitted)
-            VALUES (13, '{}'::jsonb, TRUE)
+            INSERT INTO complementary_forms(application_id, family_id, process_key, form_data, is_submitted)
+            VALUES (13, 13, 'GENERAL:2027', '{}'::jsonb, TRUE)
             """, Map.of());
         jdbc.update("""
             INSERT INTO payments(application_id, guardian_user_id, provider, idempotency_key,
