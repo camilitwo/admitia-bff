@@ -2,13 +2,16 @@ name: CI
 
 on:
   pull_request:
-    branches: [develop, main]
+    branches: [develop, release, main]
   push:
-    branches: [develop, main]
+    branches: [develop, release, main]
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
+
+permissions:
+  contents: read
 
 jobs:
   compilar:
@@ -61,3 +64,37 @@ jobs:
           cache: maven
       - name: Ejecutar tests
         run: mvn -B test
+
+  notificar-fallo:
+    name: Notificar fallo al autor
+    runs-on: ubuntu-latest
+    needs: [compilar, empaquetar]
+    if: failure() && github.event_name == 'pull_request'
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: write
+    steps:
+      - name: Comentar en el PR el motivo del fallo
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const pr = context.payload.pull_request;
+            const jobs = await github.paginate(github.rest.actions.listJobsForWorkflowRun, {
+              owner, repo, run_id: context.runId, per_page: 100
+            });
+            const fallidos = jobs.filter(j => j.conclusion === 'failure').map(j => {
+              const pasos = (j.steps || []).filter(s => s.conclusion === 'failure').map(s => s.name).join(', ');
+              return '- ' + j.name + (pasos ? ' (paso que fallo: ' + pasos + ')' : '') + ' -> ' + j.html_url;
+            });
+            const cuerpo = [
+              '**El CI no paso. Este PR NO se puede mergear todavia.**',
+              '',
+              '@' + pr.user.login + ', tu codigo no puede entrar a ' + pr.base.ref + ' hasta que estas verificaciones pasen:',
+              '',
+              fallidos.join('\n') || '- Revisa la pestana Checks; no se pudo leer el detalle de los jobs.',
+              '',
+              'Corrige y sube los cambios: los checks se vuelven a ejecutar solos.'
+            ].join('\n');
+            await github.rest.issues.createComment({ owner, repo, issue_number: pr.number, body: cuerpo });
