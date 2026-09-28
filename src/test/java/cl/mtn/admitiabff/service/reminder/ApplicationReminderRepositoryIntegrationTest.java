@@ -5,6 +5,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.zaxxer.hikari.HikariDataSource;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
 import java.util.Map;
 import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.AfterAll;
@@ -70,7 +72,7 @@ class ApplicationReminderRepositoryIntegrationTest {
         Integer count = jdbc.queryForObject("""
             SELECT COUNT(*) FROM application_reminder_deliveries
              WHERE application_id = :id AND scheduled_slot = :slot
-            """, Map.of("id", 10L, "slot", slot), Integer.class);
+            """, Map.of("id", 10L, "slot", OffsetDateTime.ofInstant(slot, ZoneOffset.UTC)), Integer.class);
         assertThat(count).isEqualTo(1);
 
         var claimed = repository.claimNext(date, 6, 10).orElseThrow();
@@ -85,6 +87,15 @@ class ApplicationReminderRepositoryIntegrationTest {
             VALUES (100, 'Camila', 'Pérez', 'familia@example.cl', 'x', 'GUARDIAN')
             """, Map.of());
         for (long id = 10; id <= 14; id++) {
+            long familyId = 200 + id;
+            jdbc.update("""
+                INSERT INTO families(id)
+                VALUES (:familyId)
+                """, Map.of("familyId", familyId));
+            jdbc.update("""
+                INSERT INTO family_members(family_id, user_id)
+                VALUES (:familyId, 100)
+                """, Map.of("familyId", familyId));
             jdbc.update("""
                 INSERT INTO students(id, first_name, paternal_last_name, grade_applied)
                 VALUES (:id, 'Ana', 'Pérez', '1° Básico')
@@ -92,14 +103,14 @@ class ApplicationReminderRepositoryIntegrationTest {
             String status = id == 14 ? "REJECTED" : "PENDING";
             String payment = id == 11 || id == 13 ? "PAID" : "UNPAID";
             jdbc.update("""
-                INSERT INTO applications(id, student_id, applicant_user_id, status, academic_year,
+                INSERT INTO applications(id, student_id, applicant_user_id, family_id, status, academic_year,
                     payment_required, payment_status)
-                VALUES (:id, :id, 100, :status, 2027, TRUE, :payment)
-                """, Map.of("id", id, "status", status, "payment", payment));
+                VALUES (:id, :id, 100, :familyId, :status, 2027, TRUE, :payment)
+                """, Map.of("id", id, "familyId", familyId, "status", status, "payment", payment));
         }
         jdbc.update("""
-            INSERT INTO complementary_forms(application_id, form_data, is_submitted)
-            VALUES (13, '{}'::jsonb, TRUE)
+            INSERT INTO complementary_forms(application_id, family_id, process_key, form_data, is_submitted)
+            VALUES (13, 213, 'GENERAL:2027', '{}'::jsonb, TRUE)
             """, Map.of());
         jdbc.update("""
             INSERT INTO payments(application_id, guardian_user_id, provider, idempotency_key,
