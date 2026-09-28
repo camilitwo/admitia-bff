@@ -5,6 +5,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.zaxxer.hikari.HikariDataSource;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
 import java.util.Map;
 import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.AfterAll;
@@ -69,8 +71,8 @@ class ApplicationReminderRepositoryIntegrationTest {
 
         Integer count = jdbc.queryForObject("""
             SELECT COUNT(*) FROM application_reminder_deliveries
-             WHERE application_id = :id AND scheduled_slot = :slot
-            """, Map.of("id", 10L, "slot", slot), Integer.class);
+             WHERE application_id = :id AND reminder_type = :reminderType AND scheduled_slot = :slot
+            """, Map.of("id", 10L, "reminderType", "PAYMENT_REMINDER", "slot", OffsetDateTime.ofInstant(slot, ZoneOffset.UTC)), Integer.class);
         assertThat(count).isEqualTo(1);
 
         var claimed = repository.claimNext(date, 6, 10).orElseThrow();
