@@ -188,10 +188,22 @@ class DashboardServiceTest {
         directorReport.setRecommendations("Informe individual del director\n\nDecisión Final: Aceptado");
         directorReport.setObservations("Antecedentes registrados por el director");
         directorReport.setAreasForImprovement("Reforzar autonomía");
+        directorReport.setInterviewData("director-json");
         directorReport.setEvaluator(evaluator);
 
         when(applicationRepository.findAll()).thenReturn(List.of(app));
         when(evaluationRepository.findByApplicationIdOrderByCreatedAtDesc(23L)).thenReturn(List.of(jointInterview, directorReport));
+        when(jsonSupport.readMap("director-json")).thenReturn(Map.of(
+            "formType", "CYCLE_DIRECTOR_REPORT",
+            "strengths", "Sociable y deportista",
+            "difficulties", "Reforzar modulación",
+            "interviewAdaptation", "Buena adecuación",
+            "outstandingTraits", "Discurso resuelto",
+            "familyBackground", "Sin antecedentes adicionales",
+            "academicBackground", "Cursó prekínder en el colegio",
+            "finalDecision", "Aceptado",
+            "entryCourse", "IIº medio"
+        ));
 
         Map<String, Object> result = dashboardService.finalSummary(2027);
 
@@ -200,8 +212,13 @@ class DashboardServiceTest {
         @SuppressWarnings("unchecked")
         Map<String, Object> cycleDirector = (Map<String, Object>) data.get(0).get("cycleDirector");
         assertEquals("Aceptado", cycleDirector.get("recommendation"));
-        assertEquals("Antecedentes registrados por el director", cycleDirector.get("observations"));
-        assertEquals("Reforzar autonomía", cycleDirector.get("areasForImprovement"));
+        assertEquals("Sociable y deportista", cycleDirector.get("strengths"));
+        assertEquals("Reforzar modulación", cycleDirector.get("difficulties"));
+        assertEquals("Buena adecuación", cycleDirector.get("interviewAdaptation"));
+        assertEquals("Discurso resuelto", cycleDirector.get("outstandingTraits"));
+        assertEquals("Sin antecedentes adicionales", cycleDirector.get("familyBackground"));
+        assertEquals("Cursó prekínder en el colegio", cycleDirector.get("academicBackground"));
+        assertEquals("IIº medio", cycleDirector.get("entryCourse"));
         assertEquals("María Soto", cycleDirector.get("evaluator"));
         assertEquals(true, cycleDirector.get("completed"));
     }

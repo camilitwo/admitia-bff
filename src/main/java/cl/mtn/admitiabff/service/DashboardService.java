@@ -866,13 +866,51 @@ public class DashboardService {
             .findFirst().orElse(null);
 
         Map<String, Object> result = new LinkedHashMap<>();
-        result.put("recommendation", report == null ? null : cycleDirectorDecisionText(report));
-        result.put("observations", report == null ? null : report.getObservations());
-        result.put("areasForImprovement", report == null ? null : report.getAreasForImprovement());
+        Map<String, Object> structured = cycleDirectorReportData(report);
+        String observations = report == null ? null : report.getObservations();
+        result.put("strengths", firstReportValue(structured, "strengths", report == null ? null : report.getStrengths()));
+        result.put("difficulties", firstReportValue(structured, "difficulties", report == null ? null : report.getAreasForImprovement()));
+        result.put("interviewAdaptation", firstReportValue(structured, "interviewAdaptation", extractReportLine(observations, "Adaptación a entrevista")));
+        result.put("outstandingTraits", firstReportValue(structured, "outstandingTraits", extractReportLine(observations, "Rasgos sobresalientes")));
+        result.put("familyBackground", firstReportValue(structured, "familyBackground", extractReportLine(observations, "Antecedentes familiares")));
+        result.put("academicBackground", firstReportValue(structured, "academicBackground", extractAcademicBackground(observations)));
+        result.put("recommendation", firstReportValue(structured, "finalDecision", report == null ? null : cycleDirectorDecisionText(report)));
+        result.put("entryCourse", firstReportValue(structured, "entryCourse", report == null ? null : extractReportLine(report.getRecommendations(), "Curso de Ingreso")));
         result.put("evaluator", report == null ? null : evaluatorName(report));
         result.put("date", report == null ? null : report.getEvaluationDate());
         result.put("completed", report != null && report.getStatus() == EvaluationStatus.COMPLETED);
         return result;
+    }
+
+    private Map<String, Object> cycleDirectorReportData(EvaluationEntity report) {
+        if (report == null || report.getInterviewData() == null || report.getInterviewData().isBlank()) return Map.of();
+        try {
+            Map<String, Object> data = jsonSupport.readMap(report.getInterviewData());
+            return "CYCLE_DIRECTOR_REPORT".equals(data.get("formType")) ? data : Map.of();
+        } catch (Exception ignored) {
+            return Map.of();
+        }
+    }
+
+    private String firstReportValue(Map<String, Object> structured, String key, String fallback) {
+        Object value = structured.get(key);
+        if (value instanceof String text && !text.isBlank()) return text.trim();
+        return fallback == null || fallback.isBlank() ? null : fallback.trim();
+    }
+
+    private String extractReportLine(String text, String label) {
+        if (text == null || text.isBlank()) return null;
+        java.util.regex.Matcher matcher = java.util.regex.Pattern
+            .compile("(?im)^" + java.util.regex.Pattern.quote(label) + ":\\s*(.+)$")
+            .matcher(text);
+        return matcher.find() ? matcher.group(1).trim() : null;
+    }
+
+    private String extractAcademicBackground(String observations) {
+        if (observations == null || observations.isBlank()) return null;
+        int marker = observations.indexOf("\n\nAdaptación a entrevista:");
+        String value = marker >= 0 ? observations.substring(0, marker) : observations;
+        return value.isBlank() ? null : value.trim();
     }
 
     private String cycleDirectorDecisionText(EvaluationEntity evaluation) {
