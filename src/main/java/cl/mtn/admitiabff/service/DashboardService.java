@@ -23,6 +23,7 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -268,6 +269,140 @@ public class DashboardService {
         result.put("data", rows);
         result.put("meta", meta);
         return result;
+    }
+
+    public Map<String, Object> finalSummary(Integer academicYear) {
+        int year = academicYear == null ? LocalDate.now().getYear() + 1 : academicYear;
+        List<ApplicationEntity> apps = applicationRepository.findAll().stream()
+            .filter(app -> app.getDeletedAt() == null && !app.isArchived())
+            .filter(app -> app.getAcademicYear() != null && year == app.getAcademicYear())
+            .toList();
+
+        Map<Long, List<ApplicationEntity>> familyApplications = apps.stream()
+            .collect(Collectors.groupingBy(this::familyGroupKey));
+        Map<Long, Map<String, Object>> familyEvaluations = new HashMap<>();
+        familyApplications.forEach((familyKey, members) ->
+            familyEvaluations.put(familyKey, finalFamilyEvaluation(members)));
+
+        List<Map<String, Object>> rows = apps.stream().map(app -> {
+            StudentEntity student = app.getStudent();
+            Long familyKey = familyGroupKey(app);
+            List<ApplicationEntity> siblings = familyApplications.getOrDefault(familyKey, List.of());
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("applicationId", app.getId());
+            row.put("studentId", student.getId());
+            row.put("studentName", fullStudentName(student));
+            row.put("gradeApplied", student.getGradeApplied());
+            row.put("familyGroupId", app.getFamily() == null ? null : app.getFamily().getId());
+            row.put("siblingGroupSize", siblings.size());
+            row.put("siblingNames", siblings.stream()
+                .filter(member -> !member.getId().equals(app.getId()))
+                .map(member -> fullStudentName(member.getStudent()))
+                .toList());
+            row.put("familyEvaluation", familyEvaluations.get(familyKey));
+            row.put("exams", finalExamScores(app.getId()));
+            row.put("cycleDirectorDecision", cycleDirectorDecision(app.getId()));
+            row.put("status", app.getStatus().name());
+            row.put("statusLabel", statusLabel(app.getStatus().name()));
+            return row;
+        }).sorted(Comparator
+            .comparingInt((Map<String, Object> row) -> gradeOrder((String) row.get("gradeApplied")))
+            .thenComparing(row -> (String) row.get("studentName"), String.CASE_INSENSITIVE_ORDER))
+            .toList();
+
+        long siblingFamilies = familyApplications.values().stream().filter(group -> group.size() > 1).count();
+        Map<String, Object> meta = new LinkedHashMap<>();
+        meta.put("academicYear", year);
+        meta.put("total", rows.size());
+        meta.put("siblingFamilies", siblingFamilies);
+        return Map.of("success", true, "data", rows, "meta", meta);
+    }
+
+    @Transactional
+    public Map<String, Object> updateFinalDecision(Long applicationId, Map<String, Object> payload) {
+        Object rawDecision = payload == null ? null : payload.get("decision");
+        if (rawDecision == null || rawDecision.toString().isBlank()) {
+            throw new IllegalArgumentException("Se requiere decision (APPROVED, WAITLIST o REJECTED)");
+        }
+        ApplicationStatus decision;
+        try {
+            decision = ApplicationStatus.valueOf(rawDecision.toString().trim().toUpperCase());
+        } catch (IllegalArgumentException exception) {
+            throw new IllegalArgumentException("decision debe ser APPROVED, WAITLIST o REJECTED");
+        }
+        if (!Set.of(ApplicationStatus.APPROVED, ApplicationStatus.WAITLIST, ApplicationStatus.REJECTED).contains(decision)) {
+            throw new IllegalArgumentException("decision debe ser APPROVED, WAITLIST o REJECTED");
+        }
+        ApplicationEntity application = applicationRepository.findActiveByIdForUpdate(applicationId)
+            .orElseThrow(() -> new IllegalArgumentException("Postulación no encontrada"));
+        if (application.isArchived()) throw new IllegalArgumentException("La postulación está archivada");
+        application.setStatus(decision);
+        ApplicationEntity saved = applicationRepository.save(application);
+        return Map.of(
+            "success", true,
+            "message", "Decisión final actualizada sin notificar a la familia",
+            "data", Map.of("applicationId", saved.getId(), "status", saved.getStatus().name(), "statusLabel", statusLabel(saved.getStatus().name()))
+        );
+    }
+
+    private Long familyGroupKey(ApplicationEntity application) {
+        return application.getFamily() == null ? -application.getId() : application.getFamily().getId();
+    }
+
+    private Map<String, Object> finalFamilyEvaluation(List<ApplicationEntity> applications) {
+        EvaluationEntity evaluation = applications.stream()
+            .flatMap(application -> evaluationRepository.findByApplicationIdOrderByCreatedAtDesc(application.getId()).stream())
+            .filter(item -> "FAMILY_INTERVIEW".equals(item.getEvaluationType()))
+            .filter(item -> item.getStatus() == EvaluationStatus.COMPLETED)
+            .max(Comparator.comparing(this::evaluationTimestamp, Comparator.nullsFirst(Comparator.naturalOrder())))
+            .orElse(null);
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("percentage", null);
+        result.put("score40", null);
+        result.put("score11", null);
+        result.put("rating", null);
+        result.put("justification", null);
+        result.put("evaluationId", null);
+        if (evaluation == null || evaluation.getInterviewData() == null || evaluation.getInterviewData().isBlank()) return result;
+        try {
+            Map<String, Object> data = jsonSupport.readMap(evaluation.getInterviewData());
+            FamilyInterviewComponents components = extractFamilyInterviewComponents(data);
+            result.put("percentage", calculateFamilyInterviewPercentage(evaluation));
+            result.put("score40", components.sections());
+            result.put("score11", components.checklist().add(components.opinion()));
+            result.put("rating", components.opinion());
+            result.put("justification", extractJustification(List.of(evaluation)));
+            result.put("evaluationId", evaluation.getId());
+        } catch (Exception ignored) {
+            // Keep explicit nulls when a legacy interview cannot be parsed.
+        }
+        return result;
+    }
+
+    private LocalDateTime evaluationTimestamp(EvaluationEntity evaluation) {
+        if (evaluation.getCompletedAt() != null) return evaluation.getCompletedAt();
+        if (evaluation.getEvaluationDate() != null) return evaluation.getEvaluationDate();
+        return evaluation.getCreatedAt();
+    }
+
+    private Map<String, Object> finalExamScores(Long applicationId) {
+        Map<String, Object> scores = new LinkedHashMap<>();
+        scores.put("language", null);
+        scores.put("mathematics", null);
+        scores.put("english", null);
+        evaluationRepository.findByApplicationIdOrderByCreatedAtDesc(applicationId).stream()
+            .filter(item -> item.getStatus() == EvaluationStatus.COMPLETED)
+            .filter(item -> item.getScore() != null)
+            .forEach(item -> {
+                BigDecimal percentage = examPercentage(item.getScore(), item.getMaxScore());
+                switch (item.getEvaluationType()) {
+                    case "LANGUAGE_EXAM" -> scores.put("language", percentage);
+                    case "MATHEMATICS_EXAM" -> scores.put("mathematics", percentage);
+                    case "ENGLISH_EXAM" -> scores.put("english", percentage);
+                    default -> { }
+                }
+            });
+        return scores;
     }
 
     public Map<String, Object> applicantCard(Long applicationId) {

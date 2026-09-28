@@ -3,6 +3,8 @@ package cl.mtn.admitiabff.controller;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
@@ -37,10 +39,19 @@ class DashboardControllerSecurityTest {
 
     @Test
     void applicantCardRejectsAuthenticatedNonAdminUsers() {
-        authenticateAs("ROLE_COORDINATOR");
+        authenticateAs("ROLE_TEACHER");
 
         assertThrows(AccessDeniedException.class, () -> controller.applicantCard(7L));
         verifyNoInteractions(dashboardService);
+    }
+
+    @Test
+    void applicantCardAllowsCoordinatorUsers() {
+        authenticateAs("ROLE_COORDINATOR");
+        Map<String, Object> expected = Map.of("success", true);
+        when(dashboardService.applicantCard(7L)).thenReturn(expected);
+
+        assertSame(expected, controller.applicantCard(7L));
     }
 
     @Test
@@ -50,6 +61,24 @@ class DashboardControllerSecurityTest {
         when(dashboardService.applicantCard(7L)).thenReturn(expected);
 
         assertSame(expected, controller.applicantCard(7L));
+    }
+
+    @Test
+    void finalSummaryAllowsCoordinatorUsers() {
+        authenticateAs("ROLE_COORDINATOR");
+        Map<String, Object> expected = Map.of("success", true);
+        when(dashboardService.finalSummary(2027)).thenReturn(expected);
+
+        assertSame(expected, controller.finalSummary(2027));
+    }
+
+    @Test
+    void finalDecisionRejectsUsersWithoutAdministrativeRole() {
+        authenticateAs("ROLE_TEACHER");
+
+        assertThrows(AccessDeniedException.class,
+            () -> controller.updateFinalDecision(7L, Map.of("decision", "APPROVED")));
+        verify(dashboardService, never()).updateFinalDecision(7L, Map.of("decision", "APPROVED"));
     }
 
     private void authenticateAs(String authority) {

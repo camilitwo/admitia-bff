@@ -4,10 +4,13 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import cl.mtn.admitiabff.domain.application.ApplicationEntity;
 import cl.mtn.admitiabff.domain.application.ComplementaryFormEntity;
+import cl.mtn.admitiabff.domain.application.FamilyEntity;
 import cl.mtn.admitiabff.domain.common.ApplicationStatus;
 import cl.mtn.admitiabff.domain.common.EvaluationStatus;
 import cl.mtn.admitiabff.domain.common.DocumentType;
@@ -25,6 +28,7 @@ import cl.mtn.admitiabff.repository.InterviewerScheduleRepository;
 import cl.mtn.admitiabff.repository.NotificationRepository;
 import cl.mtn.admitiabff.repository.UserRepository;
 import cl.mtn.admitiabff.util.JsonSupport;
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
@@ -112,6 +116,70 @@ class DashboardServiceTest {
         @SuppressWarnings("unchecked")
         Map<String, Object> meta = (Map<String, Object>) result.get("meta");
         assertEquals(expectedYear, meta.get("academicYear"));
+    }
+
+    @Test
+    @DisplayName("finalSummary shares the latest family interview between siblings")
+    void testFinalSummaryGroupsSiblingsAndFamilyInterview() {
+        FamilyEntity family = new FamilyEntity();
+        family.setId(44L);
+        ApplicationEntity first = application(21L);
+        first.setFamily(family);
+        first.setAcademicYear(2027);
+        first.getStudent().setFirstName("Ana");
+        ApplicationEntity second = application(22L);
+        second.setFamily(family);
+        second.setAcademicYear(2027);
+        second.getStudent().setFirstName("Luis");
+
+        EvaluationEntity interview = new EvaluationEntity();
+        interview.setId(300L);
+        interview.setEvaluationType("FAMILY_INTERVIEW");
+        interview.setStatus(EvaluationStatus.COMPLETED);
+        interview.setCompletedAt(LocalDateTime.of(2026, 8, 10, 12, 0));
+        interview.setInterviewData("family-json");
+
+        when(applicationRepository.findAll()).thenReturn(List.of(first, second));
+        when(evaluationRepository.findByApplicationIdOrderByCreatedAtDesc(21L)).thenReturn(List.of(interview));
+        when(evaluationRepository.findByApplicationIdOrderByCreatedAtDesc(22L)).thenReturn(List.of());
+        when(jsonSupport.readMap("family-json")).thenReturn(Map.of(
+            "section1", Map.of("q1", Map.of("score", 3), "q2", Map.of("score", 2)),
+            "section2", Map.of("q1", Map.of("score", 2)),
+            "observations", Map.of(
+                "checklist", Map.of("a", true, "b", false),
+                "overallOpinion", Map.of("score", 4),
+                "justification", "Familia alineada con el proyecto"
+            )
+        ));
+
+        Map<String, Object> result = dashboardService.finalSummary(2027);
+
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> data = (List<Map<String, Object>>) result.get("data");
+        assertEquals(2, data.size());
+        assertEquals(2, data.get(0).get("siblingGroupSize"));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> familyEvaluation = (Map<String, Object>) data.get(0).get("familyEvaluation");
+        assertEquals(new BigDecimal("7.0"), familyEvaluation.get("score40"));
+        assertEquals(new BigDecimal("5.0"), familyEvaluation.get("score11"));
+        assertEquals(new BigDecimal("4.0"), familyEvaluation.get("rating"));
+        assertEquals("Familia alineada con el proyecto", familyEvaluation.get("justification"));
+    }
+
+    @Test
+    @DisplayName("updateFinalDecision changes status without touching notes or notifications")
+    void testUpdateFinalDecisionDoesNotNotify() {
+        ApplicationEntity app = application(30L);
+        app.setNotes("Nota existente");
+        when(applicationRepository.findActiveByIdForUpdate(30L)).thenReturn(Optional.of(app));
+        when(applicationRepository.save(app)).thenReturn(app);
+
+        Map<String, Object> result = dashboardService.updateFinalDecision(30L, Map.of("decision", "APPROVED"));
+
+        assertEquals(ApplicationStatus.APPROVED, app.getStatus());
+        assertEquals("Nota existente", app.getNotes());
+        assertTrue((Boolean) result.get("success"));
+        verify(notificationRepository, never()).save(any());
     }
 
     @Test
