@@ -167,6 +167,41 @@ class DashboardServiceTest {
     }
 
     @Test
+    @DisplayName("finalSummary exposes the complete cycle director recommendation")
+    void testFinalSummaryCycleDirectorRecommendation() {
+        ApplicationEntity app = application(23L);
+        app.setAcademicYear(2027);
+
+        UserEntity evaluator = new UserEntity();
+        evaluator.setFirstName("María");
+        evaluator.setLastName("Soto");
+
+        EvaluationEntity interview = new EvaluationEntity();
+        interview.setEvaluationType("CYCLE_DIRECTOR_INTERVIEW");
+        interview.setStatus(EvaluationStatus.COMPLETED);
+        interview.setEvaluationDate(LocalDateTime.of(2026, 7, 8, 10, 30));
+        interview.setRecommendations("Recomendamos acompañamiento durante el primer semestre");
+        interview.setObservations("Buena adaptación durante la entrevista");
+        interview.setAreasForImprovement("Reforzar autonomía");
+        interview.setEvaluator(evaluator);
+
+        when(applicationRepository.findAll()).thenReturn(List.of(app));
+        when(evaluationRepository.findByApplicationIdOrderByCreatedAtDesc(23L)).thenReturn(List.of(interview));
+
+        Map<String, Object> result = dashboardService.finalSummary(2027);
+
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> data = (List<Map<String, Object>>) result.get("data");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> cycleDirector = (Map<String, Object>) data.get(0).get("cycleDirector");
+        assertEquals("Recomendamos acompañamiento durante el primer semestre", cycleDirector.get("recommendation"));
+        assertEquals("Buena adaptación durante la entrevista", cycleDirector.get("observations"));
+        assertEquals("Reforzar autonomía", cycleDirector.get("areasForImprovement"));
+        assertEquals("María Soto", cycleDirector.get("evaluator"));
+        assertEquals(true, cycleDirector.get("completed"));
+    }
+
+    @Test
     @DisplayName("updateFinalDecision changes status without touching notes or notifications")
     void testUpdateFinalDecisionDoesNotNotify() {
         ApplicationEntity app = application(30L);
