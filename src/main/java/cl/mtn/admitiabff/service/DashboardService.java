@@ -854,42 +854,25 @@ public class DashboardService {
 
     private String cycleDirectorDecision(Long applicationId) {
         return evaluationRepository.findByApplicationIdOrderByCreatedAtDesc(applicationId).stream()
-            .filter(item -> Set.of("CYCLE_DIRECTOR_INTERVIEW", "CYCLE_DIRECTOR_REPORT").contains(item.getEvaluationType()))
+            .filter(item -> "CYCLE_DIRECTOR_REPORT".equals(item.getEvaluationType()))
             .findFirst()
             .map(this::cycleDirectorDecisionText)
             .orElse("Pendiente");
     }
 
     private Map<String, Object> finalCycleDirectorEvaluation(Long applicationId) {
-        List<EvaluationEntity> evaluations = evaluationRepository.findByApplicationIdOrderByCreatedAtDesc(applicationId);
-        EvaluationEntity interview = evaluations.stream()
-            .filter(item -> "CYCLE_DIRECTOR_INTERVIEW".equals(item.getEvaluationType()))
-            .findFirst().orElse(null);
-        EvaluationEntity report = evaluations.stream()
+        EvaluationEntity report = evaluationRepository.findByApplicationIdOrderByCreatedAtDesc(applicationId).stream()
             .filter(item -> "CYCLE_DIRECTOR_REPORT".equals(item.getEvaluationType()))
             .findFirst().orElse(null);
-        EvaluationEntity primary = interview != null ? interview : report;
 
         Map<String, Object> result = new LinkedHashMap<>();
-        result.put("recommendation", firstAvailable(
-            interview == null ? null : interview.getRecommendations(),
-            report == null ? null : report.getRecommendations()));
-        result.put("observations", firstAvailable(
-            interview == null ? null : interview.getObservations(),
-            report == null ? null : report.getObservations()));
-        result.put("areasForImprovement", firstAvailable(
-            interview == null ? null : interview.getAreasForImprovement(),
-            report == null ? null : report.getAreasForImprovement()));
-        result.put("evaluator", primary == null ? null : evaluatorName(primary));
-        result.put("date", primary == null ? null : primary.getEvaluationDate());
-        result.put("completed", primary != null && primary.getStatus() == EvaluationStatus.COMPLETED);
+        result.put("recommendation", report == null ? null : cycleDirectorDecisionText(report));
+        result.put("observations", report == null ? null : report.getObservations());
+        result.put("areasForImprovement", report == null ? null : report.getAreasForImprovement());
+        result.put("evaluator", report == null ? null : evaluatorName(report));
+        result.put("date", report == null ? null : report.getEvaluationDate());
+        result.put("completed", report != null && report.getStatus() == EvaluationStatus.COMPLETED);
         return result;
-    }
-
-    private String firstAvailable(String preferred, String fallback) {
-        if (preferred != null && !preferred.isBlank()) return preferred;
-        if (fallback != null && !fallback.isBlank()) return fallback;
-        return null;
     }
 
     private String cycleDirectorDecisionText(EvaluationEntity evaluation) {

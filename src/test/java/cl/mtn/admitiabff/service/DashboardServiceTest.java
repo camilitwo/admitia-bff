@@ -176,17 +176,22 @@ class DashboardServiceTest {
         evaluator.setFirstName("María");
         evaluator.setLastName("Soto");
 
-        EvaluationEntity interview = new EvaluationEntity();
-        interview.setEvaluationType("CYCLE_DIRECTOR_INTERVIEW");
-        interview.setStatus(EvaluationStatus.COMPLETED);
-        interview.setEvaluationDate(LocalDateTime.of(2026, 7, 8, 10, 30));
-        interview.setRecommendations("Recomendamos acompañamiento durante el primer semestre");
-        interview.setObservations("Buena adaptación durante la entrevista");
-        interview.setAreasForImprovement("Reforzar autonomía");
-        interview.setEvaluator(evaluator);
+        EvaluationEntity jointInterview = new EvaluationEntity();
+        jointInterview.setEvaluationType("CYCLE_DIRECTOR_INTERVIEW");
+        jointInterview.setStatus(EvaluationStatus.COMPLETED);
+        jointInterview.setRecommendations("Informe conjunto con psicólogo");
+
+        EvaluationEntity directorReport = new EvaluationEntity();
+        directorReport.setEvaluationType("CYCLE_DIRECTOR_REPORT");
+        directorReport.setStatus(EvaluationStatus.COMPLETED);
+        directorReport.setEvaluationDate(LocalDateTime.of(2026, 7, 8, 10, 30));
+        directorReport.setRecommendations("Informe individual del director\n\nDecisión Final: Aceptado");
+        directorReport.setObservations("Antecedentes registrados por el director");
+        directorReport.setAreasForImprovement("Reforzar autonomía");
+        directorReport.setEvaluator(evaluator);
 
         when(applicationRepository.findAll()).thenReturn(List.of(app));
-        when(evaluationRepository.findByApplicationIdOrderByCreatedAtDesc(23L)).thenReturn(List.of(interview));
+        when(evaluationRepository.findByApplicationIdOrderByCreatedAtDesc(23L)).thenReturn(List.of(jointInterview, directorReport));
 
         Map<String, Object> result = dashboardService.finalSummary(2027);
 
@@ -194,8 +199,8 @@ class DashboardServiceTest {
         List<Map<String, Object>> data = (List<Map<String, Object>>) result.get("data");
         @SuppressWarnings("unchecked")
         Map<String, Object> cycleDirector = (Map<String, Object>) data.get(0).get("cycleDirector");
-        assertEquals("Recomendamos acompañamiento durante el primer semestre", cycleDirector.get("recommendation"));
-        assertEquals("Buena adaptación durante la entrevista", cycleDirector.get("observations"));
+        assertEquals("Aceptado", cycleDirector.get("recommendation"));
+        assertEquals("Antecedentes registrados por el director", cycleDirector.get("observations"));
         assertEquals("Reforzar autonomía", cycleDirector.get("areasForImprovement"));
         assertEquals("María Soto", cycleDirector.get("evaluator"));
         assertEquals(true, cycleDirector.get("completed"));
