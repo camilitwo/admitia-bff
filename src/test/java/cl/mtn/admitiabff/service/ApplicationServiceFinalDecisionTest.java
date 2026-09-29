@@ -195,6 +195,28 @@ class ApplicationServiceFinalDecisionTest {
     }
 
     @Test
+    void rejectedDecisionIsPresentedAsNoAceptadoInResponseAndEmail() {
+        when(emailComposerService.send(any(EmailRequestDTO.class))).thenReturn(Map.of(
+                "success", true,
+                "data", Map.of("status", "SENT")));
+
+        Map<String, Object> response = service.recordFinalDecision(
+                30L,
+                Map.of("decision", "REJECTED"));
+
+        assertEquals(ApplicationStatus.REJECTED, application.getStatus());
+        assertEquals("Postulación no aceptada", response.get("message"));
+
+        ArgumentCaptor<EmailRequestDTO> request = ArgumentCaptor.forClass(EmailRequestDTO.class);
+        verify(emailComposerService).send(request.capture());
+        assertEquals("No aceptado", request.getValue().data.get("currentStatus"));
+        assertEquals("No aceptado", request.getValue().data.get("result"));
+        assertTrue(request.getValue().template.contains("No aceptado"));
+        assertFalse(request.getValue().template.contains("REJECTED"));
+        assertFalse(request.getValue().template.contains("Rechazad"));
+    }
+
+    @Test
     void adminListIncludesAdmissionPaymentStatus() {
         LocalDateTime paidAt = LocalDateTime.of(2026, 8, 3, 14, 30);
         application.setPaymentStatus(PaymentStatus.PAID);

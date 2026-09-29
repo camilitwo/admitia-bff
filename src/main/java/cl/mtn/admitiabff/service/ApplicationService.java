@@ -384,7 +384,7 @@ public class ApplicationService {
         response.put("message", switch (newStatus) {
             case APPROVED -> "Postulación aprobada";
             case WAITLIST -> "Postulación agregada a la lista de espera";
-            case REJECTED -> "Postulación rechazada";
+            case REJECTED -> "Postulación no aceptada";
             default -> "Decisión registrada";
         });
         response.put("data", toFullResponse(saved));
@@ -1156,7 +1156,7 @@ public class ApplicationService {
             case INTERVIEW_SCHEDULED -> "Entrevista agendada";
             case EXAM_SCHEDULED -> "Evaluación agendada";
             case APPROVED -> "Aprobada";
-            case REJECTED -> "Rechazada";
+            case REJECTED -> "No aceptado";
             case WAITLIST -> "Lista de espera";
             case ARCHIVED -> "Archivada";
         };

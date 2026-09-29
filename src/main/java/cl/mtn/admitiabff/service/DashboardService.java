@@ -947,7 +947,7 @@ public class DashboardService {
             case "INTERVIEW_SCHEDULED" -> "Entrevista Programada";
             case "EXAM_SCHEDULED" -> "Examen Programado";
             case "APPROVED" -> "Aceptado";
-            case "REJECTED" -> "Rechazado";
+            case "REJECTED" -> "No aceptado";
             case "WAITLIST" -> "Lista de Espera";
             case "ARCHIVED" -> "Archivada";
             default -> status;

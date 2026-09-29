@@ -72,7 +72,7 @@ class DashboardServiceTest {
         // Given
         ApplicationEntity app = new ApplicationEntity();
         app.setId(1L);
-        app.setStatus(ApplicationStatus.PENDING);
+        app.setStatus(ApplicationStatus.REJECTED);
         app.setSubmissionDate(LocalDateTime.of(2026, 5, 10, 10, 0));
         app.setAcademicYear(2026);
         app.setDeletedAt(null);
@@ -102,6 +102,7 @@ class DashboardServiceTest {
         assertEquals("1º Básico", data.get(0).get("gradeApplied"));
         assertEquals("Nueva", data.get(0).get("admissionPreference"));
         assertEquals("No", data.get(0).get("siblingsInSchool"));
+        assertEquals("No aceptado", data.get(0).get("statusLabel"));
     }
 
     @Test
