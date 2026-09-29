@@ -734,7 +734,7 @@ public class DashboardService {
         if (rawScores.isEmpty()) {
             result.put("percentage", null);
         } else {
-            // Weighted formula: sections 90%/26 + checklist 5%/6 + opinion 5%/5
+            // Weighted formula: sections 90%/40 + observations 10%/22
             List<BigDecimal> percentages = familyEvals.stream()
                 .map(this::calculateFamilyInterviewPercentage)
                 .filter(p -> p != null)
@@ -763,15 +763,15 @@ public class DashboardService {
             BigDecimal checklistScore = components.checklist;
             BigDecimal opinionScore = components.opinion;
 
-            // Weighted formula: (sections/26)*0.9 + (checklist/6)*0.05 + (opinion/5)*0.05) * 100
-            BigDecimal sectionsContribution = sectionsScore.divide(BigDecimal.valueOf(26), 6, java.math.RoundingMode.HALF_UP)
+            // Weighted formula: (sections/40)*0.9 + (observations/22)*0.1) * 100
+            // sections: sum of 4 sections, max 40 (10 pts each); observations: checklist + opinion, max 22
+            BigDecimal observationsScore = checklistScore.add(opinionScore);
+            BigDecimal sectionsContribution = sectionsScore.divide(BigDecimal.valueOf(40), 6, java.math.RoundingMode.HALF_UP)
                 .multiply(BigDecimal.valueOf(0.9));
-            BigDecimal checklistContribution = checklistScore.divide(BigDecimal.valueOf(6), 6, java.math.RoundingMode.HALF_UP)
-                .multiply(BigDecimal.valueOf(0.05));
-            BigDecimal opinionContribution = opinionScore.divide(BigDecimal.valueOf(5), 6, java.math.RoundingMode.HALF_UP)
-                .multiply(BigDecimal.valueOf(0.05));
+            BigDecimal observationsContribution = observationsScore.divide(BigDecimal.valueOf(22), 6, java.math.RoundingMode.HALF_UP)
+                .multiply(BigDecimal.valueOf(0.1));
 
-            BigDecimal percentage = sectionsContribution.add(checklistContribution).add(opinionContribution)
+            BigDecimal percentage = sectionsContribution.add(observationsContribution)
                 .multiply(BigDecimal.valueOf(100))
                 .setScale(2, java.math.RoundingMode.HALF_UP);
 
