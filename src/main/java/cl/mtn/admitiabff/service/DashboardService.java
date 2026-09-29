@@ -351,12 +351,12 @@ public class DashboardService {
     }
 
     private Map<String, Object> finalFamilyEvaluation(List<ApplicationEntity> applications) {
-        EvaluationEntity evaluation = applications.stream()
+        List<EvaluationEntity> familyEvals = applications.stream()
             .flatMap(application -> evaluationRepository.findByApplicationIdOrderByCreatedAtDesc(application.getId()).stream())
             .filter(item -> "FAMILY_INTERVIEW".equals(item.getEvaluationType()))
             .filter(item -> item.getStatus() == EvaluationStatus.COMPLETED)
-            .max(Comparator.comparing(this::evaluationTimestamp, Comparator.nullsFirst(Comparator.naturalOrder())))
-            .orElse(null);
+            .toList();
+
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("percentage", null);
         result.put("score40", null);
@@ -364,16 +364,44 @@ public class DashboardService {
         result.put("rating", null);
         result.put("justification", null);
         result.put("evaluationId", null);
-        if (evaluation == null || evaluation.getInterviewData() == null || evaluation.getInterviewData().isBlank()) return result;
+
+        if (familyEvals.isEmpty()) return result;
+
         try {
-            Map<String, Object> data = jsonSupport.readMap(evaluation.getInterviewData());
-            FamilyInterviewComponents components = extractFamilyInterviewComponents(data);
-            result.put("percentage", calculateFamilyInterviewPercentage(evaluation));
-            result.put("score40", components.sections());
-            result.put("score11", components.checklist().add(components.opinion()));
-            result.put("rating", components.opinion());
-            result.put("justification", extractJustification(List.of(evaluation)));
-            result.put("evaluationId", evaluation.getId());
+            // Aggregate sections and observations across all interviewers
+            BigDecimal totalSections = BigDecimal.ZERO;
+            BigDecimal totalObservations = BigDecimal.ZERO;
+            BigDecimal totalOpinion = BigDecimal.ZERO;
+
+            for (EvaluationEntity eval : familyEvals) {
+                if (eval.getInterviewData() == null || eval.getInterviewData().isBlank()) continue;
+                Map<String, Object> data = jsonSupport.readMap(eval.getInterviewData());
+                FamilyInterviewComponents components = extractFamilyInterviewComponents(data);
+                totalSections = totalSections.add(components.sections());
+                BigDecimal obs = components.checklist().add(components.opinion());
+                totalObservations = totalObservations.add(obs);
+                totalOpinion = totalOpinion.add(components.opinion());
+            }
+
+            // percentage: average of individual percentages (not aggregated formula)
+            List<BigDecimal> percentages = familyEvals.stream()
+                .map(this::calculateFamilyInterviewPercentage)
+                .filter(p -> p != null)
+                .toList();
+
+            if (percentages.isEmpty()) {
+                result.put("percentage", null);
+            } else {
+                BigDecimal sum = percentages.stream().reduce(BigDecimal.ZERO, BigDecimal::add);
+                BigDecimal avg = sum.divide(BigDecimal.valueOf(percentages.size()), 2, java.math.RoundingMode.HALF_UP);
+                result.put("percentage", avg);
+            }
+
+            result.put("score40", totalSections);
+            result.put("score11", totalObservations);
+            result.put("rating", totalOpinion.divide(BigDecimal.valueOf(familyEvals.size()), 2, java.math.RoundingMode.HALF_UP));
+            result.put("justification", extractJustification(familyEvals));
+            result.put("evaluationId", familyEvals.get(0).getId());
         } catch (Exception ignored) {
             // Keep explicit nulls when a legacy interview cannot be parsed.
         }
@@ -734,7 +762,7 @@ public class DashboardService {
         if (rawScores.isEmpty()) {
             result.put("percentage", null);
         } else {
-            // Weighted formula: sections 90%/26 + checklist 5%/6 + opinion 5%/5
+            // Weighted formula: sections 90%/20 + observations 10%/11
             List<BigDecimal> percentages = familyEvals.stream()
                 .map(this::calculateFamilyInterviewPercentage)
                 .filter(p -> p != null)
@@ -763,15 +791,15 @@ public class DashboardService {
             BigDecimal checklistScore = components.checklist;
             BigDecimal opinionScore = components.opinion;
 
-            // Weighted formula: (sections/26)*0.9 + (checklist/6)*0.05 + (opinion/5)*0.05) * 100
-            BigDecimal sectionsContribution = sectionsScore.divide(BigDecimal.valueOf(26), 6, java.math.RoundingMode.HALF_UP)
+            // Weighted formula: (sections/20)*0.9 + (observations/11)*0.1) * 100
+            // Each interviewer: sections max 20, observations max 11 (checklist + opinion)
+            BigDecimal observationsScore = checklistScore.add(opinionScore);
+            BigDecimal sectionsContribution = sectionsScore.divide(BigDecimal.valueOf(20), 6, java.math.RoundingMode.HALF_UP)
                 .multiply(BigDecimal.valueOf(0.9));
-            BigDecimal checklistContribution = checklistScore.divide(BigDecimal.valueOf(6), 6, java.math.RoundingMode.HALF_UP)
-                .multiply(BigDecimal.valueOf(0.05));
-            BigDecimal opinionContribution = opinionScore.divide(BigDecimal.valueOf(5), 6, java.math.RoundingMode.HALF_UP)
-                .multiply(BigDecimal.valueOf(0.05));
+            BigDecimal observationsContribution = observationsScore.divide(BigDecimal.valueOf(11), 6, java.math.RoundingMode.HALF_UP)
+                .multiply(BigDecimal.valueOf(0.1));
 
-            BigDecimal percentage = sectionsContribution.add(checklistContribution).add(opinionContribution)
+            BigDecimal percentage = sectionsContribution.add(observationsContribution)
                 .multiply(BigDecimal.valueOf(100))
                 .setScale(2, java.math.RoundingMode.HALF_UP);
 
