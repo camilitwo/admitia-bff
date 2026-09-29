@@ -388,10 +388,14 @@ public class DashboardService {
                 validEvalCount++;
             }
 
-            // percentage: (totalSections/40)*0.9 + (totalObservations/22)*0.1
-            BigDecimal sectionsContribution = totalSections.divide(BigDecimal.valueOf(40), 6, java.math.RoundingMode.HALF_UP)
+            // percentage: formula adapts based on number of evaluators
+            // 1 evaluator: (sections/20)*0.9 + (observations/11)*0.1
+            // 2 evaluators (sum): (totalSections/40)*0.9 + (totalObservations/22)*0.1
+            int sectionsMax = validEvalCount == 1 ? 20 : 40;
+            int observationsMax = validEvalCount == 1 ? 11 : 22;
+            BigDecimal sectionsContribution = totalSections.divide(BigDecimal.valueOf(sectionsMax), 6, java.math.RoundingMode.HALF_UP)
                 .multiply(BigDecimal.valueOf(0.9));
-            BigDecimal observationsContribution = totalObservations.divide(BigDecimal.valueOf(22), 6, java.math.RoundingMode.HALF_UP)
+            BigDecimal observationsContribution = totalObservations.divide(BigDecimal.valueOf(observationsMax), 6, java.math.RoundingMode.HALF_UP)
                 .multiply(BigDecimal.valueOf(0.1));
             BigDecimal percentage = sectionsContribution.add(observationsContribution)
                 .multiply(BigDecimal.valueOf(100))
