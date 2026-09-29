@@ -163,7 +163,7 @@ class DashboardServiceTest {
         Map<String, Object> familyEvaluation = (Map<String, Object>) data.get(0).get("familyEvaluation");
         assertEquals(new BigDecimal("7.0"), familyEvaluation.get("score40"));
         assertEquals(new BigDecimal("5.0"), familyEvaluation.get("score11"));
-        assertEquals(new BigDecimal("4.0"), familyEvaluation.get("rating"));
+        assertEquals(new BigDecimal("4.00"), familyEvaluation.get("rating"));
         assertEquals("Familia alineada con el proyecto", familyEvaluation.get("justification"));
     }
 
