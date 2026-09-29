@@ -351,12 +351,15 @@ public class DashboardService {
     }
 
     private Map<String, Object> finalFamilyEvaluation(List<ApplicationEntity> applications) {
-        EvaluationEntity evaluation = applications.stream()
+        // Get all evaluations from all applications in the family, deduplicated by id
+        Set<Long> seenEvalIds = new java.util.HashSet<>();
+        List<EvaluationEntity> familyEvals = applications.stream()
             .flatMap(application -> evaluationRepository.findByApplicationIdOrderByCreatedAtDesc(application.getId()).stream())
             .filter(item -> "FAMILY_INTERVIEW".equals(item.getEvaluationType()))
             .filter(item -> item.getStatus() == EvaluationStatus.COMPLETED)
-            .max(Comparator.comparing(this::evaluationTimestamp, Comparator.nullsFirst(Comparator.naturalOrder())))
-            .orElse(null);
+            .filter(item -> seenEvalIds.add(item.getId()))
+            .toList();
+
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("percentage", null);
         result.put("score40", null);
@@ -364,16 +367,42 @@ public class DashboardService {
         result.put("rating", null);
         result.put("justification", null);
         result.put("evaluationId", null);
-        if (evaluation == null || evaluation.getInterviewData() == null || evaluation.getInterviewData().isBlank()) return result;
+
+        if (familyEvals.isEmpty()) return result;
+
         try {
-            Map<String, Object> data = jsonSupport.readMap(evaluation.getInterviewData());
-            FamilyInterviewComponents components = extractFamilyInterviewComponents(data);
-            result.put("percentage", calculateFamilyInterviewPercentage(evaluation));
-            result.put("score40", components.sections());
-            result.put("score11", components.checklist().add(components.opinion()));
-            result.put("rating", components.opinion());
-            result.put("justification", extractJustification(List.of(evaluation)));
-            result.put("evaluationId", evaluation.getId());
+            // Sum sections and observations across all interviewers
+            BigDecimal totalSections = BigDecimal.ZERO;
+            BigDecimal totalObservations = BigDecimal.ZERO;
+            BigDecimal totalOpinion = BigDecimal.ZERO;
+            int validEvalCount = 0;
+
+            for (EvaluationEntity eval : familyEvals) {
+                if (eval.getInterviewData() == null || eval.getInterviewData().isBlank()) continue;
+                Map<String, Object> data = jsonSupport.readMap(eval.getInterviewData());
+                FamilyInterviewComponents components = extractFamilyInterviewComponents(data);
+                totalSections = totalSections.add(components.sections());
+                BigDecimal obs = components.checklist().add(components.opinion());
+                totalObservations = totalObservations.add(obs);
+                totalOpinion = totalOpinion.add(components.opinion());
+                validEvalCount++;
+            }
+
+            // percentage: (totalSections/40)*0.9 + (totalObservations/22)*0.1
+            BigDecimal sectionsContribution = totalSections.divide(BigDecimal.valueOf(40), 6, java.math.RoundingMode.HALF_UP)
+                .multiply(BigDecimal.valueOf(0.9));
+            BigDecimal observationsContribution = totalObservations.divide(BigDecimal.valueOf(22), 6, java.math.RoundingMode.HALF_UP)
+                .multiply(BigDecimal.valueOf(0.1));
+            BigDecimal percentage = sectionsContribution.add(observationsContribution)
+                .multiply(BigDecimal.valueOf(100))
+                .setScale(2, java.math.RoundingMode.HALF_UP);
+
+            result.put("percentage", percentage);
+            result.put("score40", totalSections);
+            result.put("score11", totalObservations);
+            result.put("rating", validEvalCount > 0 ? totalOpinion.divide(BigDecimal.valueOf(validEvalCount), 2, java.math.RoundingMode.HALF_UP) : null);
+            result.put("justification", extractJustification(familyEvals));
+            result.put("evaluationId", familyEvals.get(0).getId());
         } catch (Exception ignored) {
             // Keep explicit nulls when a legacy interview cannot be parsed.
         }
