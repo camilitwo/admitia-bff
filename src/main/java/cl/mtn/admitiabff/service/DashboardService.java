@@ -383,7 +383,7 @@ public class DashboardService {
                 totalOpinion = totalOpinion.add(components.opinion());
             }
 
-            // percentage: average of individual percentages (not aggregated formula)
+            // percentage: average of individual percentages from all interviewers
             List<BigDecimal> percentages = familyEvals.stream()
                 .map(this::calculateFamilyInterviewPercentage)
                 .filter(p -> p != null)
