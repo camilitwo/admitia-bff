@@ -67,6 +67,23 @@ class DashboardServiceTest {
     }
 
     @Test
+    void finalDashboardDecisionCannotBeReplacedOrDuplicated() {
+        ApplicationEntity app = application(30L);
+        app.setStatus(ApplicationStatus.APPROVED);
+        when(applicationRepository.findActiveByIdForUpdate(30L)).thenReturn(Optional.of(app));
+        var auth = org.mockito.Mockito.mock(AuthService.class);
+        var jdbc = org.mockito.Mockito.mock(org.springframework.jdbc.core.JdbcTemplate.class);
+        org.springframework.test.util.ReflectionTestUtils.setField(dashboardService, "statusTransitions",
+            new ApplicationStatusTransitionService(auth, jdbc));
+        org.junit.jupiter.api.Assertions.assertThrows(ApplicationStatusPolicy.StatusTransitionException.class,
+            () -> dashboardService.updateFinalDecision(30L, Map.of("decision", "REJECTED")));
+        var repeated = dashboardService.updateFinalDecision(30L, Map.of("decision", "APPROVED"));
+        assertEquals("El estado no cambió", repeated.get("message"));
+        verify(applicationRepository, never()).save(any());
+        org.mockito.Mockito.verifyNoInteractions(jdbc, notificationRepository);
+    }
+
+    @Test
     @DisplayName("courseApplicants returns active applications filtered by academic year and ordered by grade")
     void testCourseApplicantsFilteringAndOrdering() {
         // Given
@@ -229,6 +246,12 @@ class DashboardServiceTest {
     void testUpdateFinalDecisionDoesNotNotify() {
         ApplicationEntity app = application(30L);
         app.setNotes("Nota existente");
+        AuthService auth = org.mockito.Mockito.mock(AuthService.class);
+        var actor = new AuthService.AuthContextHolder(1L, "admin@mtn.cl", "ADMIN");
+        when(auth.requireAuth()).thenReturn(actor);
+        when(auth.hasAnyRoleContext(actor, cl.mtn.admitiabff.domain.common.Role.ADMIN, cl.mtn.admitiabff.domain.common.Role.COORDINATOR)).thenReturn(true);
+        org.springframework.test.util.ReflectionTestUtils.setField(dashboardService, "statusTransitions",
+            new ApplicationStatusTransitionService(auth, org.mockito.Mockito.mock(org.springframework.jdbc.core.JdbcTemplate.class)));
         when(applicationRepository.findActiveByIdForUpdate(30L)).thenReturn(Optional.of(app));
         when(applicationRepository.save(app)).thenReturn(app);
 

@@ -56,6 +56,8 @@ import org.springframework.jdbc.core.JdbcTemplate;
 public class ApplicationService {
     private static final Logger log = LoggerFactory.getLogger(ApplicationService.class);
 
+    @org.springframework.beans.factory.annotation.Autowired
+    private ApplicationStatusTransitionService statusTransitions;
     private final ApplicationRepository applicationRepository;
     private final StudentRepository studentRepository;
     private final ParentRepository parentRepository;
@@ -238,8 +240,8 @@ public class ApplicationService {
 
     @Transactional
     public Map<String, Object> update(Long id, Map<String, Object> payload) {
-        ApplicationEntity entity = load(id);
-        if (payload.containsKey("status")) entity.setStatus(parseStatus(value(payload.get("status"))));
+        ApplicationEntity entity = loadForUpdate(id);
+        if (payload.containsKey("status")) statusTransitions.transition(entity, parseStatus(value(payload.get("status"))));
         if (payload.containsKey("notes")) entity.setNotes(value(payload.get("notes")));
         Object nestedStudent = payload.get("student");
         if (nestedStudent instanceof Map<?, ?> nested) {
@@ -265,8 +267,10 @@ public class ApplicationService {
 
     @Transactional
     public Map<String, Object> updateStatus(Long id, Map<String, Object> payload) {
-        ApplicationEntity entity = load(id);
-        entity.setStatus(parseStatus(value(payload.getOrDefault("status", entity.getStatus().name()))));
+        ApplicationEntity entity = loadForUpdate(id);
+        if (!statusTransitions.transition(entity, parseStatus(value(payload.getOrDefault("status", entity.getStatus().name()))))) {
+            return Map.of("success", true, "message", "El estado no cambió", "data", toFullResponse(entity));
+        }
         if (payload.containsKey("notes")) entity.setNotes(value(payload.get("notes")));
         return Map.of("success", true, "message", "Estado actualizado correctamente", "data", toFullResponse(applicationRepository.save(entity)));
     }
@@ -305,9 +309,12 @@ public class ApplicationService {
         String note = firstNonNull(payload.get("note"), payload.get("notes"));
         String noteOrEmpty = note == null || note.isBlank() ? null : note.trim();
 
-        ApplicationEntity entity = load(id);
+        ApplicationEntity entity = loadForUpdate(id);
         ApplicationStatus previousStatus = entity.getStatus();
-        entity.setStatus(newStatus);
+        if (!statusTransitions.transition(entity, newStatus)) {
+            return Map.of("success", true, "message", "El estado no cambió", "data", toFullResponse(entity),
+                "notification", Map.of("attempted", false, "sent", false, "status", "NOT_ATTEMPTED", "message", "La decisión ya estaba registrada"));
+        }
         if (noteOrEmpty != null) {
             entity.setNotes(noteOrEmpty);
         }
@@ -406,9 +413,9 @@ public class ApplicationService {
 
     @Transactional
     public Map<String, Object> archive(Long id) {
-        ApplicationEntity entity = load(id);
+        ApplicationEntity entity = loadForUpdate(id);
+        statusTransitions.transition(entity, ApplicationStatus.ARCHIVED);
         entity.setArchived(true);
-        entity.setStatus(ApplicationStatus.ARCHIVED);
         return Map.of("success", true, "message", "Postulación archivada", "data", toFullResponse(applicationRepository.save(entity)));
     }
 
@@ -424,13 +431,17 @@ public class ApplicationService {
     public Map<String, Object> bulkUpdateStatus(Map<String, Object> payload) {
         List<?> ids = (List<?>) payload.getOrDefault("applicationIds", List.of());
         ApplicationStatus status = parseStatus(value(payload.get("status")));
-        for (Object id : ids) {
-            ApplicationEntity entity = load(((Number) id).longValue());
-            entity.setStatus(status);
-            entity.setNotes(value(payload.getOrDefault("notes", entity.getNotes())));
-            applicationRepository.save(entity);
+        // Orden estable para evitar interbloqueos entre lotes superpuestos.
+        List<ApplicationEntity> applications = ids.stream().map(id -> ((Number) id).longValue())
+            .distinct().sorted().map(this::loadForUpdate).toList();
+        applications.forEach(application -> statusTransitions.validate(application, status));
+        for (ApplicationEntity entity : applications) {
+            if (statusTransitions.transition(entity, status)) {
+                entity.setNotes(value(payload.getOrDefault("notes", entity.getNotes())));
+                applicationRepository.save(entity);
+            }
         }
-        List<Map<String, Object>> data = ids.stream().map(item -> toFullResponse(load(((Number) item).longValue()))).toList();
+        List<Map<String, Object>> data = applications.stream().map(this::toFullResponse).toList();
         return Map.of("success", true, "message", "Estados actualizados", "data", data);
     }
 
@@ -617,6 +628,7 @@ public class ApplicationService {
         Map<String, Object> response = new LinkedHashMap<>();
         response.put("id", entity.getId());
         response.put("status", entity.getStatus().name());
+        response.putAll(ApplicationStatusPolicy.metadata(entity));
         response.put("paymentStatus", entity.getPaymentStatus().name());
         response.put("paymentRequired", entity.isPaymentRequired());
         response.put("paidAt", entity.getPaidAt());
@@ -720,6 +732,7 @@ public class ApplicationService {
         response.put("familyId", entity.getFamily().getId());
         response.put("processKey", processKey(entity));
         response.put("status", entity.getStatus().name());
+        response.putAll(ApplicationStatusPolicy.metadata(entity));
         response.put("paymentStatus", entity.getPaymentStatus().name());
         response.put("paymentRequired", entity.isPaymentRequired());
         response.put("paidAt", entity.getPaidAt());
@@ -767,6 +780,11 @@ public class ApplicationService {
             response.put("guardian", null);
         }
         return response;
+    }
+
+    private ApplicationEntity loadForUpdate(Long id) {
+        return applicationRepository.findActiveByIdForUpdate(id)
+            .orElseThrow(() -> new IllegalArgumentException("Postulación no encontrada"));
     }
 
     private Map<String, Object> toFullResponse(ApplicationEntity entity) {

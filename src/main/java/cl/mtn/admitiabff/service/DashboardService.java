@@ -39,6 +39,8 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 @Transactional(readOnly = true)
 public class DashboardService {
+    @org.springframework.beans.factory.annotation.Autowired
+    private ApplicationStatusTransitionService statusTransitions;
     private final ApplicationRepository applicationRepository;
     private final UserRepository userRepository;
     private final GuardianRepository guardianRepository;
@@ -254,6 +256,7 @@ public class DashboardService {
                 row.put("examAverage", examAverage(app.getId()));
                 row.put("cycleDirectorDecision", cycleDirectorDecision(app.getId()));
                 row.put("status", app.getStatus().name());
+                row.putAll(ApplicationStatusPolicy.metadata(app));
                 row.put("statusLabel", statusLabel(app.getStatus().name()));
                 return row;
             })
@@ -304,6 +307,7 @@ public class DashboardService {
             row.put("cycleDirectorDecision", cycleDirectorDecision(app.getId()));
             row.put("cycleDirector", finalCycleDirectorEvaluation(app.getId()));
             row.put("status", app.getStatus().name());
+            row.putAll(ApplicationStatusPolicy.metadata(app));
             row.put("statusLabel", statusLabel(app.getStatus().name()));
             return row;
         }).sorted(Comparator
@@ -337,12 +341,14 @@ public class DashboardService {
         ApplicationEntity application = applicationRepository.findActiveByIdForUpdate(applicationId)
             .orElseThrow(() -> new IllegalArgumentException("Postulación no encontrada"));
         if (application.isArchived()) throw new IllegalArgumentException("La postulación está archivada");
-        application.setStatus(decision);
-        ApplicationEntity saved = applicationRepository.save(application);
+        boolean changed = statusTransitions.transition(application, decision);
+        ApplicationEntity saved = changed ? applicationRepository.save(application) : application;
+        Map<String, Object> data = new LinkedHashMap<>(ApplicationStatusPolicy.metadata(saved));
+        data.putAll(Map.of("applicationId", saved.getId(), "status", saved.getStatus().name(), "statusLabel", statusLabel(saved.getStatus().name())));
         return Map.of(
             "success", true,
-            "message", "Decisión final actualizada sin notificar a la familia",
-            "data", Map.of("applicationId", saved.getId(), "status", saved.getStatus().name(), "statusLabel", statusLabel(saved.getStatus().name()))
+            "message", changed ? "Decisión final actualizada sin notificar a la familia" : "El estado no cambió",
+            "data", data
         );
     }
 

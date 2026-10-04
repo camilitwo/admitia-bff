@@ -54,3 +54,19 @@ defecto y no modifica ni reutiliza migraciones legacy.
 ## Notas
 - El servicio escucha en `8080` por defecto para mantener compatibilidad con el frontend.
 - Las rutas expuestas conservan los prefijos `/api/auth`, `/api/users`, `/api/applications`, `/api/students`, `/api/documents`, `/api/evaluations`, `/api/interviews`, `/api/interviewer-schedules`, `/api/notifications`, `/api/email`, `/api/institutional-emails`, `/api/guardians`, `/api/dashboard` y `/api/analytics`.
+
+## Resultados finales del proceso general
+
+Desde Kínder a IV medio, `APPROVED` y `REJECTED` no admiten cambios de estado.
+`WAITLIST` solo permite pasar a uno de esos resultados mediante ADMIN o COORDINATOR.
+La regla cubre resultados existentes y se activa al guardar la decisión, sin cierre global.
+Prekínder conserva su comportamiento.
+
+Los intentos inválidos devuelven HTTP 409 y `error.code = APPLICATION_STATUS_LOCKED`.
+Las consultas incluyen `allowedStatusTransitions` y `statusChangeBlockedReason`.
+La migración V26 crea `application_status_history` con actor, fecha y estados de cada
+transición nueva; no reconstruye ni modifica el historial anterior. Un reenvío del mismo
+estado no duplica historial ni notificaciones. Los cambios masivos son atómicos.
+
+Validación: `mvn test` con `JAVA_HOME` apuntando a Java 21. Las pruebas de concurrencia
+utilizan PostgreSQL efímero mediante Testcontainers y requieren Docker.

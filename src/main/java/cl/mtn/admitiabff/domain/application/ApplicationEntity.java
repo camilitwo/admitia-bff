@@ -26,6 +26,7 @@ import lombok.Setter;
 @Getter
 @Setter
 @Entity
+@org.hibernate.annotations.DynamicUpdate
 @Table(name = "applications")
 public class ApplicationEntity extends BaseEntity {
     @Id

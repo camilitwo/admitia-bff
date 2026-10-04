@@ -95,6 +95,11 @@ class DashboardControllerSecurityTest {
     @EnableMethodSecurity
     static class TestConfig {
         @Bean
+        cl.mtn.admitiabff.service.ApplicationStatusTransitionService statusTransitions() {
+            return mock(cl.mtn.admitiabff.service.ApplicationStatusTransitionService.class);
+        }
+
+        @Bean
         DashboardService dashboardService() {
             return mock(DashboardService.class);
         }

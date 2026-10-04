@@ -118,12 +118,76 @@ class ApplicationServiceFinalDecisionTest {
         AuthService.AuthContextHolder auth = new AuthService.AuthContextHolder(1L, "admin@mtn.cl", "ADMIN");
         when(authService.requireAuth()).thenReturn(auth);
         when(authService.hasAnyRoleContext(auth, Role.ADMIN, Role.COORDINATOR)).thenReturn(true);
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "statusTransitions",
+            new ApplicationStatusTransitionService(authService, mock(org.springframework.jdbc.core.JdbcTemplate.class)));
+        when(applicationRepository.findActiveByIdForUpdate(30L)).thenReturn(Optional.of(application));
         when(applicationRepository.findActiveById(30L)).thenReturn(Optional.of(application));
         when(applicationRepository.save(application)).thenReturn(application);
         when(documentRepository.findByApplicationIdOrderByUploadDateDesc(30L)).thenReturn(List.of());
         when(complementaryFormRepository.existsByApplicationIdAndSubmittedTrue(30L)).thenReturn(false);
         when(evaluationRepository.findByApplicationIdOrderByCreatedAtDesc(30L)).thenReturn(List.of());
         when(interviewRepository.findByApplicationIdOrderByScheduledDateDesc(30L)).thenReturn(List.of());
+    }
+
+    @Test
+    void httpEndpointsReturnConflictWithStableCodeAndReason() throws Exception {
+        application.setStatus(ApplicationStatus.APPROVED);
+        var mvc = org.springframework.test.web.servlet.setup.MockMvcBuilders.standaloneSetup(
+            new cl.mtn.admitiabff.controller.ApplicationsController(service, mock(AuthService.class),
+                mock(cl.mtn.admitiabff.service.payments.PaymentService.class)))
+            .setControllerAdvice(new cl.mtn.admitiabff.controller.ApiExceptionHandler()).build();
+        var requests = List.of(
+            org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch("/api/applications/30/status").content("{\"status\":\"PENDING\"}"),
+            org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put("/api/applications/30").content("{\"status\":\"REJECTED\"}"),
+            org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put("/api/applications/30/archive"),
+            org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post("/api/applications/30/final-decision").content("{\"decision\":\"WAITLIST\"}"),
+            org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post("/api/applications/bulk/update-status").content("{\"applicationIds\":[30],\"status\":\"REJECTED\"}")
+        );
+        for (var request : requests) {
+            mvc.perform(request.contentType(org.springframework.http.MediaType.APPLICATION_JSON))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isConflict())
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.error.code").value("APPLICATION_STATUS_LOCKED"))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.error.message").value(ApplicationStatusPolicy.reason(application)));
+        }
+    }
+
+    @Test
+    void allMutationPathsRejectFinalResultsBeforeSavingOrNotifying() {
+        application.setStatus(ApplicationStatus.APPROVED);
+        java.util.List<Runnable> attempts = java.util.List.of(
+            () -> service.update(30L, Map.of("status", "PENDING")),
+            () -> service.updateStatus(30L, Map.of("status", "REJECTED")),
+            () -> service.recordFinalDecision(30L, Map.of("decision", "REJECTED")),
+            () -> service.archive(30L),
+            () -> service.bulkUpdateStatus(Map.of("applicationIds", List.of(30L), "status", "WAITLIST"))
+        );
+        attempts.forEach(attempt -> org.junit.jupiter.api.Assertions.assertThrows(
+            ApplicationStatusPolicy.StatusTransitionException.class, attempt::run));
+        assertEquals(ApplicationStatus.APPROVED, application.getStatus());
+        assertFalse(application.isArchived());
+        org.mockito.Mockito.verify(applicationRepository, org.mockito.Mockito.never()).save(any());
+        org.mockito.Mockito.verifyNoInteractions(emailComposerService);
+    }
+
+    @Test
+    void repeatedFinalDecisionDoesNotSaveOrSendEmail() {
+        application.setStatus(ApplicationStatus.APPROVED);
+        var response = service.recordFinalDecision(30L, Map.of("decision", "APPROVED", "note", "No duplicar"));
+        assertFalse((Boolean) ((Map<?, ?>) response.get("notification")).get("attempted"));
+        org.mockito.Mockito.verify(applicationRepository, org.mockito.Mockito.never()).save(any());
+        org.mockito.Mockito.verifyNoInteractions(emailComposerService);
+    }
+
+    @Test
+    void invalidBulkDoesNotModifyEarlierValidRows() {
+        var other = ApplicationStatusPolicyTest.application(ApplicationStatus.PENDING, "KINDER");
+        other.setId(29L);
+        when(applicationRepository.findActiveByIdForUpdate(29L)).thenReturn(Optional.of(other));
+        application.setStatus(ApplicationStatus.APPROVED);
+        org.junit.jupiter.api.Assertions.assertThrows(ApplicationStatusPolicy.StatusTransitionException.class,
+            () -> service.bulkUpdateStatus(Map.of("applicationIds", List.of(30L, 29L), "status", "REJECTED")));
+        assertEquals(ApplicationStatus.PENDING, other.getStatus());
+        org.mockito.Mockito.verify(applicationRepository, org.mockito.Mockito.never()).save(any());
     }
 
     @Test
@@ -174,24 +238,6 @@ class ApplicationServiceFinalDecisionTest {
         assertTrue((Boolean) notification.get("attempted"));
         assertFalse((Boolean) notification.get("sent"));
         assertEquals("FAILED", notification.get("status"));
-    }
-
-    @Test
-    void repeatedApprovalEmailShowsOneSpanishDecisionWithoutRedundantTransition() {
-        application.setStatus(ApplicationStatus.APPROVED);
-        when(emailComposerService.send(any(EmailRequestDTO.class))).thenReturn(Map.of(
-                "success", true,
-                "data", Map.of("status", "SENT")));
-
-        service.recordFinalDecision(30L, Map.of("decision", "APPROVED"));
-
-        ArgumentCaptor<EmailRequestDTO> request = ArgumentCaptor.forClass(EmailRequestDTO.class);
-        verify(emailComposerService).send(request.capture());
-        String template = request.getValue().template;
-        assertTrue(template.contains("Aprobada"));
-        assertFalse(template.contains("APPROVED"));
-        assertFalse(template.contains("Estado anterior"));
-        assertFalse(template.contains("Estado actual"));
     }
 
     @Test

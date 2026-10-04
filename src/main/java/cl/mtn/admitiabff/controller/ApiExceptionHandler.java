@@ -35,6 +35,12 @@ public class ApiExceptionHandler {
         return ResponseEntity.status(HttpStatus.CONFLICT).body(body);
     }
 
+    @ExceptionHandler(cl.mtn.admitiabff.service.ApplicationStatusPolicy.StatusTransitionException.class)
+    ResponseEntity<Map<String, Object>> handleStatusTransition(cl.mtn.admitiabff.service.ApplicationStatusPolicy.StatusTransitionException ex) {
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+            .body(ApiResponse.error("APPLICATION_STATUS_LOCKED", ex.getMessage()));
+    }
+
     @ExceptionHandler(IllegalArgumentException.class)
     ResponseEntity<Map<String, Object>> handleIllegalArgument(IllegalArgumentException ex) {
         return ResponseEntity.badRequest().body(ApiResponse.error("BAD_REQUEST", ex.getMessage()));
