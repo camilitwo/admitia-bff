@@ -24,6 +24,7 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Locale;
@@ -419,21 +420,37 @@ public class InterviewService {
     public Map<String, Object> cancel(Long id, Map<String, Object> payload) {
         InterviewEntity entity = load(id);
         entity.setStatus(InterviewStatus.CANCELLED);
+        cancelPendingInterviewEvaluations(entity);
         if (payload != null && payload.get("reason") != null) entity.setNotes(String.valueOf(payload.get("reason")));
         return Map.of("success", true, "message", "Entrevista cancelada", "data", toResponse(interviewRepository.save(entity)));
     }
 
     @Transactional
     public Map<String, Object> reschedule(Long id, Map<String, Object> payload) {
+        return reschedule(id, payload, null);
+    }
+
+    @Transactional
+    public Map<String, Object> reschedule(Long id, Map<String, Object> payload, String bffBaseUrl) {
         InterviewEntity entity = load(id);
-        entity.setScheduledDate(LocalDate.parse(String.valueOf(payload.get("scheduledDate"))));
-        entity.setScheduledTime(LocalTime.parse(String.valueOf(payload.get("scheduledTime"))));
-        entity.setStatus(InterviewStatus.RESCHEDULED);
-        entity.setNotes(payload.get("notes") == null ? entity.getNotes() : String.valueOf(payload.get("notes")));
+        merge(entity, payload);
+        entity.setStatus(InterviewStatus.SCHEDULED);
+        entity.setConfirmationStatus(null);
         boolean pairApplied = applyInterviewerPair(entity, payload, id);
         validateInterviewerComposition(entity);
         if (!pairApplied) ensureInterviewersAvailable(entity);
-        return Map.of("success", true, "message", "Entrevista reprogramada", "data", toResponse(interviewRepository.save(entity)));
+        InterviewEntity saved = interviewRepository.save(entity);
+        syncEvaluationsForRescheduledInterview(saved);
+        if (bffBaseUrl != null && !bffBaseUrl.isBlank()) {
+            try {
+                sendInterviewInvitation(saved.getId(), bffBaseUrl);
+            } catch (Exception e) {
+                org.slf4j.LoggerFactory.getLogger(InterviewService.class)
+                    .error("Entrevista {} reagendada, pero falló el envío de la nueva invitación: {}",
+                        saved.getId(), e.getMessage(), e);
+            }
+        }
+        return Map.of("success", true, "message", "Entrevista reprogramada", "data", toResponse(saved));
     }
 
     @Transactional
@@ -522,11 +539,7 @@ public class InterviewService {
         InterviewEntity interview = load(interviewId);
         var application = interview.getApplication();
 
-        // Obtener email del apoderado
-        String to = application.getApplicantUser() != null ? application.getApplicantUser().getEmail() : null;
-        if (to == null || to.isBlank()) {
-            throw new IllegalStateException("No se puede enviar la invitación: la postulación no tiene email de destinatario.");
-        }
+        List<String> guardianRecipients = guardianRecipientEmails(application);
 
         // Datos del estudiante
         String studentName = application.getStudent() != null
@@ -561,15 +574,17 @@ public class InterviewService {
                 ? "Entrevista de Director de Ciclo - " + toTitleCase(studentName)
                 : "Invitación a entrevista - " + toTitleCase(studentName);
 
-        // Enviar email a los padres
-        emailComposerService.send(EmailRequestDTO.builder()
-                .template(TemplateUtils.generateTemplate(templateKey, data))
-                .to(to)
-                .subject(subject)
-                .recipientType("APPLICATION")
-                .recipientId(application.getId())
-                .data(data)
-                .build());
+        // Enviar email a los padres/apoderado, evitando duplicados si comparten correo.
+        for (String recipient : guardianRecipients) {
+            emailComposerService.send(EmailRequestDTO.builder()
+                    .template(TemplateUtils.generateTemplate(templateKey, data))
+                    .to(recipient)
+                    .subject(subject)
+                    .recipientType("APPLICATION")
+                    .recipientId(application.getId())
+                    .data(data)
+                    .build());
+        }
 
         // Notificar al entrevistador de la asignación
         notifyInterviewerOfAssignment(interview, toTitleCase(studentName));
@@ -853,6 +868,64 @@ public class InterviewService {
         }
     }
 
+    private void syncEvaluationsForRescheduledInterview(InterviewEntity interview) {
+        if (interview.getInterviewType() == null || interview.getApplication() == null) return;
+
+        switch (interview.getInterviewType()) {
+            case "FAMILY" -> syncEvaluationForInterview(interview, "FAMILY_INTERVIEW", interview.getInterviewer());
+            case "CYCLE_DIRECTOR" -> {
+                syncEvaluationForInterview(interview, "CYCLE_DIRECTOR_INTERVIEW", interview.getInterviewer());
+                syncEvaluationForInterview(interview, "CYCLE_DIRECTOR_REPORT", interview.getInterviewer());
+                syncEvaluationForInterview(interview, "PSYCHOLOGICAL_INTERVIEW", interview.getSecondInterviewer());
+            }
+            case "PSYCHOLOGICAL" -> syncEvaluationForInterview(interview, "PSYCHOLOGICAL_INTERVIEW", interview.getInterviewer());
+            default -> { /* no-op */ }
+        }
+    }
+
+    private void syncEvaluationForInterview(InterviewEntity interview,
+                                            String evaluationType,
+                                            UserEntity assignedEvaluator) {
+        EvaluationEntity evaluation = evaluationRepository.findByApplicationIdAndEvaluationType(
+                interview.getApplication().getId(), evaluationType)
+            .orElseGet(() -> {
+                EvaluationEntity created = new EvaluationEntity();
+                created.setApplication(interview.getApplication());
+                created.setEvaluationType(evaluationType);
+                created.setStatus(EvaluationStatus.PENDING);
+                return created;
+            });
+        if (evaluation.getStatus() != EvaluationStatus.COMPLETED) {
+            evaluation.setEvaluator(assignedEvaluator);
+            evaluation.setEvaluationDate(interview.getScheduledDate().atTime(interview.getScheduledTime()));
+            if (evaluation.getStatus() == EvaluationStatus.CANCELLED) {
+                evaluation.setStatus(EvaluationStatus.PENDING);
+            }
+            evaluationRepository.save(evaluation);
+        }
+    }
+
+    private void cancelPendingInterviewEvaluations(InterviewEntity interview) {
+        if (interview.getInterviewType() == null || interview.getApplication() == null) return;
+        evaluationTypesForInterview(interview).forEach(evaluationType ->
+            evaluationRepository.findByApplicationIdAndEvaluationType(interview.getApplication().getId(), evaluationType)
+                .filter(evaluation -> evaluation.getStatus() != EvaluationStatus.COMPLETED)
+                .ifPresent(evaluation -> {
+                    evaluation.setStatus(EvaluationStatus.CANCELLED);
+                    evaluationRepository.save(evaluation);
+                })
+        );
+    }
+
+    private List<String> evaluationTypesForInterview(InterviewEntity interview) {
+        return switch (interview.getInterviewType()) {
+            case "FAMILY" -> List.of("FAMILY_INTERVIEW");
+            case "CYCLE_DIRECTOR" -> List.of("CYCLE_DIRECTOR_INTERVIEW", "CYCLE_DIRECTOR_REPORT", "PSYCHOLOGICAL_INTERVIEW");
+            case "PSYCHOLOGICAL" -> List.of("PSYCHOLOGICAL_INTERVIEW");
+            default -> List.of();
+        };
+    }
+
     private void createEvaluationIfNotExists(InterviewEntity interview, String evaluationType) {
         createEvaluationIfNotExists(interview, evaluationType, interview.getInterviewer());
     }
@@ -881,15 +954,46 @@ public class InterviewService {
                                              InterviewEntity interview,
                                              UserEntity assignedEvaluator) {
         boolean changed = false;
-        if (evaluation.getEvaluator() == null && assignedEvaluator != null) {
+        if (evaluation.getStatus() == EvaluationStatus.COMPLETED) {
+            return false;
+        }
+        if ((evaluation.getEvaluator() == null && assignedEvaluator != null)
+            || (evaluation.getEvaluator() != null && assignedEvaluator != null
+                && !evaluation.getEvaluator().getId().equals(assignedEvaluator.getId()))
+            || (evaluation.getEvaluator() != null && assignedEvaluator == null)) {
             evaluation.setEvaluator(assignedEvaluator);
             changed = true;
         }
-        if (evaluation.getEvaluationDate() == null && interview.getScheduledDate() != null && interview.getScheduledTime() != null) {
-            evaluation.setEvaluationDate(interview.getScheduledDate().atTime(interview.getScheduledTime()));
+        if (interview.getScheduledDate() != null && interview.getScheduledTime() != null) {
+            LocalDateTime scheduledAt = interview.getScheduledDate().atTime(interview.getScheduledTime());
+            if (!scheduledAt.equals(evaluation.getEvaluationDate())) {
+                evaluation.setEvaluationDate(scheduledAt);
+                changed = true;
+            }
+        }
+        if (evaluation.getStatus() == EvaluationStatus.CANCELLED) {
+            evaluation.setStatus(EvaluationStatus.PENDING);
             changed = true;
         }
         return changed;
+    }
+
+    private List<String> guardianRecipientEmails(cl.mtn.admitiabff.domain.application.ApplicationEntity application) {
+        LinkedHashSet<String> emails = new LinkedHashSet<>();
+        if (application.getFather() != null) addEmail(emails, application.getFather().getEmail());
+        if (application.getMother() != null) addEmail(emails, application.getMother().getEmail());
+        if (application.getGuardian() != null) addEmail(emails, application.getGuardian().getEmail());
+        if (application.getApplicantUser() != null) addEmail(emails, application.getApplicantUser().getEmail());
+        if (emails.isEmpty()) {
+            throw new IllegalStateException("No se puede enviar la invitación: la postulación no tiene email de destinatario.");
+        }
+        return List.copyOf(emails);
+    }
+
+    private void addEmail(Set<String> emails, String email) {
+        if (email != null && !email.isBlank()) {
+            emails.add(email.trim().toLowerCase(Locale.ROOT));
+        }
     }
 
     private String resolveParentNames(InterviewEntity entity) {

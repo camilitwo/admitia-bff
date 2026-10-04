@@ -89,7 +89,7 @@ public class InterviewsController {
     @PutMapping("/{id}") public Map<String, Object> update(@PathVariable Long id, @RequestBody Map<String, Object> payload) { return interviewService.update(id, payload); }
     @DeleteMapping("/{id}") public Map<String, Object> delete(@PathVariable Long id) { return interviewService.delete(id); }
     @PatchMapping("/{id}/cancel") public Map<String, Object> cancel(@PathVariable Long id, @RequestBody(required = false) Map<String, Object> payload) { return interviewService.cancel(id, payload == null ? Map.of() : payload); }
-    @PatchMapping("/{id}/reschedule") public Map<String, Object> reschedule(@PathVariable Long id, @RequestBody Map<String, Object> payload) { return interviewService.reschedule(id, payload); }
+    @PatchMapping("/{id}/reschedule") public Map<String, Object> reschedule(@PathVariable Long id, @RequestBody Map<String, Object> payload) { return interviewService.reschedule(id, payload, bffPublicBaseUrl); }
     @PatchMapping("/{id}/release") public Map<String, Object> release(@PathVariable Long id, @RequestBody(required = false) Map<String, Object> payload) { return interviewService.release(id, payload == null ? Map.of() : payload); }
     @PostMapping("/application/{applicationId}/send-summary") public Map<String, Object> sendSummary(@PathVariable Long applicationId) { return interviewService.sendSummary(applicationId); }
 

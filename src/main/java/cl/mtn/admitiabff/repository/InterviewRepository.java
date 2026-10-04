@@ -44,10 +44,12 @@ public interface InterviewRepository extends JpaRepository<InterviewEntity, Long
         else
             interviews = findAllByOrderByScheduledDateAscScheduledTimeAsc();
 
-        // Excluir entrevistas rechazadas por la familia a menos que se solicite incluirlas
+        // Excluir citas inactivas para que la agenda operacional no muestre horarios liberados.
         if (!includeRejected) {
             interviews = interviews.stream()
                 .filter(i -> i.getStatus() != InterviewStatus.REJECTED_BY_FAMILY)
+                .filter(i -> i.getStatus() != InterviewStatus.CANCELLED)
+                .filter(i -> i.getStatus() != InterviewStatus.RESCHEDULED)
                 .toList();
         }
 

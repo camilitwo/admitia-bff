@@ -3,6 +3,7 @@ package cl.mtn.admitiabff.service;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -14,11 +15,15 @@ import static org.mockito.Mockito.when;
 
 import cl.mtn.admitiabff.domain.application.ApplicationEntity;
 import cl.mtn.admitiabff.domain.common.ApplicationStatus;
+import cl.mtn.admitiabff.domain.common.EvaluationStatus;
 import cl.mtn.admitiabff.domain.common.InterviewStatus;
 import cl.mtn.admitiabff.domain.common.Role;
+import cl.mtn.admitiabff.domain.email.EmailRequestDTO;
 import cl.mtn.admitiabff.domain.evaluation.EvaluationEntity;
 import cl.mtn.admitiabff.domain.interview.InterviewEntity;
+import cl.mtn.admitiabff.domain.interview.InterviewerScheduleEntity;
 import cl.mtn.admitiabff.domain.interview.ManualInterviewCreateRequest;
+import cl.mtn.admitiabff.domain.person.ParentEntity;
 import cl.mtn.admitiabff.domain.student.StudentEntity;
 import cl.mtn.admitiabff.domain.user.UserEntity;
 import cl.mtn.admitiabff.repository.ApplicationRepository;
@@ -87,9 +92,9 @@ class InterviewServiceManualEntryTest {
         admin = interviewer(99L, "Admin", "MTN");
         admin.setRole(Role.ADMIN);
 
-        when(applicationRepository.findActiveById(120L)).thenReturn(Optional.of(application));
-        when(userRepository.findById(10L)).thenReturn(Optional.of(firstInterviewer));
-        when(userRepository.findById(11L)).thenReturn(Optional.of(secondInterviewer));
+        lenient().when(applicationRepository.findActiveById(120L)).thenReturn(Optional.of(application));
+        lenient().when(userRepository.findById(10L)).thenReturn(Optional.of(firstInterviewer));
+        lenient().when(userRepository.findById(11L)).thenReturn(Optional.of(secondInterviewer));
         lenient().when(interviewRepository.findByApplicationIdOrderByScheduledDateDesc(120L)).thenReturn(List.of());
         lenient().when(scheduleRepository.findAvailableTemplates(any(), any(), any(), any())).thenReturn(List.of());
         lenient().when(interviewRepository.findBlockingForInterviewer(any(), any(), anyList())).thenReturn(List.of());
@@ -222,6 +227,99 @@ class InterviewServiceManualEntryTest {
         verifyNoInteractions(emailComposerService);
     }
 
+    @Test
+    void rescheduleKeepsInterviewActiveSyncsEvaluationAndNotifiesBothParents() {
+        UserEntity replacementInterviewer = interviewer(12L, "Camila", "Rojas");
+        when(userRepository.findById(12L)).thenReturn(Optional.of(replacementInterviewer));
+        when(scheduleRepository.findAvailableTemplates(any(), any(), anyString(), any()))
+            .thenReturn(List.of(schedule(LocalTime.of(8, 0), LocalTime.of(13, 0))));
+        when(confirmationService.generateConfirmationUrl(anyString(), any(), org.mockito.ArgumentMatchers.eq(true)))
+            .thenReturn("https://bff.test/confirm");
+        when(confirmationService.generateConfirmationUrl(anyString(), any(), org.mockito.ArgumentMatchers.eq(false)))
+            .thenReturn("https://bff.test/reject");
+
+        ParentEntity father = parent("papa@example.cl");
+        ParentEntity mother = parent("mama@example.cl");
+        application.setFather(father);
+        application.setMother(mother);
+
+        InterviewEntity interview = new InterviewEntity();
+        interview.setId(910L);
+        interview.setApplication(application);
+        interview.setInterviewType("FAMILY");
+        interview.setInterviewer(firstInterviewer);
+        interview.setSecondInterviewer(secondInterviewer);
+        interview.setScheduledDate(LocalDate.of(2026, 8, 31));
+        interview.setScheduledTime(LocalTime.of(9, 0));
+        interview.setDuration(40);
+        interview.setMode("IN_PERSON");
+        interview.setStatus(InterviewStatus.CANCELLED);
+
+        EvaluationEntity evaluation = new EvaluationEntity();
+        evaluation.setId(77L);
+        evaluation.setApplication(application);
+        evaluation.setEvaluationType("FAMILY_INTERVIEW");
+        evaluation.setEvaluator(firstInterviewer);
+        evaluation.setEvaluationDate(LocalDate.of(2026, 8, 31).atTime(9, 0));
+        evaluation.setStatus(EvaluationStatus.CANCELLED);
+
+        when(interviewRepository.findById(910L)).thenReturn(Optional.of(interview));
+        when(interviewRepository.save(interview)).thenReturn(interview);
+        when(evaluationRepository.findByApplicationIdAndEvaluationType(120L, "FAMILY_INTERVIEW"))
+            .thenReturn(Optional.of(evaluation));
+
+        service.reschedule(910L, Map.of(
+            "scheduledDate", "2026-09-01",
+            "scheduledTime", "10:30",
+            "interviewerId", 12L,
+            "secondInterviewerId", 11L
+        ), "https://bff.test");
+
+        assertEquals(InterviewStatus.SCHEDULED, interview.getStatus());
+        assertNull(interview.getConfirmationStatus());
+        assertEquals(replacementInterviewer, evaluation.getEvaluator());
+        assertEquals(LocalDate.of(2026, 9, 1).atTime(10, 30), evaluation.getEvaluationDate());
+        assertEquals(EvaluationStatus.PENDING, evaluation.getStatus());
+
+        ArgumentCaptor<EmailRequestDTO> emails = ArgumentCaptor.forClass(EmailRequestDTO.class);
+        verify(emailComposerService, org.mockito.Mockito.times(2)).send(emails.capture());
+        List<String> guardianEmails = emails.getAllValues().stream()
+            .filter(email -> "APPLICATION".equals(email.recipientType))
+            .map(email -> email.to)
+            .toList();
+        assertEquals(List.of("papa@example.cl", "mama@example.cl"), guardianEmails);
+    }
+
+    @Test
+    void cancelStopsPendingEvaluationAssignmentFromRemainingActive() {
+        InterviewEntity interview = new InterviewEntity();
+        interview.setId(911L);
+        interview.setApplication(application);
+        interview.setInterviewType("FAMILY");
+        interview.setInterviewer(firstInterviewer);
+        interview.setSecondInterviewer(secondInterviewer);
+        interview.setStatus(InterviewStatus.SCHEDULED);
+
+        EvaluationEntity evaluation = new EvaluationEntity();
+        evaluation.setId(78L);
+        evaluation.setApplication(application);
+        evaluation.setEvaluationType("FAMILY_INTERVIEW");
+        evaluation.setEvaluator(firstInterviewer);
+        evaluation.setStatus(EvaluationStatus.IN_PROGRESS);
+
+        when(interviewRepository.findById(911L)).thenReturn(Optional.of(interview));
+        when(interviewRepository.save(interview)).thenReturn(interview);
+        when(evaluationRepository.findByApplicationIdAndEvaluationType(120L, "FAMILY_INTERVIEW"))
+            .thenReturn(Optional.of(evaluation));
+
+        service.cancel(911L, Map.of("reason", "Cambio solicitado por la familia"));
+
+        assertEquals(InterviewStatus.CANCELLED, interview.getStatus());
+        assertEquals(EvaluationStatus.CANCELLED, evaluation.getStatus());
+        assertTrue(interview.getNotes().contains("Cambio solicitado"));
+        verify(evaluationRepository).save(evaluation);
+    }
+
     private ManualInterviewCreateRequest request(boolean confirmWarnings) {
         return request("FAMILY", confirmWarnings);
     }
@@ -255,5 +353,22 @@ class InterviewServiceManualEntryTest {
         user.setActive(true);
         user.setRole(Role.INTERVIEWER);
         return user;
+    }
+
+    private ParentEntity parent(String email) {
+        ParentEntity parent = new ParentEntity();
+        parent.setFullName("Apoderado " + email);
+        parent.setEmail(email);
+        parent.setParentType("GUARDIAN");
+        return parent;
+    }
+
+    private InterviewerScheduleEntity schedule(LocalTime start, LocalTime end) {
+        InterviewerScheduleEntity schedule = new InterviewerScheduleEntity();
+        schedule.setStartTime(start);
+        schedule.setEndTime(end);
+        schedule.setYear(2026);
+        schedule.setActive(true);
+        return schedule;
     }
 }
