@@ -2,8 +2,13 @@ package cl.mtn.admitiabff.controller;
 
 import cl.mtn.admitiabff.service.ApplicationService;
 import cl.mtn.admitiabff.service.AuthService;
+import cl.mtn.admitiabff.service.SchoolnetExportService;
 import cl.mtn.admitiabff.service.payments.PaymentService;
+import java.time.LocalDate;
 import java.util.Map;
+import org.springframework.core.io.ByteArrayResource;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
@@ -13,11 +18,13 @@ public class ApplicationsController {
     private final ApplicationService applicationService;
     private final AuthService authService;
     private final PaymentService paymentService;
+    private final SchoolnetExportService schoolnetExportService;
 
-    public ApplicationsController(ApplicationService applicationService, AuthService authService, PaymentService paymentService) {
+    public ApplicationsController(ApplicationService applicationService, AuthService authService, PaymentService paymentService, SchoolnetExportService schoolnetExportService) {
         this.applicationService = applicationService;
         this.authService = authService;
         this.paymentService = paymentService;
+        this.schoolnetExportService = schoolnetExportService;
     }
 
     @GetMapping("/stats") public Map<String, Object> stats() { return applicationService.stats(); }
@@ -29,6 +36,16 @@ public class ApplicationsController {
     @GetMapping("/requiring-documents") public Map<String, Object> requiringDocuments() { return applicationService.requiringDocuments(); }
     @GetMapping("/search") public Map<String, Object> search(@RequestParam(required = false) String query, @RequestParam(required = false) String studentName, @RequestParam(required = false) String status) { return applicationService.search(query != null ? query : studentName, status); }
     @GetMapping("/export") public ResponseEntity<?> export(@RequestParam(required = false) String status, @RequestParam(defaultValue = "json") String format, @RequestParam(required = false) String search) { return applicationService.export(status, format, search); }
+    @GetMapping("/export/schoolnet")
+    public ResponseEntity<ByteArrayResource> exportSchoolnet() {
+        byte[] bytes = schoolnetExportService.exportAcceptedStudents();
+        String filename = "schoolnet_alumnos_aceptados_" + LocalDate.now() + ".xlsx";
+        return ResponseEntity.ok()
+            .contentType(MediaType.parseMediaType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"))
+            .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + filename + "\"")
+            .contentLength(bytes.length)
+            .body(new ByteArrayResource(bytes));
+    }
     @GetMapping("/status/{status}") public Map<String, Object> byStatus(@PathVariable String status, @RequestParam(defaultValue = "0") int page, @RequestParam(defaultValue = "10") int limit) { return applicationService.byStatus(status, page, limit); }
     @GetMapping("/user/{userId}") public Map<String, Object> byUser(@PathVariable Long userId) { return applicationService.byUser(userId); }
     @GetMapping("/my-applications") public Map<String, Object> myApplications() {

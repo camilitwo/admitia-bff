@@ -103,6 +103,16 @@ public interface ApplicationRepository extends JpaRepository<ApplicationEntity, 
 
     List<ApplicationEntity> findByDeletedAtIsNullAndStatusOrderBySubmissionDateAsc(ApplicationStatus status);
 
+    @EntityGraph(attributePaths = {"student", "father", "mother", "guardian", "supporter", "applicantUser"})
+    @Query("""
+        select a from ApplicationEntity a
+        where a.deletedAt is null
+          and a.archived = false
+          and a.status = :status
+        order by a.student.paternalLastName asc, a.student.maternalLastName asc, a.student.firstName asc, a.id asc
+        """)
+    List<ApplicationEntity> findActiveForSchoolnetExport(@Param("status") ApplicationStatus status);
+
     List<ApplicationEntity> findByDeletedAtIsNullAndApplicantUserIdOrderByCreatedAtDesc(Long userId);
 
     @Query("select distinct a from ApplicationEntity a join EvaluationEntity e on e.application = a where a.deletedAt is null and e.evaluator.id = :evaluatorId order by a.createdAt desc")

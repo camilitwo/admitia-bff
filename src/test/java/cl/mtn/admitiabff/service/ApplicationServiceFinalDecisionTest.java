@@ -134,7 +134,8 @@ class ApplicationServiceFinalDecisionTest {
         application.setStatus(ApplicationStatus.APPROVED);
         var mvc = org.springframework.test.web.servlet.setup.MockMvcBuilders.standaloneSetup(
             new cl.mtn.admitiabff.controller.ApplicationsController(service, mock(AuthService.class),
-                mock(cl.mtn.admitiabff.service.payments.PaymentService.class)))
+                mock(cl.mtn.admitiabff.service.payments.PaymentService.class),
+                new SchoolnetExportService(mock(ApplicationRepository.class))))
             .setControllerAdvice(new cl.mtn.admitiabff.controller.ApiExceptionHandler()).build();
         var requests = List.of(
             org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch("/api/applications/30/status").content("{\"status\":\"PENDING\"}"),
