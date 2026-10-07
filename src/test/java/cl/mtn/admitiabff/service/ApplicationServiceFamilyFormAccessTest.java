@@ -141,7 +141,7 @@ class ApplicationServiceFamilyFormAccessTest {
         form.setSubmitted(true);
         form.setFormData("{\"familyValues\":\"Compromiso\"}");
         when(complementaryFormRepository.findByFamilyIdAndProcessKey(anyLong(), anyString())).thenReturn(Optional.of(form));
-        when(applicationRepository.findByFamilyIdAndAcademicYearAndDeletedAtIsNullOrderByCreatedAtAsc(anyLong(), any()))
+        when(applicationRepository.findByFamilyIdAndAcademicYearAndProcessCodeAndDeletedAtIsNullAndArchivedFalseOrderByCreatedAtAsc(anyLong(), any(), anyString()))
             .thenReturn(List.of());
         when(jsonSupport.readMap(any())).thenReturn(new LinkedHashMap<String, Object>());
     }

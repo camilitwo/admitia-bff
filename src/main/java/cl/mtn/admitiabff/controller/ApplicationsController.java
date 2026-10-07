@@ -4,7 +4,10 @@ import cl.mtn.admitiabff.service.ApplicationService;
 import cl.mtn.admitiabff.service.AuthService;
 import cl.mtn.admitiabff.service.SchoolnetExportService;
 import cl.mtn.admitiabff.service.payments.PaymentService;
+import cl.mtn.admitiabff.domain.common.ApplicationStatus;
 import java.time.LocalDate;
+import java.util.Arrays;
+import java.util.List;
 import java.util.Map;
 import org.springframework.core.io.ByteArrayResource;
 import org.springframework.http.HttpHeaders;
@@ -37,9 +40,14 @@ public class ApplicationsController {
     @GetMapping("/search") public Map<String, Object> search(@RequestParam(required = false) String query, @RequestParam(required = false) String studentName, @RequestParam(required = false) String status) { return applicationService.search(query != null ? query : studentName, status); }
     @GetMapping("/export") public ResponseEntity<?> export(@RequestParam(required = false) String status, @RequestParam(defaultValue = "json") String format, @RequestParam(required = false) String search) { return applicationService.export(status, format, search); }
     @GetMapping("/export/schoolnet")
-    public ResponseEntity<ByteArrayResource> exportSchoolnet() {
-        byte[] bytes = schoolnetExportService.exportAcceptedStudents();
-        String filename = "schoolnet_alumnos_aceptados_" + LocalDate.now() + ".xlsx";
+    @org.springframework.security.access.prepost.PreAuthorize("hasRole('ADMIN')")
+    public ResponseEntity<ByteArrayResource> exportSchoolnet(@RequestParam(required = false) Integer academicYear, @RequestParam(required = false) String processCode, @RequestParam(required = false) String statuses) {
+        List<ApplicationStatus> parsedStatuses = statuses == null || statuses.isBlank()
+            ? List.of(ApplicationStatus.APPROVED)
+            : Arrays.stream(statuses.split(",")).map(String::trim).filter(item -> !item.isBlank()).map(item -> ApplicationStatus.valueOf(item.toUpperCase())).toList();
+        byte[] bytes = schoolnetExportService.exportStudents(academicYear, processCode, parsedStatuses);
+        String suffix = processCode == null || processCode.isBlank() ? "aceptados" : processCode;
+        String filename = "schoolnet_alumnos_" + suffix + "_" + LocalDate.now() + ".xlsx";
         return ResponseEntity.ok()
             .contentType(MediaType.parseMediaType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"))
             .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + filename + "\"")
@@ -63,6 +71,9 @@ public class ApplicationsController {
     @PatchMapping("/{id}/status") public Map<String, Object> updateStatus(@PathVariable Long id, @RequestBody Map<String, Object> payload) { return applicationService.updateStatus(id, payload); }
     @PatchMapping("/{id}/document-notification-sent") public Map<String, Object> markDocumentNotificationSent(@PathVariable Long id) { return applicationService.markDocumentNotificationSent(id); }
     @PutMapping("/{id}/archive") public Map<String, Object> archive(@PathVariable Long id) { return applicationService.archive(id); }
+    @PostMapping("/processes/{processCode}/archive")
+    @org.springframework.security.access.prepost.PreAuthorize("hasRole('ADMIN')")
+    public Map<String, Object> archiveProcess(@PathVariable String processCode, @RequestBody Map<String, Object> payload) { return applicationService.archiveProcess(processCode, payload); }
     @DeleteMapping("/{id}") public Map<String, Object> delete(@PathVariable Long id) { return applicationService.delete(id); }
     @PostMapping("/bulk/update-status") public Map<String, Object> bulkUpdateStatus(@RequestBody Map<String, Object> payload) { return applicationService.bulkUpdateStatus(payload); }
     @PostMapping("/{id}/complementary-form") public Map<String, Object> upsertComplementaryForm(@PathVariable Long id, @RequestBody Map<String, Object> payload) { return applicationService.upsertComplementaryForm(id, payload); }

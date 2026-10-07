@@ -95,4 +95,7 @@ public class ApplicationEntity extends BaseEntity {
 
     @Column(name = "academic_year")
     private Integer academicYear;
+
+    @Column(name = "process_code")
+    private String processCode;
 }

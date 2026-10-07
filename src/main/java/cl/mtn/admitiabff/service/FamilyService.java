@@ -19,6 +19,8 @@ public class FamilyService {
     private final ApplicationRepository applications;
     private final AuthService auth;
     private final ApplicationService applicationService;
+    @org.springframework.beans.factory.annotation.Value("${app.admission-cycle.process-code:KIV-2027-02}")
+    private String activeProcessCode = "KIV-2027-02";
 
     public FamilyService(JdbcTemplate jdbc, ApplicationRepository applications, AuthService auth,
                          ApplicationService applicationService) {
@@ -79,7 +81,7 @@ public class FamilyService {
             """, Integer.class, application.getFather() == null ? null : application.getFather().getId(),
             application.getMother() == null ? null : application.getMother().getId(), familyId);
         if (matches == null || matches == 0) throw new ResponseStatusException(HttpStatus.CONFLICT, "La familia ya no coincide con los RUT informados");
-        String sourceProcess = "GENERAL:" + application.getAcademicYear();
+        String sourceProcess = "GENERAL:" + application.getAcademicYear() + ":" + application.getProcessCode();
         Integer sourceForm = jdbc.queryForObject("SELECT count(*) FROM complementary_forms WHERE family_id = ? AND process_key = ?",
             Integer.class, application.getFamily().getId(), sourceProcess);
         if (sourceForm != null && sourceForm > 0) throw new ResponseStatusException(HttpStatus.CONFLICT,
@@ -94,7 +96,7 @@ public class FamilyService {
     public Map<String, Object> form(long familyId, int academicYear) {
         assertMember(familyId);
         ApplicationEntity representative = applications
-            .findByFamilyIdAndAcademicYearAndDeletedAtIsNullOrderByCreatedAtAsc(familyId, academicYear).stream()
+            .findByFamilyIdAndAcademicYearAndProcessCodeAndDeletedAtIsNullAndArchivedFalseOrderByCreatedAtAsc(familyId, academicYear, activeProcessCode).stream()
             .findFirst().orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Familia sin postulaciones en el proceso"));
         return applicationService.complementaryForm(representative.getId());
     }

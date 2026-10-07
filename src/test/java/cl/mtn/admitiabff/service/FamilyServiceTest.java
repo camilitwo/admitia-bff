@@ -45,7 +45,7 @@ class FamilyServiceTest {
         ApplicationEntity firstChild = application(11L, 3L);
         ApplicationEntity secondChild = application(12L, 3L);
         when(jdbc.queryForObject(anyString(), any(Class.class), anyLong(), anyLong())).thenReturn(1);
-        when(applications.findByFamilyIdAndAcademicYearAndDeletedAtIsNullOrderByCreatedAtAsc(3L, 2027))
+        when(applications.findByFamilyIdAndAcademicYearAndProcessCodeAndDeletedAtIsNullAndArchivedFalseOrderByCreatedAtAsc(3L, 2027, "KIV-2027-02"))
             .thenReturn(List.of(firstChild, secondChild));
         when(applicationService.complementaryForm(11L)).thenReturn(Map.of("success", true, "formId", 99L));
 

@@ -81,6 +81,10 @@ public class ApplicationService {
     private JdbcTemplate jdbcTemplate;
     @Value("${app.family-form.general-close-date:}")
     private String familyFormCloseDate;
+    @Value("${app.admission-cycle.process-code:KIV-2027-02}")
+    private String activeProcessCode = "KIV-2027-02";
+    @Value("${app.admission-cycle.academic-year:2027}")
+    private int activeAcademicYear = 2027;
 
     public ApplicationService(ApplicationRepository applicationRepository, StudentRepository studentRepository, ParentRepository parentRepository, GuardianRepository guardianRepository, SupporterRepository supporterRepository, UserRepository userRepository, DocumentRepository documentRepository, ComplementaryFormRepository complementaryFormRepository, EvaluationRepository evaluationRepository, InterviewRepository interviewRepository, AuthService authService, NotificationService notificationService, cl.mtn.admitiabff.service.notification.EmailComposerService emailComposerService, JsonSupport jsonSupport, @Value("${app.uploads-dir}") String uploadsDir) {
         this.applicationRepository = applicationRepository;
@@ -101,12 +105,12 @@ public class ApplicationService {
     }
 
     public Map<String, Object> stats() {
-        long total = applicationRepository.countByDeletedAtIsNull();
+        long total = applicationRepository.countByDeletedAtIsNullAndArchivedFalseAndProcessCode(activeProcessCode);
         return Map.of("success", true, "data", Map.of(
             "totalApplications", total,
-            "pendingApplications", applicationRepository.countByDeletedAtIsNullAndStatus(ApplicationStatus.PENDING),
-            "approvedApplications", applicationRepository.countByDeletedAtIsNullAndStatus(ApplicationStatus.APPROVED),
-            "rejectedApplications", applicationRepository.countByDeletedAtIsNullAndStatus(ApplicationStatus.REJECTED),
+            "pendingApplications", applicationRepository.countByDeletedAtIsNullAndArchivedFalseAndProcessCodeAndStatus(activeProcessCode, ApplicationStatus.PENDING),
+            "approvedApplications", applicationRepository.countByDeletedAtIsNullAndArchivedFalseAndProcessCodeAndStatus(activeProcessCode, ApplicationStatus.APPROVED),
+            "rejectedApplications", applicationRepository.countByDeletedAtIsNullAndArchivedFalseAndProcessCodeAndStatus(activeProcessCode, ApplicationStatus.REJECTED),
             "interviewsScheduled", interviewRepository.countByStatus(cl.mtn.admitiabff.domain.common.InterviewStatus.SCHEDULED),
             "examsScheduled", evaluationRepository.countByStatusIn(List.of(cl.mtn.admitiabff.domain.common.EvaluationStatus.PENDING, cl.mtn.admitiabff.domain.common.EvaluationStatus.IN_PROGRESS)),
             "averageProcessingDays", 0
@@ -114,8 +118,8 @@ public class ApplicationService {
     }
 
     public Map<String, Object> publicAll(int page, int limit) {
-        List<Map<String, Object>> data = applicationRepository.findByDeletedAtIsNullOrderBySubmissionDateDesc(PageRequest.of(page, limit)).stream().map(this::toPublicResponse).toList();
-        return Map.of("success", true, "data", data, "pagination", Map.of("page", page, "limit", limit, "total", applicationRepository.countByDeletedAtIsNull()));
+        List<Map<String, Object>> data = applicationRepository.findByDeletedAtIsNullAndArchivedFalseAndProcessCodeOrderBySubmissionDateDesc(activeProcessCode, PageRequest.of(page, limit)).stream().map(this::toPublicResponse).toList();
+        return Map.of("success", true, "data", data, "pagination", Map.of("page", page, "limit", limit, "total", applicationRepository.countByDeletedAtIsNullAndArchivedFalseAndProcessCode(activeProcessCode)));
     }
 
     public Map<String, Object> contact(Long id) {
@@ -131,29 +135,29 @@ public class ApplicationService {
     }
 
     public Map<String, Object> list(Integer page, Integer size, String status, String gradeApplying, String search) {
-        Page<ApplicationEntity> result = applicationRepository.search(parseStatus(status), emptyToNull(gradeApplying), emptyToNull(search), PageRequest.of(page == null ? 0 : page, size == null ? 15 : size));
+        Page<ApplicationEntity> result = applicationRepository.search(parseStatus(status), emptyToNull(gradeApplying), emptyToNull(search), activeProcessCode, PageRequest.of(page == null ? 0 : page, size == null ? 15 : size));
         List<Map<String, Object>> data = result.getContent().stream().map(this::toDataTableResponse).toList();
         return Map.of("success", true, "count", result.getTotalElements(), "data", data);
     }
 
     public Map<String, Object> recent(int limit) {
-        List<Map<String, Object>> data = applicationRepository.findByDeletedAtIsNullOrderBySubmissionDateDesc(PageRequest.of(0, limit)).stream().map(this::toSummaryResponse).toList();
+        List<Map<String, Object>> data = applicationRepository.findByDeletedAtIsNullAndArchivedFalseAndProcessCodeOrderBySubmissionDateDesc(activeProcessCode, PageRequest.of(0, limit)).stream().map(this::toSummaryResponse).toList();
         return Map.of("success", true, "data", data, "count", data.size());
     }
 
     public Map<String, Object> requiringDocuments() {
-        List<Map<String, Object>> data = applicationRepository.findByDeletedAtIsNullAndStatusOrderBySubmissionDateAsc(ApplicationStatus.DOCUMENTS_REQUESTED).stream().map(this::toSummaryResponse).toList();
+        List<Map<String, Object>> data = applicationRepository.findByDeletedAtIsNullAndArchivedFalseAndProcessCodeAndStatusOrderBySubmissionDateAsc(activeProcessCode, ApplicationStatus.DOCUMENTS_REQUESTED).stream().map(this::toSummaryResponse).toList();
         return Map.of("success", true, "data", data, "count", data.size());
     }
 
     public Map<String, Object> search(String query, String status) {
-        Page<ApplicationEntity> result = applicationRepository.search(parseStatus(status), null, emptyToNull(query), PageRequest.of(0, 50));
+        Page<ApplicationEntity> result = applicationRepository.search(parseStatus(status), null, emptyToNull(query), activeProcessCode, PageRequest.of(0, 50));
         List<Map<String, Object>> data = result.getContent().stream().map(this::toSummaryResponse).toList();
         return Map.of("success", true, "data", data, "count", data.size(), "query", query);
     }
 
     public ResponseEntity<?> export(String status, String format, String search) {
-        List<Map<String, Object>> data = applicationRepository.search(parseStatus(status), null, emptyToNull(search), PageRequest.of(0, 1000)).getContent().stream().map(this::toSummaryResponse).toList();
+        List<Map<String, Object>> data = applicationRepository.search(parseStatus(status), null, emptyToNull(search), activeProcessCode, PageRequest.of(0, 1000)).getContent().stream().map(this::toSummaryResponse).toList();
         if ("csv".equalsIgnoreCase(format)) {
             return ResponseEntity.ok().contentType(MediaType.TEXT_PLAIN).body(CsvUtils.toCsv(data));
         }
@@ -165,7 +169,7 @@ public class ApplicationService {
     }
 
     public Map<String, Object> byUser(Long userId) {
-        List<Map<String, Object>> data = applicationRepository.findByDeletedAtIsNullAndApplicantUserIdOrderByCreatedAtDesc(userId).stream().map(this::toFullResponse).toList();
+        List<Map<String, Object>> data = applicationRepository.findByDeletedAtIsNullAndArchivedFalseAndProcessCodeAndApplicantUserIdOrderByCreatedAtDesc(activeProcessCode, userId).stream().map(this::toFullResponse).toList();
         return Map.of("success", true, "data", data, "count", data.size());
     }
 
@@ -174,12 +178,12 @@ public class ApplicationService {
     }
 
     public Map<String, Object> forEvaluation(Long evaluatorId) {
-        List<Map<String, Object>> data = applicationRepository.findForEvaluator(evaluatorId).stream().map(this::toSummaryResponse).toList();
+        List<Map<String, Object>> data = applicationRepository.findForEvaluator(evaluatorId, activeProcessCode).stream().map(this::toSummaryResponse).toList();
         return Map.of("success", true, "data", data, "count", data.size());
     }
 
     public Map<String, Object> specialCategory(String category) {
-        List<Map<String, Object>> data = applicationRepository.findBySpecialCategory(category.toLowerCase()).stream().map(this::toSummaryResponse).toList();
+        List<Map<String, Object>> data = applicationRepository.findBySpecialCategory(category.toLowerCase(), activeProcessCode).stream().map(this::toSummaryResponse).toList();
         return Map.of("success", true, "data", data, "count", data.size(), "category", category);
     }
 
@@ -232,8 +236,9 @@ public class ApplicationService {
         if (academicYearObj != null) {
             entity.setAcademicYear(Integer.valueOf(academicYearObj.toString()));
         } else {
-            entity.setAcademicYear(LocalDate.now().getYear() + 1);
+            entity.setAcademicYear(activeAcademicYear);
         }
+        entity.setProcessCode(value(payload.getOrDefault("processCode", activeProcessCode)));
         ApplicationEntity saved = applicationRepository.save(entity);
         return Map.of("success", true, "message", "Postulación creada correctamente", "data", toFullResponse(saved));
     }
@@ -420,6 +425,30 @@ public class ApplicationService {
     }
 
     @Transactional
+    public Map<String, Object> archiveProcess(String processCode, Map<String, Object> payload) {
+        requireAdmin();
+        if (!Boolean.TRUE.equals(payload == null ? null : payload.get("confirmBackupTaken"))) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Debe confirmar confirmBackupTaken=true después de ejecutar pg_dump");
+        }
+        Integer academicYear = payload != null && payload.get("academicYear") != null
+            ? Integer.valueOf(payload.get("academicYear").toString())
+            : activeAcademicYear;
+        List<ApplicationEntity> applications = applicationRepository.findActiveByProcess(academicYear, processCode);
+        Map<String, Long> byStatus = applications.stream().collect(java.util.stream.Collectors.groupingBy(app -> app.getStatus().name(), LinkedHashMap::new, java.util.stream.Collectors.counting()));
+        applications.forEach(app -> {
+            app.setArchived(true);
+            app.setStatus(ApplicationStatus.ARCHIVED);
+        });
+        applicationRepository.saveAll(applications);
+        return Map.of("success", true, "message", "Proceso archivado sin eliminar datos", "data", Map.of(
+            "academicYear", academicYear,
+            "processCode", processCode,
+            "totalArchived", applications.size(),
+            "statusBreakdown", byStatus
+        ));
+    }
+
+    @Transactional
     public Map<String, Object> delete(Long id) {
         ApplicationEntity entity = load(id);
         entity.setDeletedAt(LocalDateTime.now());
@@ -451,7 +480,7 @@ public class ApplicationService {
         assertFamilyAccess(application);
         String processKey = processKey(application);
         List<ApplicationEntity> familyApplications = applicationRepository
-            .findByFamilyIdAndAcademicYearAndDeletedAtIsNullOrderByCreatedAtAsc(application.getFamily().getId(), application.getAcademicYear());
+            .findByFamilyIdAndAcademicYearAndProcessCodeAndDeletedAtIsNullAndArchivedFalseOrderByCreatedAtAsc(application.getFamily().getId(), application.getAcademicYear(), application.getProcessCode());
         boolean eligible = familyApplications.stream().anyMatch(item -> !item.isPaymentRequired() || item.getPaymentStatus() == PaymentStatus.PAID);
         if (!eligible) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Debe pagar la postulación antes de completar el formulario complementario");
@@ -487,9 +516,9 @@ public class ApplicationService {
     }
 
     public Map<String, Object> listDebug() {
-        long total = applicationRepository.countByDeletedAtIsNull();
-        long active = applicationRepository.findAllActive(PageRequest.of(0, 1)).getTotalElements();
-        long archived = applicationRepository.countByDeletedAtIsNull() - active;
+        long total = applicationRepository.findAll().stream().filter(app -> app.getDeletedAt() == null).count();
+        long active = applicationRepository.findAllActive(activeProcessCode, PageRequest.of(0, 1)).getTotalElements();
+        long archived = total - active;
 
         return Map.of("success", true, "data", Map.of(
             "totalWithoutDeletedAt", total,
@@ -508,6 +537,12 @@ public class ApplicationService {
         return applicationRepository.findActiveById(id).orElseThrow(() -> new IllegalArgumentException("Postulación no encontrada"));
     }
 
+    private void requireAdmin() {
+        if (!authService.isAdminContext(authService.requireAuth())) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Sólo un administrador puede ejecutar esta operación");
+        }
+    }
+
     private StudentEntity resolveStudent(Map<String, Object> payload) {
         if (payload.get("studentId") instanceof Number number) {
             return studentRepository.findById(number.longValue()).orElseThrow(() -> new IllegalArgumentException("Estudiante no encontrado"));
@@ -523,7 +558,7 @@ public class ApplicationService {
 
         if (rut != null) {
             var existingStudent = studentRepository.findByRut(rut);
-            if (existingStudent.isPresent() && applicationRepository.existsByStudentIdAndDeletedAtIsNull(existingStudent.get().getId())) {
+            if (existingStudent.isPresent() && applicationRepository.existsByStudentIdAndDeletedAtIsNullAndArchivedFalseAndProcessCode(existingStudent.get().getId(), activeProcessCode)) {
                 throw new IllegalStateException("Ya existe una postulación activa para el RUT " + rut);
             }
         }
@@ -731,6 +766,8 @@ public class ApplicationService {
         response.put("applicantUserId", entity.getApplicantUser() == null ? null : entity.getApplicantUser().getId());
         response.put("familyId", entity.getFamily().getId());
         response.put("processKey", processKey(entity));
+        response.put("academicYear", entity.getAcademicYear());
+        response.put("processCode", entity.getProcessCode());
         response.put("status", entity.getStatus().name());
         response.putAll(ApplicationStatusPolicy.metadata(entity));
         response.put("paymentStatus", entity.getPaymentStatus().name());
@@ -859,10 +896,12 @@ public class ApplicationService {
         data.put("familyId", form.getFamily().getId());
         data.put("processKey", form.getProcessKey());
         data.put("version", form.getVersion());
-        Integer academicYear = form.getProcessKey().startsWith("GENERAL:")
-            ? Integer.valueOf(form.getProcessKey().substring("GENERAL:".length())) : null;
+        String[] processParts = form.getProcessKey().split(":");
+        Integer academicYear = processParts.length >= 2 && "GENERAL".equals(processParts[0])
+            ? Integer.valueOf(processParts[1]) : null;
+        String processCode = processParts.length >= 3 ? processParts[2] : activeProcessCode;
         data.put("applicants", academicYear == null ? List.of() : applicationRepository
-            .findByFamilyIdAndAcademicYearAndDeletedAtIsNullOrderByCreatedAtAsc(form.getFamily().getId(), academicYear).stream()
+            .findByFamilyIdAndAcademicYearAndProcessCodeAndDeletedAtIsNullAndArchivedFalseOrderByCreatedAtAsc(form.getFamily().getId(), academicYear, processCode).stream()
             .map(item -> Map.of("applicationId", item.getId(), "studentName", fullStudentName(item.getStudent()),
                 "gradeApplied", value(item.getStudent().getGradeApplied()))).toList());
         data.put("processOpen", academicYear != null && generalProcessIsOpen(academicYear));
@@ -921,7 +960,7 @@ public class ApplicationService {
 
     private String processKey(ApplicationEntity application) {
         int year = application.getAcademicYear() == null ? application.getSubmissionDate().getYear() : application.getAcademicYear();
-        return "GENERAL:" + year;
+        return "GENERAL:" + year + ":" + value(application.getProcessCode());
     }
 
     /**

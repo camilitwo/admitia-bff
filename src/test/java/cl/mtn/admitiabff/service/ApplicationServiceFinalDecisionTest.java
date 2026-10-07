@@ -44,6 +44,7 @@ class ApplicationServiceFinalDecisionTest {
 
     private ApplicationRepository applicationRepository;
     private EmailComposerService emailComposerService;
+    private AuthService authService;
     private ApplicationService service;
     private ApplicationEntity application;
 
@@ -51,7 +52,7 @@ class ApplicationServiceFinalDecisionTest {
     void setUp() {
         applicationRepository = mock(ApplicationRepository.class);
         emailComposerService = mock(EmailComposerService.class);
-        AuthService authService = mock(AuthService.class);
+        authService = mock(AuthService.class);
         DocumentRepository documentRepository = mock(DocumentRepository.class);
         ComplementaryFormRepository complementaryFormRepository = mock(ComplementaryFormRepository.class);
         EvaluationRepository evaluationRepository = mock(EvaluationRepository.class);
@@ -114,9 +115,12 @@ class ApplicationServiceFinalDecisionTest {
         application.setFamily(family);
         application.setStatus(ApplicationStatus.UNDER_REVIEW);
         application.setSubmissionDate(LocalDateTime.now());
+        application.setAcademicYear(2027);
+        application.setProcessCode("KIV-2027-01");
 
         AuthService.AuthContextHolder auth = new AuthService.AuthContextHolder(1L, "admin@mtn.cl", "ADMIN");
         when(authService.requireAuth()).thenReturn(auth);
+        when(authService.isAdminContext(auth)).thenReturn(true);
         when(authService.hasAnyRoleContext(auth, Role.ADMIN, Role.COORDINATOR)).thenReturn(true);
         org.springframework.test.util.ReflectionTestUtils.setField(service, "statusTransitions",
             new ApplicationStatusTransitionService(authService, mock(org.springframework.jdbc.core.JdbcTemplate.class)));
@@ -127,6 +131,32 @@ class ApplicationServiceFinalDecisionTest {
         when(complementaryFormRepository.existsByApplicationIdAndSubmittedTrue(30L)).thenReturn(false);
         when(evaluationRepository.findByApplicationIdOrderByCreatedAtDesc(30L)).thenReturn(List.of());
         when(interviewRepository.findByApplicationIdOrderByScheduledDateDesc(30L)).thenReturn(List.of());
+    }
+
+    @Test
+    void archiveProcessRequiresBackupConfirmationAndArchivesMatchingApplicationsOnly() {
+        when(applicationRepository.findActiveByProcess(2027, "KIV-2027-01")).thenReturn(List.of(application));
+
+        Map<String, Object> response = service.archiveProcess("KIV-2027-01", Map.of(
+            "academicYear", 2027,
+            "confirmBackupTaken", true
+        ));
+
+        assertTrue(application.isArchived());
+        assertEquals(ApplicationStatus.ARCHIVED, application.getStatus());
+        Map<?, ?> data = (Map<?, ?>) response.get("data");
+        assertEquals(1, data.get("totalArchived"));
+        assertEquals("KIV-2027-01", data.get("processCode"));
+        verify(applicationRepository).saveAll(List.of(application));
+    }
+
+    @Test
+    void archiveProcessRejectsWhenBackupWasNotConfirmed() {
+        org.junit.jupiter.api.Assertions.assertThrows(
+            org.springframework.web.server.ResponseStatusException.class,
+            () -> service.archiveProcess("KIV-2027-01", Map.of("academicYear", 2027))
+        );
+        org.mockito.Mockito.verify(applicationRepository, org.mockito.Mockito.never()).findActiveByProcess(any(), any());
     }
 
     @Test
@@ -269,7 +299,7 @@ class ApplicationServiceFinalDecisionTest {
         application.setPaymentStatus(PaymentStatus.PAID);
         application.setPaymentRequired(true);
         application.setPaidAt(paidAt);
-        when(applicationRepository.search(isNull(), isNull(), isNull(), any(Pageable.class)))
+        when(applicationRepository.search(isNull(), isNull(), isNull(), any(), any(Pageable.class)))
                 .thenReturn(new PageImpl<>(List.of(application)));
 
         Map<String, Object> response = service.list(0, 15, null, null, null);

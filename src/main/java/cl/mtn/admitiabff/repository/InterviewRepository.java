@@ -13,16 +13,18 @@ public interface InterviewRepository extends JpaRepository<InterviewEntity, Long
     List<InterviewEntity> findAllByOrderByCreatedAtDesc();
     List<InterviewEntity> findByApplicationIdOrderByScheduledDateDesc(Long applicationId);
     long countByApplicationIdAndSummarySentTrue(Long applicationId);
-    @Query("select i from InterviewEntity i left join i.secondInterviewer si where (i.interviewer.id = :interviewerId or si.id = :interviewerId) and i.status not in :excluded order by i.scheduledDate, i.scheduledTime")
+    @Query("select i from InterviewEntity i left join i.secondInterviewer si where (i.interviewer.id = :interviewerId or si.id = :interviewerId) and i.application.deletedAt is null and i.application.archived = false and i.status not in :excluded order by i.scheduledDate, i.scheduledTime")
     List<InterviewEntity> findVisibleForInterviewer(@Param("interviewerId") Long interviewerId, @Param("excluded") List<InterviewStatus> excluded);
     List<InterviewEntity> findByInterviewerIdAndScheduledDateAndStatusIn(Long interviewerId, LocalDate date, List<InterviewStatus> statuses);
-    @Query("select i from InterviewEntity i left join i.secondInterviewer si where (i.interviewer.id = :interviewerId or si.id = :interviewerId) and i.scheduledDate = :date and i.status not in :excluded")
+    @Query("select i from InterviewEntity i left join i.secondInterviewer si where (i.interviewer.id = :interviewerId or si.id = :interviewerId) and i.application.deletedAt is null and i.application.archived = false and i.scheduledDate = :date and i.status not in :excluded")
     List<InterviewEntity> findBlockingForInterviewer(@Param("interviewerId") Long interviewerId, @Param("date") LocalDate date, @Param("excluded") List<InterviewStatus> excluded);
-    long countByStatus(InterviewStatus status);
-    long countByScheduledDateGreaterThanEqualAndStatus(LocalDate date, InterviewStatus status);
-    @Query("select i.status as key, count(i) as total from InterviewEntity i group by i.status")
+    @Query("select count(i) from InterviewEntity i where i.status = :status and i.application.deletedAt is null and i.application.archived = false")
+    long countByStatus(@Param("status") InterviewStatus status);
+    @Query("select count(i) from InterviewEntity i where i.scheduledDate >= :date and i.status = :status and i.application.deletedAt is null and i.application.archived = false")
+    long countByScheduledDateGreaterThanEqualAndStatus(@Param("date") LocalDate date, @Param("status") InterviewStatus status);
+    @Query("select i.status as key, count(i) as total from InterviewEntity i where i.application.deletedAt is null and i.application.archived = false group by i.status")
     List<KeyCountView> countByStatus();
-    @Query("select i.interviewType as key, count(i) as total from InterviewEntity i group by i.interviewType")
+    @Query("select i.interviewType as key, count(i) as total from InterviewEntity i where i.application.deletedAt is null and i.application.archived = false group by i.interviewType")
     List<KeyCountView> countByType();
     List<InterviewEntity> findByScheduledDateGreaterThanEqualAndScheduledDateLessThanEqualOrderByScheduledDateAscScheduledTimeAsc(LocalDate startDate, LocalDate endDate);
     List<InterviewEntity> findByScheduledDateGreaterThanEqualOrderByScheduledDateAscScheduledTimeAsc(LocalDate startDate);

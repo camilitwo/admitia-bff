@@ -132,6 +132,8 @@ app:
       api-key: ${RESEND_API_KEY}
       base-url: ${RESEND_BASE_URL}
   admission-cycle:
+    process-code: ${APP_ADMISSION_PROCESS_CODE:KIV-2027-02}
+    academic-year: ${APP_ADMISSION_ACADEMIC_YEAR:2027}
     # Ambos interruptores deben estar activos para permitir un cierre real.
     close-enabled: ${APP_ADMISSION_CLOSE_ENABLED:false}
     dispatch-enabled: ${APP_ADMISSION_RESULT_DISPATCH_ENABLED:false}

@@ -30,6 +30,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 import org.springframework.stereotype.Service;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
@@ -51,6 +52,8 @@ public class DashboardService {
     private final DocumentRepository documentRepository;
     private final ComplementaryFormRepository complementaryFormRepository;
     private final JsonSupport jsonSupport;
+    @Value("${app.admission-cycle.process-code:KIV-2027-02}")
+    private String activeProcessCode = "KIV-2027-02";
 
     public DashboardService(ApplicationRepository applicationRepository, UserRepository userRepository, GuardianRepository guardianRepository, NotificationRepository notificationRepository, EvaluationRepository evaluationRepository, InterviewRepository interviewRepository, InterviewerScheduleRepository scheduleRepository, DocumentRepository documentRepository, ComplementaryFormRepository complementaryFormRepository, JsonSupport jsonSupport) {
         this.applicationRepository = applicationRepository;
@@ -67,10 +70,10 @@ public class DashboardService {
 
     public Map<String, Object> generalStats() {
         return Map.of(
-            "totalApplications", applicationRepository.countByDeletedAtIsNull(),
-            "pendingApplications", applicationRepository.countByDeletedAtIsNullAndStatus(ApplicationStatus.PENDING),
-            "approvedApplications", applicationRepository.countByDeletedAtIsNullAndStatus(ApplicationStatus.APPROVED),
-            "rejectedApplications", applicationRepository.countByDeletedAtIsNullAndStatus(ApplicationStatus.REJECTED),
+            "totalApplications", applicationRepository.countByDeletedAtIsNullAndArchivedFalseAndProcessCode(activeProcessCode),
+            "pendingApplications", applicationRepository.countByDeletedAtIsNullAndArchivedFalseAndProcessCodeAndStatus(activeProcessCode, ApplicationStatus.PENDING),
+            "approvedApplications", applicationRepository.countByDeletedAtIsNullAndArchivedFalseAndProcessCodeAndStatus(activeProcessCode, ApplicationStatus.APPROVED),
+            "rejectedApplications", applicationRepository.countByDeletedAtIsNullAndArchivedFalseAndProcessCodeAndStatus(activeProcessCode, ApplicationStatus.REJECTED),
             "interviewsScheduled", interviewRepository.countByStatus(InterviewStatus.SCHEDULED),
             "evaluationsPending", evaluationRepository.countByStatusIn(List.of(EvaluationStatus.PENDING, EvaluationStatus.IN_PROGRESS))
         );
@@ -82,7 +85,7 @@ public class DashboardService {
 
     public Map<String, Object> detailedAdminStats(Integer academicYear) {
         int year = academicYear == null ? LocalDate.now().getYear() : academicYear;
-        List<cl.mtn.admitiabff.domain.application.ApplicationEntity> apps = applicationRepository.findAll().stream().filter(app -> app.getDeletedAt() == null && app.getCreatedAt() != null && app.getCreatedAt().getYear() == year).toList();
+        List<cl.mtn.admitiabff.domain.application.ApplicationEntity> apps = applicationRepository.findAll().stream().filter(this::isOperational).filter(app -> app.getCreatedAt() != null && app.getCreatedAt().getYear() == year).toList();
         Map<String, Long> statusBreakdown = apps.stream().collect(Collectors.groupingBy(app -> app.getStatus().name(), LinkedHashMap::new, Collectors.counting()));
         List<Map<String, Object>> gradeDistribution = apps.stream().collect(Collectors.groupingBy(app -> app.getStudent().getGradeApplied(), LinkedHashMap::new, Collectors.counting())).entrySet().stream()
             .<Map<String, Object>>map(entry -> Map.of("grade", entry.getKey(), "count", entry.getValue()))
@@ -95,7 +98,7 @@ public class DashboardService {
         List<Map<String, Object>> pendingEvaluations = evaluationRepository.findAssignments(List.of(EvaluationStatus.PENDING, EvaluationStatus.IN_PROGRESS)).stream().collect(Collectors.groupingBy(EvaluationEntity::getEvaluationType, LinkedHashMap::new, Collectors.counting())).entrySet().stream()
             .<Map<String, Object>>map(entry -> Map.of("evaluationType", entry.getKey(), "count", entry.getValue()))
             .toList();
-        List<Integer> availableYears = applicationRepository.findAll().stream().filter(app -> app.getCreatedAt() != null).map(app -> app.getCreatedAt().getYear()).distinct().sorted(java.util.Comparator.reverseOrder()).toList();
+        List<Integer> availableYears = applicationRepository.findAll().stream().filter(this::isOperational).filter(app -> app.getCreatedAt() != null).map(app -> app.getCreatedAt().getYear()).distinct().sorted(java.util.Comparator.reverseOrder()).toList();
         return Map.of("success", true, "data", Map.of("academicYear", year, "statusBreakdown", statusBreakdown, "gradeDistribution", gradeDistribution, "monthlyTrends", monthlyTrends, "weeklyInterviews", Map.of("scheduled", weeklyScheduled, "completed", weeklyCompleted), "pendingEvaluations", Map.of("total", pendingEvaluations.stream().mapToLong(item -> ((Number) item.get("count")).longValue()).sum(), "items", pendingEvaluations), "availableYears", availableYears));
     }
 
@@ -130,7 +133,7 @@ public class DashboardService {
 
     public Map<String, Object> applicantMetrics(Integer academicYear, String grade, String status, String sortBy, String sortOrder) {
         List<cl.mtn.admitiabff.domain.application.ApplicationEntity> apps = applicationRepository.findAll().stream()
-            .filter(app -> app.getDeletedAt() == null)
+            .filter(this::isOperational)
             .filter(app -> academicYear == null || app.getCreatedAt().getYear() == academicYear)
             .filter(app -> grade == null || grade.isBlank() || grade.equals(app.getStudent().getGradeApplied()))
             .filter(app -> status == null || status.isBlank() || status.equals(app.getStatus().name()))
@@ -170,10 +173,10 @@ public class DashboardService {
 
     public Map<String, Object> clearCache(String pattern) { Map<String, Object> r = new LinkedHashMap<>(); r.put("success", true); r.put("message", "No hay caché externo para limpiar"); r.put("pattern", pattern); return r; }
     public Map<String, Object> cacheStats() { return Map.of("success", true, "data", Map.of("provider", "in-process", "entries", 0, "hits", 0, "misses", 0)); }
-    public Map<String, Object> analyticsDashboardMetrics() { return Map.of("totalApplications", applicationRepository.countByDeletedAtIsNull(), "applicationsThisMonth", applicationRepository.findBetween(LocalDate.now().withDayOfMonth(1).atStartOfDay(), LocalDate.now().plusDays(1).atStartOfDay()).size(), "conversionRate", 0, "acceptedApplications", applicationRepository.countByDeletedAtIsNullAndStatus(ApplicationStatus.APPROVED), "averageCompletionDays", 0, "activeEvaluators", userRepository.findByRoleInOrderByRoleAscFirstNameAscLastNameAsc(List.of(cl.mtn.admitiabff.domain.common.Role.TEACHER, cl.mtn.admitiabff.domain.common.Role.PSYCHOLOGIST, cl.mtn.admitiabff.domain.common.Role.CYCLE_DIRECTOR, cl.mtn.admitiabff.domain.common.Role.COORDINATOR, cl.mtn.admitiabff.domain.common.Role.INTERVIEWER)).size(), "totalActiveUsers", userRepository.countByActiveTrue()); }
+    public Map<String, Object> analyticsDashboardMetrics() { return Map.of("totalApplications", applicationRepository.countByDeletedAtIsNullAndArchivedFalseAndProcessCode(activeProcessCode), "applicationsThisMonth", applicationRepository.findBetween(LocalDate.now().withDayOfMonth(1).atStartOfDay(), LocalDate.now().plusDays(1).atStartOfDay(), activeProcessCode).size(), "conversionRate", 0, "acceptedApplications", applicationRepository.countByDeletedAtIsNullAndArchivedFalseAndProcessCodeAndStatus(activeProcessCode, ApplicationStatus.APPROVED), "averageCompletionDays", 0, "activeEvaluators", userRepository.findByRoleInOrderByRoleAscFirstNameAscLastNameAsc(List.of(cl.mtn.admitiabff.domain.common.Role.TEACHER, cl.mtn.admitiabff.domain.common.Role.PSYCHOLOGIST, cl.mtn.admitiabff.domain.common.Role.CYCLE_DIRECTOR, cl.mtn.admitiabff.domain.common.Role.COORDINATOR, cl.mtn.admitiabff.domain.common.Role.INTERVIEWER)).size(), "totalActiveUsers", userRepository.countByActiveTrue()); }
 
     public Map<String, Object> statusDistribution() {
-        Map<String, Long> statusCount = applicationRepository.findAll().stream().filter(app -> app.getDeletedAt() == null).collect(Collectors.groupingBy(app -> app.getStatus().name(), LinkedHashMap::new, Collectors.counting()));
+        Map<String, Long> statusCount = applicationRepository.findAll().stream().filter(this::isOperational).collect(Collectors.groupingBy(app -> app.getStatus().name(), LinkedHashMap::new, Collectors.counting()));
         long total = statusCount.values().stream().mapToLong(value -> ((Number) value).longValue()).sum();
         Map<String, Double> percentages = new LinkedHashMap<>();
         statusCount.forEach((key, value) -> percentages.put(key, total == 0 ? 0 : (((Number) value).doubleValue() * 100.0) / total));
@@ -182,12 +185,12 @@ public class DashboardService {
 
     public Map<String, Object> temporalTrends() {
         Map<String, Integer> monthlyApplications = new LinkedHashMap<>();
-        applicationRepository.findAll().stream().filter(app -> app.getDeletedAt() == null && app.getCreatedAt() != null && app.getCreatedAt().isAfter(java.time.LocalDateTime.now().minusMonths(12))).forEach(app -> monthlyApplications.merge(app.getCreatedAt().getYear() + "-" + String.format("%02d", app.getCreatedAt().getMonthValue()), 1, Integer::sum));
+        applicationRepository.findAll().stream().filter(this::isOperational).filter(app -> app.getCreatedAt() != null && app.getCreatedAt().isAfter(java.time.LocalDateTime.now().minusMonths(12))).forEach(app -> monthlyApplications.merge(app.getCreatedAt().getYear() + "-" + String.format("%02d", app.getCreatedAt().getMonthValue()), 1, Integer::sum));
         return Map.of("success", true, "data", Map.of("trends", Map.of("monthlyApplications", monthlyApplications, "currentMonthApplications", monthlyApplications.values().stream().reduce((a, b) -> b).orElse(0), "lastMonthApplications", monthlyApplications.values().stream().skip(Math.max(0, monthlyApplications.size() - 2)).findFirst().orElse(0), "monthlyGrowthRate", 0)));
     }
 
     public Map<String, Object> gradeDistribution() {
-        Map<String, Long> gradeCount = applicationRepository.findAll().stream().filter(app -> app.getDeletedAt() == null).collect(Collectors.groupingBy(app -> app.getStudent().getGradeApplied(), LinkedHashMap::new, Collectors.counting()));
+        Map<String, Long> gradeCount = applicationRepository.findAll().stream().filter(this::isOperational).collect(Collectors.groupingBy(app -> app.getStudent().getGradeApplied(), LinkedHashMap::new, Collectors.counting()));
         long total = gradeCount.values().stream().mapToLong(value -> ((Number) value).longValue()).sum();
         Map<String, Double> gradePercentages = new LinkedHashMap<>();
         gradeCount.forEach((key, value) -> gradePercentages.put(key, total == 0 ? 0 : (((Number) value).doubleValue() * 100.0) / total));
@@ -197,7 +200,7 @@ public class DashboardService {
     }
 
     public Map<String, Object> insights() {
-        long totalApplications = applicationRepository.countByDeletedAtIsNull();
+        long totalApplications = applicationRepository.countByDeletedAtIsNullAndArchivedFalseAndProcessCode(activeProcessCode);
         long completedEvaluations = evaluationRepository.findAll().stream().filter(item -> item.getStatus() == EvaluationStatus.COMPLETED).count();
         BigDecimal averageScore = evaluationRepository.averageScore();
         boolean hasPending = completedEvaluations < totalApplications;
@@ -237,7 +240,7 @@ public class DashboardService {
     public Map<String, Object> courseApplicants(Integer academicYear) {
         int year = academicYear == null ? LocalDate.now().getYear() + 1 : academicYear;
         List<ApplicationEntity> apps = applicationRepository.findAll().stream()
-            .filter(app -> app.getDeletedAt() == null && !app.isArchived())
+            .filter(this::isOperational)
             .filter(app -> app.getAcademicYear() != null && year == app.getAcademicYear())
             .toList();
 
@@ -277,7 +280,7 @@ public class DashboardService {
     public Map<String, Object> finalSummary(Integer academicYear) {
         int year = academicYear == null ? LocalDate.now().getYear() + 1 : academicYear;
         List<ApplicationEntity> apps = applicationRepository.findAll().stream()
-            .filter(app -> app.getDeletedAt() == null && !app.isArchived())
+            .filter(this::isOperational)
             .filter(app -> app.getAcademicYear() != null && year == app.getAcademicYear())
             .toList();
 
@@ -354,6 +357,10 @@ public class DashboardService {
 
     private Long familyGroupKey(ApplicationEntity application) {
         return application.getFamily() == null ? -application.getId() : application.getFamily().getId();
+    }
+
+    private boolean isOperational(ApplicationEntity app) {
+        return app.getDeletedAt() == null && !app.isArchived() && activeProcessCode.equals(app.getProcessCode());
     }
 
     private Map<String, Object> finalFamilyEvaluation(List<ApplicationEntity> applications) {
@@ -560,7 +567,7 @@ public class DashboardService {
     private Map<String, Object> familyQuestionnaire(Long applicationId, String reportLink) {
         ApplicationEntity application = applicationRepository.findById(applicationId).orElse(null);
         String processKey = application == null ? null : "GENERAL:" + (application.getAcademicYear() == null
-            ? application.getSubmissionDate().getYear() : application.getAcademicYear());
+            ? application.getSubmissionDate().getYear() : application.getAcademicYear()) + ":" + application.getProcessCode();
         ComplementaryFormEntity form = application == null || application.getFamily() == null
             ? complementaryFormRepository.findByApplicationId(applicationId).orElse(null)
             : complementaryFormRepository.findByFamilyIdAndProcessKey(application.getFamily().getId(), processKey)

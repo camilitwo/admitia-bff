@@ -21,7 +21,7 @@ class ApplicationsControllerSchoolnetExportTest {
     @Test
     void schoolnetExportReturnsXlsxAttachment() throws Exception {
         ApplicationRepository applicationRepository = mock(ApplicationRepository.class);
-        when(applicationRepository.findActiveForSchoolnetExport(ApplicationStatus.APPROVED)).thenReturn(List.of());
+        when(applicationRepository.findActiveForSchoolnetExport(null, null, List.of(ApplicationStatus.APPROVED))).thenReturn(List.of());
         SchoolnetExportService schoolnetExportService = new SchoolnetExportService(applicationRepository);
         var mvc = MockMvcBuilders.standaloneSetup(new ApplicationsController(
             null,

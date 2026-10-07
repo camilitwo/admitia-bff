@@ -26,12 +26,12 @@ class SchoolnetExportServiceTest {
     @Test
     void exportsAcceptedApplicationsWithTemplateHeadersAndMappedValues() throws Exception {
         ApplicationRepository repository = mock(ApplicationRepository.class);
-        when(repository.findActiveForSchoolnetExport(ApplicationStatus.APPROVED)).thenReturn(List.of(application()));
+        when(repository.findActiveForSchoolnetExport(null, null, List.of(ApplicationStatus.APPROVED))).thenReturn(List.of(application()));
         SchoolnetExportService service = new SchoolnetExportService(repository);
 
         byte[] bytes = service.exportAcceptedStudents();
 
-        verify(repository).findActiveForSchoolnetExport(ApplicationStatus.APPROVED);
+        verify(repository).findActiveForSchoolnetExport(null, null, List.of(ApplicationStatus.APPROVED));
         try (XSSFWorkbook workbook = new XSSFWorkbook(new ByteArrayInputStream(bytes))) {
             var sheet = workbook.getSheet("Alumnos");
             assertEquals(52, SchoolnetExportService.HEADERS.size());
@@ -78,7 +78,7 @@ class SchoolnetExportServiceTest {
     @Test
     void emptyExportKeepsOnlyHeaderRow() throws Exception {
         ApplicationRepository repository = mock(ApplicationRepository.class);
-        when(repository.findActiveForSchoolnetExport(ApplicationStatus.APPROVED)).thenReturn(List.of());
+        when(repository.findActiveForSchoolnetExport(null, null, List.of(ApplicationStatus.APPROVED))).thenReturn(List.of());
         SchoolnetExportService service = new SchoolnetExportService(repository);
 
         try (XSSFWorkbook workbook = new XSSFWorkbook(new ByteArrayInputStream(service.exportAcceptedStudents()))) {

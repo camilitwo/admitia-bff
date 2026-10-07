@@ -94,7 +94,13 @@ public class SchoolnetExportService {
     }
 
     public byte[] exportAcceptedStudents() {
-        List<ApplicationEntity> applications = applicationRepository.findActiveForSchoolnetExport(ApplicationStatus.APPROVED);
+        return exportStudents(null, null, List.of(ApplicationStatus.APPROVED));
+    }
+
+    public byte[] exportStudents(Integer academicYear, String processCode, List<ApplicationStatus> statuses) {
+        List<ApplicationStatus> effectiveStatuses = statuses == null || statuses.isEmpty() ? List.of(ApplicationStatus.APPROVED) : statuses;
+        String effectiveProcessCode = processCode == null || processCode.isBlank() ? null : processCode;
+        List<ApplicationEntity> applications = applicationRepository.findActiveForSchoolnetExport(academicYear, effectiveProcessCode, effectiveStatuses);
         try (XSSFWorkbook workbook = new XSSFWorkbook(); ByteArrayOutputStream output = new ByteArrayOutputStream()) {
             Sheet sheet = workbook.createSheet("Alumnos");
             writeHeader(sheet, workbook);
