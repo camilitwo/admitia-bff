@@ -17,9 +17,9 @@ public class DashboardController {
     @GetMapping("/api/dashboard/applicants/{id}/summary") public Map<String, Object> applicantSummary(@PathVariable Long id) { return dashboardService.applicantSummary(id); }
     @PreAuthorize("hasAnyRole('ADMIN', 'COORDINATOR')")
     @GetMapping("/api/dashboard/applicants/{id}/card") public Map<String, Object> applicantCard(@PathVariable Long id) { return dashboardService.applicantCard(id); }
-    @GetMapping("/api/dashboard/course-applicants") public Map<String, Object> courseApplicants(@RequestParam(required = false) Integer academicYear) { return dashboardService.courseApplicants(academicYear); }
+    @GetMapping("/api/dashboard/course-applicants") public Map<String, Object> courseApplicants(@RequestParam(required = false) Integer academicYear, @RequestParam(required = false) String processCode) { return dashboardService.courseApplicants(academicYear, processCode); }
     @PreAuthorize("hasAnyRole('ADMIN', 'COORDINATOR')")
-    @GetMapping("/api/dashboard/final-summary") public Map<String, Object> finalSummary(@RequestParam(required = false) Integer academicYear) { return dashboardService.finalSummary(academicYear); }
+    @GetMapping("/api/dashboard/final-summary") public Map<String, Object> finalSummary(@RequestParam(required = false) Integer academicYear, @RequestParam(required = false) String processCode) { return dashboardService.finalSummary(academicYear, processCode); }
     @PreAuthorize("hasAnyRole('ADMIN', 'COORDINATOR')")
     @PatchMapping("/api/dashboard/applicants/{id}/final-decision") public Map<String, Object> updateFinalDecision(@PathVariable Long id, @RequestBody Map<String, Object> payload) { return dashboardService.updateFinalDecision(id, payload); }
     @GetMapping("/api/dashboard/applicant-metrics") public Map<String, Object> applicantMetrics(@RequestParam(required = false) Integer academicYear, @RequestParam(required = false) String grade, @RequestParam(required = false) String status, @RequestParam(required = false) String sortBy, @RequestParam(required = false) String sortOrder) { return dashboardService.applicantMetrics(academicYear, grade, status, sortBy, sortOrder); }

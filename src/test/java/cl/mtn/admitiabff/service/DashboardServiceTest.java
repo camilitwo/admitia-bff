@@ -92,6 +92,7 @@ class DashboardServiceTest {
         app.setStatus(ApplicationStatus.REJECTED);
         app.setSubmissionDate(LocalDateTime.of(2026, 5, 10, 10, 0));
         app.setAcademicYear(2026);
+        app.setProcessCode("KIV-2027-02");
         app.setDeletedAt(null);
         app.setArchived(false);
 
@@ -270,6 +271,8 @@ class DashboardServiceTest {
         app.setId(7L);
         app.setStatus(ApplicationStatus.PENDING);
         app.setSubmissionDate(LocalDateTime.of(2026, 6, 1, 9, 0));
+        app.setProcessCode("KIV-2027-02");
+        app.setProcessCode("KIV-2027-02");
 
         StudentEntity student = new StudentEntity();
         student.setId(3L);
@@ -412,6 +415,7 @@ class DashboardServiceTest {
         app.setId(id);
         app.setStatus(ApplicationStatus.PENDING);
         app.setSubmissionDate(LocalDateTime.of(2026, 6, 1, 9, 0));
+        app.setProcessCode("KIV-2027-02");
         StudentEntity student = new StudentEntity();
         student.setId(id);
         student.setFirstName("Postulante");

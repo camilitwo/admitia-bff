@@ -238,9 +238,14 @@ public class DashboardService {
     }
 
     public Map<String, Object> courseApplicants(Integer academicYear) {
+        return courseApplicants(academicYear, null);
+    }
+
+    public Map<String, Object> courseApplicants(Integer academicYear, String processCode) {
         int year = academicYear == null ? LocalDate.now().getYear() + 1 : academicYear;
+        String effectiveProcessCode = processCode == null || processCode.isBlank() ? activeProcessCode : processCode;
         List<ApplicationEntity> apps = applicationRepository.findAll().stream()
-            .filter(this::isOperational)
+            .filter(app -> isOperational(app, effectiveProcessCode))
             .filter(app -> app.getAcademicYear() != null && year == app.getAcademicYear())
             .toList();
 
@@ -268,6 +273,7 @@ public class DashboardService {
 
         Map<String, Object> meta = new LinkedHashMap<>();
         meta.put("academicYear", year);
+        meta.put("processCode", effectiveProcessCode);
         meta.put("total", rows.size());
 
         Map<String, Object> result = new LinkedHashMap<>();
@@ -278,9 +284,14 @@ public class DashboardService {
     }
 
     public Map<String, Object> finalSummary(Integer academicYear) {
+        return finalSummary(academicYear, null);
+    }
+
+    public Map<String, Object> finalSummary(Integer academicYear, String processCode) {
         int year = academicYear == null ? LocalDate.now().getYear() + 1 : academicYear;
+        String effectiveProcessCode = processCode == null || processCode.isBlank() ? activeProcessCode : processCode;
         List<ApplicationEntity> apps = applicationRepository.findAll().stream()
-            .filter(this::isOperational)
+            .filter(app -> isOperational(app, effectiveProcessCode))
             .filter(app -> app.getAcademicYear() != null && year == app.getAcademicYear())
             .toList();
 
@@ -321,6 +332,7 @@ public class DashboardService {
         long siblingFamilies = familyApplications.values().stream().filter(group -> group.size() > 1).count();
         Map<String, Object> meta = new LinkedHashMap<>();
         meta.put("academicYear", year);
+        meta.put("processCode", effectiveProcessCode);
         meta.put("total", rows.size());
         meta.put("siblingFamilies", siblingFamilies);
         return Map.of("success", true, "data", rows, "meta", meta);
@@ -360,7 +372,11 @@ public class DashboardService {
     }
 
     private boolean isOperational(ApplicationEntity app) {
-        return app.getDeletedAt() == null && !app.isArchived() && activeProcessCode.equals(app.getProcessCode());
+        return isOperational(app, activeProcessCode);
+    }
+
+    private boolean isOperational(ApplicationEntity app, String processCode) {
+        return app.getDeletedAt() == null && !app.isArchived() && processCode.equals(app.getProcessCode());
     }
 
     private Map<String, Object> finalFamilyEvaluation(List<ApplicationEntity> applications) {

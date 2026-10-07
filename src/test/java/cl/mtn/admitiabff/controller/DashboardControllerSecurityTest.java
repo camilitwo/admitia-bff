@@ -67,9 +67,9 @@ class DashboardControllerSecurityTest {
     void finalSummaryAllowsCoordinatorUsers() {
         authenticateAs("ROLE_COORDINATOR");
         Map<String, Object> expected = Map.of("success", true);
-        when(dashboardService.finalSummary(2027)).thenReturn(expected);
+        when(dashboardService.finalSummary(2027, null)).thenReturn(expected);
 
-        assertSame(expected, controller.finalSummary(2027));
+        assertSame(expected, controller.finalSummary(2027, null));
     }
 
     @Test
