@@ -31,6 +31,7 @@ import java.util.Locale;
 import java.util.Set;
 
 import cl.mtn.admitiabff.util.TemplateUtils;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -55,8 +56,9 @@ public class InterviewService {
     private final cl.mtn.admitiabff.service.notification.EmailComposerService emailComposerService;
     private final InterviewConfirmationService confirmationService;
     private final InterviewerPairService interviewerPairService;
+    private final String activeProcessCode;
 
-    public InterviewService(InterviewRepository interviewRepository, InterviewerScheduleRepository scheduleRepository, ApplicationRepository applicationRepository, UserRepository userRepository, EvaluationRepository evaluationRepository, cl.mtn.admitiabff.service.notification.EmailComposerService emailComposerService, InterviewConfirmationService confirmationService, InterviewerPairService interviewerPairService) {
+    public InterviewService(InterviewRepository interviewRepository, InterviewerScheduleRepository scheduleRepository, ApplicationRepository applicationRepository, UserRepository userRepository, EvaluationRepository evaluationRepository, cl.mtn.admitiabff.service.notification.EmailComposerService emailComposerService, InterviewConfirmationService confirmationService, InterviewerPairService interviewerPairService, @Value("${app.admission.process-code:KIV-2027-02}") String activeProcessCode) {
         this.interviewRepository = interviewRepository;
         this.scheduleRepository = scheduleRepository;
         this.applicationRepository = applicationRepository;
@@ -65,6 +67,7 @@ public class InterviewService {
         this.emailComposerService = emailComposerService;
         this.confirmationService = confirmationService;
         this.interviewerPairService = interviewerPairService;
+        this.activeProcessCode = activeProcessCode;
     }
 
     public List<Map<String, Object>> publicInterviewers() {
@@ -82,24 +85,36 @@ public class InterviewService {
             .toList();
     }
 
-    public Map<String, Object> all() { return wrap(interviewRepository.findAllByOrderByCreatedAtDesc()); }
+    public Map<String, Object> all(String processCode) { return wrap(interviewRepository.findActiveByProcessOrderByCreatedAtDesc(effectiveProcessCode(processCode))); }
 
-    public Map<String, Object> statistics() {
-        long total = interviewRepository.count();
-        long scheduled = interviewRepository.countByStatus(InterviewStatus.SCHEDULED);
-        long completed = interviewRepository.countByStatus(InterviewStatus.COMPLETED);
-        long cancelled = interviewRepository.countByStatus(InterviewStatus.CANCELLED);
-        long upcoming = interviewRepository.countByScheduledDateGreaterThanEqualAndStatus(LocalDate.now(), InterviewStatus.SCHEDULED);
-        Map<String, Object> byStatus = interviewRepository.countByStatus().stream().collect(java.util.stream.Collectors.toMap(InterviewRepository.KeyCountView::getKey, InterviewRepository.KeyCountView::getTotal, (a, b) -> b, LinkedHashMap::new));
-        Map<String, Object> byType = interviewRepository.countByType().stream().collect(java.util.stream.Collectors.toMap(InterviewRepository.KeyCountView::getKey, InterviewRepository.KeyCountView::getTotal, (a, b) -> b, LinkedHashMap::new));
-        List<Map<String, Object>> upcomingItems = interviewRepository.findForCalendar(LocalDate.now(), null).stream().limit(10).map(this::toResponse).toList();
+    public Map<String, Object> statistics(String processCode) {
+        String effectiveProcess = effectiveProcessCode(processCode);
+        long total = interviewRepository.findActiveByProcessOrderByCreatedAtDesc(effectiveProcess).size();
+        long scheduled = interviewRepository.countByStatusAndProcess(InterviewStatus.SCHEDULED, effectiveProcess);
+        long completed = interviewRepository.countByStatusAndProcess(InterviewStatus.COMPLETED, effectiveProcess);
+        long cancelled = interviewRepository.countByStatusAndProcess(InterviewStatus.CANCELLED, effectiveProcess);
+        long upcoming = interviewRepository.countByScheduledDateGreaterThanEqualAndStatusAndProcess(LocalDate.now(), InterviewStatus.SCHEDULED, effectiveProcess);
+        Map<String, Object> byStatus = interviewRepository.countByStatus(effectiveProcess).stream().collect(java.util.stream.Collectors.toMap(InterviewRepository.KeyCountView::getKey, InterviewRepository.KeyCountView::getTotal, (a, b) -> b, LinkedHashMap::new));
+        Map<String, Object> byType = interviewRepository.countByType(effectiveProcess).stream().collect(java.util.stream.Collectors.toMap(InterviewRepository.KeyCountView::getKey, InterviewRepository.KeyCountView::getTotal, (a, b) -> b, LinkedHashMap::new));
+        List<Map<String, Object>> upcomingItems = interviewRepository.findByProcessAndScheduledDateBetween(effectiveProcess, LocalDate.now(), LocalDate.now().plusYears(5)).stream().limit(10).map(this::toResponse).toList();
         return Map.of("success", true, "data", Map.of("overview", Map.of("total", total, "scheduled", scheduled, "completed", completed, "cancelled", cancelled, "upcoming", upcoming, "completionRate", total == 0 ? 0 : (completed * 100.0) / total, "cancellationRate", total == 0 ? 0 : (cancelled * 100.0) / total), "byStatus", byStatus, "byType", byType, "upcoming", upcomingItems));
     }
 
-    public Map<String, Object> calendar(String startDate, String endDate, boolean includeRejected) {
+    public Map<String, Object> calendar(String startDate, String endDate, boolean includeRejected, String processCode) {
         LocalDate start = startDate == null || startDate.isBlank() ? null : LocalDate.parse(startDate);
         LocalDate end = endDate == null || endDate.isBlank() ? null : LocalDate.parse(endDate);
-        List<Map<String, Object>> data = interviewRepository.findForCalendar(start, end, includeRejected).stream().map(this::toCalendarResponse).toList();
+        String effectiveProcess = effectiveProcessCode(processCode);
+        LocalDate effectiveStart = start == null ? LocalDate.of(1900, 1, 1) : start;
+        LocalDate effectiveEnd = end == null ? LocalDate.of(2999, 12, 31) : end;
+        List<InterviewEntity> interviews = interviewRepository.findByProcessAndScheduledDateBetween(effectiveProcess, effectiveStart, effectiveEnd);
+        if (!includeRejected) {
+            interviews = interviews.stream()
+                .filter(i -> i.getStatus() != InterviewStatus.REJECTED_BY_FAMILY)
+                .filter(i -> i.getStatus() != InterviewStatus.CANCELLED)
+                .filter(i -> i.getStatus() != InterviewStatus.RESCHEDULED)
+                .toList();
+        }
+        List<Map<String, Object>> data = interviews.stream().map(this::toCalendarResponse).toList();
         return Map.of("success", true, "data", data, "count", data.size());
     }
 
@@ -1139,14 +1154,15 @@ public class InterviewService {
      * Genera un resumen semanal de entrevistas para el centro operativo.
      * Incluye entrevistas rechazadas por familia para gestión.
      */
-    public Map<String, Object> weeklyOverview(String startDateStr, String endDateStr, Integer defaultDuration) {
+    public Map<String, Object> weeklyOverview(String startDateStr, String endDateStr, Integer defaultDuration, String processCode) {
         LocalDate startDate = LocalDate.parse(startDateStr);
         LocalDate endDate = LocalDate.parse(endDateStr);
         int duration = defaultDuration != null ? defaultDuration : 30;
+        String effectiveProcess = effectiveProcessCode(processCode);
 
         // Obtener todas las entrevistas del rango (INCLUYENDO rechazadas para gestión)
         List<InterviewEntity> allInterviews = interviewRepository
-            .findByScheduledDateGreaterThanEqualAndScheduledDateLessThanEqualOrderByScheduledDateAscScheduledTimeAsc(startDate, endDate);
+            .findByProcessAndScheduledDateBetween(effectiveProcess, startDate, endDate);
 
         // Agrupar por día
         List<Map<String, Object>> days = new ArrayList<>();
@@ -1418,5 +1434,9 @@ public class InterviewService {
             case "HYBRID"    -> "Híbrida";
             default          -> toTitleCase(mode.replace('_', ' '));
         };
+    }
+
+    private String effectiveProcessCode(String processCode) {
+        return processCode == null || processCode.isBlank() ? activeProcessCode : processCode;
     }
 }

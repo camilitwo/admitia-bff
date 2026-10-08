@@ -71,7 +71,8 @@ class InterviewServiceManualEntryTest {
             evaluationRepository,
             emailComposerService,
             confirmationService,
-            interviewerPairService
+            interviewerPairService,
+            "KIV-2027-02"
         );
 
         StudentEntity student = new StudentEntity();
@@ -140,15 +141,15 @@ class InterviewServiceManualEntryTest {
 
         when(interviewRepository.findByApplicationIdOrderByScheduledDateDesc(120L))
             .thenReturn(List.of(savedInterview.getValue()));
-        when(interviewRepository.findForCalendar(
-            LocalDate.of(2026, 8, 31), LocalDate.of(2026, 8, 31), false
+        when(interviewRepository.findByProcessAndScheduledDateBetween(
+            "KIV-2027-02", LocalDate.of(2026, 8, 31), LocalDate.of(2026, 8, 31)
         )).thenReturn(List.of(savedInterview.getValue()));
 
         @SuppressWarnings("unchecked")
         List<Map<String, Object>> applicationInterviews = (List<Map<String, Object>>) service.byApplication(120L).get("data");
         @SuppressWarnings("unchecked")
         List<Map<String, Object>> calendarInterviews = (List<Map<String, Object>>) service.calendar(
-            "2026-08-31", "2026-08-31", false
+            "2026-08-31", "2026-08-31", false, "KIV-2027-02"
         ).get("data");
         assertEquals(List.of(901L), applicationInterviews.stream().map(item -> item.get("id")).toList());
         assertEquals(List.of(901L), calendarInterviews.stream().map(item -> item.get("id")).toList());

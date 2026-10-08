@@ -135,7 +135,12 @@ public class ApplicationService {
     }
 
     public Map<String, Object> list(Integer page, Integer size, String status, String gradeApplying, String search) {
-        Page<ApplicationEntity> result = applicationRepository.search(parseStatus(status), emptyToNull(gradeApplying), emptyToNull(search), activeProcessCode, PageRequest.of(page == null ? 0 : page, size == null ? 15 : size));
+        return list(page, size, status, gradeApplying, search, null);
+    }
+
+    public Map<String, Object> list(Integer page, Integer size, String status, String gradeApplying, String search, String processCode) {
+        String effectiveProcessCode = processCode == null || processCode.isBlank() ? activeProcessCode : processCode;
+        Page<ApplicationEntity> result = applicationRepository.search(parseStatus(status), emptyToNull(gradeApplying), emptyToNull(search), effectiveProcessCode, PageRequest.of(page == null ? 0 : page, size == null ? 15 : size));
         List<Map<String, Object>> data = result.getContent().stream().map(this::toDataTableResponse).toList();
         return Map.of("success", true, "count", result.getTotalElements(), "data", data);
     }

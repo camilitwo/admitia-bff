@@ -27,10 +27,10 @@ public class InterviewsController {
     }
 
     @GetMapping("/public/interviewers") public Object publicInterviewers() { return interviewService.publicInterviewers(); }
-    @GetMapping public Map<String, Object> all() { return interviewService.all(); }
-    @GetMapping("/statistics") public Map<String, Object> statistics() { return interviewService.statistics(); }
-    @GetMapping("/calendar") public Map<String, Object> calendar(@RequestParam(required = false) String startDate, @RequestParam(required = false) String endDate, @RequestParam(required = false, defaultValue = "false") boolean includeRejected) { return interviewService.calendar(startDate, endDate, includeRejected); }
-    @GetMapping("/weekly-overview") public Map<String, Object> weeklyOverview(@RequestParam String startDate, @RequestParam String endDate, @RequestParam(required = false) Integer duration) { return interviewService.weeklyOverview(startDate, endDate, duration); }
+    @GetMapping public Map<String, Object> all(@RequestParam(required = false) String processCode) { return interviewService.all(processCode); }
+    @GetMapping("/statistics") public Map<String, Object> statistics(@RequestParam(required = false) String processCode) { return interviewService.statistics(processCode); }
+    @GetMapping("/calendar") public Map<String, Object> calendar(@RequestParam(required = false) String startDate, @RequestParam(required = false) String endDate, @RequestParam(required = false, defaultValue = "false") boolean includeRejected, @RequestParam(required = false) String processCode) { return interviewService.calendar(startDate, endDate, includeRejected, processCode); }
+    @GetMapping("/weekly-overview") public Map<String, Object> weeklyOverview(@RequestParam String startDate, @RequestParam String endDate, @RequestParam(required = false) Integer duration, @RequestParam(required = false) String processCode) { return interviewService.weeklyOverview(startDate, endDate, duration, processCode); }
     @GetMapping("/application/{applicationId}") public Map<String, Object> byApplication(@PathVariable Long applicationId) { return interviewService.byApplication(applicationId); }
     @GetMapping("/application/{applicationId}/summary-status") public Map<String, Object> summaryStatus(@PathVariable Long applicationId) { return interviewService.summaryStatus(applicationId); }
     @GetMapping("/interviewer/{interviewerId}") public Map<String, Object> byInterviewer(@PathVariable Long interviewerId) { return interviewService.byInterviewer(interviewerId); }

@@ -11,6 +11,8 @@ import org.springframework.data.repository.query.Param;
 
 public interface InterviewRepository extends JpaRepository<InterviewEntity, Long> {
     List<InterviewEntity> findAllByOrderByCreatedAtDesc();
+    @Query("select i from InterviewEntity i where i.application.deletedAt is null and i.application.archived = false and i.application.processCode = :processCode order by i.createdAt desc")
+    List<InterviewEntity> findActiveByProcessOrderByCreatedAtDesc(@Param("processCode") String processCode);
     List<InterviewEntity> findByApplicationIdOrderByScheduledDateDesc(Long applicationId);
     long countByApplicationIdAndSummarySentTrue(Long applicationId);
     @Query("select i from InterviewEntity i left join i.secondInterviewer si where (i.interviewer.id = :interviewerId or si.id = :interviewerId) and i.application.deletedAt is null and i.application.archived = false and i.status not in :excluded order by i.scheduledDate, i.scheduledTime")
@@ -20,13 +22,23 @@ public interface InterviewRepository extends JpaRepository<InterviewEntity, Long
     List<InterviewEntity> findBlockingForInterviewer(@Param("interviewerId") Long interviewerId, @Param("date") LocalDate date, @Param("excluded") List<InterviewStatus> excluded);
     @Query("select count(i) from InterviewEntity i where i.status = :status and i.application.deletedAt is null and i.application.archived = false")
     long countByStatus(@Param("status") InterviewStatus status);
+    @Query("select count(i) from InterviewEntity i where i.status = :status and i.application.deletedAt is null and i.application.archived = false and i.application.processCode = :processCode")
+    long countByStatusAndProcess(@Param("status") InterviewStatus status, @Param("processCode") String processCode);
     @Query("select count(i) from InterviewEntity i where i.scheduledDate >= :date and i.status = :status and i.application.deletedAt is null and i.application.archived = false")
     long countByScheduledDateGreaterThanEqualAndStatus(@Param("date") LocalDate date, @Param("status") InterviewStatus status);
+    @Query("select count(i) from InterviewEntity i where i.scheduledDate >= :date and i.status = :status and i.application.deletedAt is null and i.application.archived = false and i.application.processCode = :processCode")
+    long countByScheduledDateGreaterThanEqualAndStatusAndProcess(@Param("date") LocalDate date, @Param("status") InterviewStatus status, @Param("processCode") String processCode);
     @Query("select i.status as key, count(i) as total from InterviewEntity i where i.application.deletedAt is null and i.application.archived = false group by i.status")
     List<KeyCountView> countByStatus();
+    @Query("select i.status as key, count(i) as total from InterviewEntity i where i.application.deletedAt is null and i.application.archived = false and i.application.processCode = :processCode group by i.status")
+    List<KeyCountView> countByStatus(@Param("processCode") String processCode);
     @Query("select i.interviewType as key, count(i) as total from InterviewEntity i where i.application.deletedAt is null and i.application.archived = false group by i.interviewType")
     List<KeyCountView> countByType();
+    @Query("select i.interviewType as key, count(i) as total from InterviewEntity i where i.application.deletedAt is null and i.application.archived = false and i.application.processCode = :processCode group by i.interviewType")
+    List<KeyCountView> countByType(@Param("processCode") String processCode);
     List<InterviewEntity> findByScheduledDateGreaterThanEqualAndScheduledDateLessThanEqualOrderByScheduledDateAscScheduledTimeAsc(LocalDate startDate, LocalDate endDate);
+    @Query("select i from InterviewEntity i where i.application.deletedAt is null and i.application.archived = false and i.application.processCode = :processCode and i.scheduledDate >= :startDate and i.scheduledDate <= :endDate order by i.scheduledDate asc, i.scheduledTime asc")
+    List<InterviewEntity> findByProcessAndScheduledDateBetween(@Param("processCode") String processCode, @Param("startDate") LocalDate startDate, @Param("endDate") LocalDate endDate);
     List<InterviewEntity> findByScheduledDateGreaterThanEqualOrderByScheduledDateAscScheduledTimeAsc(LocalDate startDate);
     List<InterviewEntity> findByScheduledDateLessThanEqualOrderByScheduledDateAscScheduledTimeAsc(LocalDate endDate);
     List<InterviewEntity> findAllByOrderByScheduledDateAscScheduledTimeAsc();
