@@ -318,6 +318,7 @@ public class DashboardService {
                 .toList());
             row.put("familyEvaluation", familyEvaluations.get(familyKey));
             row.put("exams", finalExamScores(app.getId()));
+            row.put("examDetails", finalExamDetails(app.getId()));
             row.put("cycleDirectorDecision", cycleDirectorDecision(app.getId()));
             row.put("cycleDirector", finalCycleDirectorEvaluation(app.getId()));
             row.put("status", app.getStatus().name());
@@ -466,6 +467,31 @@ public class DashboardService {
                 }
             });
         return scores;
+    }
+
+    private Map<String, Object> finalExamDetails(Long applicationId) {
+        Map<String, Object> details = new LinkedHashMap<>();
+        details.put("language", null);
+        details.put("mathematics", null);
+        details.put("english", null);
+        evaluationRepository.findByApplicationIdOrderByCreatedAtDesc(applicationId).stream()
+            .filter(item -> item.getStatus() == EvaluationStatus.COMPLETED)
+            .filter(item -> Set.of("LANGUAGE_EXAM", "MATHEMATICS_EXAM", "ENGLISH_EXAM").contains(item.getEvaluationType()))
+            .forEach(item -> {
+                Map<String, Object> exam = new LinkedHashMap<>();
+                exam.put("date", evaluationTimestamp(item));
+                exam.put("observations", item.getObservations());
+                exam.put("strengths", item.getStrengths());
+                exam.put("areasForImprovement", item.getAreasForImprovement());
+                exam.put("recommendations", item.getRecommendations());
+                switch (item.getEvaluationType()) {
+                    case "LANGUAGE_EXAM" -> details.put("language", exam);
+                    case "MATHEMATICS_EXAM" -> details.put("mathematics", exam);
+                    case "ENGLISH_EXAM" -> details.put("english", exam);
+                    default -> { }
+                }
+            });
+        return details;
     }
 
     public Map<String, Object> applicantCard(Long applicationId) {
