@@ -165,8 +165,7 @@ public class InterviewerPairService {
                     ? null : interview.getApplication().getStudent().getGradeApplied());
                 InterviewerPairEntity exactPair = grade == null ? null : pairRepository.findActiveByGrade(grade).stream()
                     .filter(pair -> interview.getInterviewer() != null && interview.getSecondInterviewer() != null)
-                    .filter(pair -> pair.getCycleDirector().getId().equals(interview.getInterviewer().getId())
-                        && pair.getPsychologist().getId().equals(interview.getSecondInterviewer().getId()))
+                    .filter(pair -> matchesPairMembers(pair, interview))
                     .findFirst().orElse(null);
 
                 Map<String, Object> item = new LinkedHashMap<>();
@@ -199,6 +198,15 @@ public class InterviewerPairService {
             "changed", changed.size(),
             "items", report
         ));
+    }
+
+    private boolean matchesPairMembers(InterviewerPairEntity pair, InterviewEntity interview) {
+        Long directorId = pair.getCycleDirector().getId();
+        Long psychologistId = pair.getPsychologist().getId();
+        Long firstId = interview.getInterviewer().getId();
+        Long secondId = interview.getSecondInterviewer().getId();
+        return (directorId.equals(firstId) && psychologistId.equals(secondId))
+            || (directorId.equals(secondId) && psychologistId.equals(firstId));
     }
 
     public InterviewerPairEntity requireEligiblePair(Long pairId, Long applicationId, LocalDate date, LocalTime time,

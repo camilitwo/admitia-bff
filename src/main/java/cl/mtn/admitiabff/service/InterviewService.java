@@ -874,9 +874,9 @@ public class InterviewService {
             case "FAMILY" -> createEvaluationIfNotExists(interview, "FAMILY_INTERVIEW");
             case "CYCLE_DIRECTOR" -> {
                 // El par trabaja el mismo caso desde sus dos portales.
-                createEvaluationIfNotExists(interview, "CYCLE_DIRECTOR_INTERVIEW", interview.getInterviewer());
-                createEvaluationIfNotExists(interview, "CYCLE_DIRECTOR_REPORT", interview.getInterviewer());
-                createEvaluationIfNotExists(interview, "PSYCHOLOGICAL_INTERVIEW", interview.getSecondInterviewer());
+                createEvaluationIfNotExists(interview, "CYCLE_DIRECTOR_INTERVIEW", cycleDirector(interview));
+                createEvaluationIfNotExists(interview, "CYCLE_DIRECTOR_REPORT", cycleDirector(interview));
+                createEvaluationIfNotExists(interview, "PSYCHOLOGICAL_INTERVIEW", psychologist(interview));
             }
             case "PSYCHOLOGICAL" -> createEvaluationIfNotExists(interview, "PSYCHOLOGICAL_INTERVIEW");
             default -> { /* no-op */ }
@@ -889,9 +889,9 @@ public class InterviewService {
         switch (interview.getInterviewType()) {
             case "FAMILY" -> syncEvaluationForInterview(interview, "FAMILY_INTERVIEW", interview.getInterviewer());
             case "CYCLE_DIRECTOR" -> {
-                syncEvaluationForInterview(interview, "CYCLE_DIRECTOR_INTERVIEW", interview.getInterviewer());
-                syncEvaluationForInterview(interview, "CYCLE_DIRECTOR_REPORT", interview.getInterviewer());
-                syncEvaluationForInterview(interview, "PSYCHOLOGICAL_INTERVIEW", interview.getSecondInterviewer());
+                syncEvaluationForInterview(interview, "CYCLE_DIRECTOR_INTERVIEW", cycleDirector(interview));
+                syncEvaluationForInterview(interview, "CYCLE_DIRECTOR_REPORT", cycleDirector(interview));
+                syncEvaluationForInterview(interview, "PSYCHOLOGICAL_INTERVIEW", psychologist(interview));
             }
             case "PSYCHOLOGICAL" -> syncEvaluationForInterview(interview, "PSYCHOLOGICAL_INTERVIEW", interview.getInterviewer());
             default -> { /* no-op */ }
@@ -991,6 +991,24 @@ public class InterviewService {
             changed = true;
         }
         return changed;
+    }
+
+    private UserEntity cycleDirector(InterviewEntity interview) {
+        return participantWithRole(interview, Role.CYCLE_DIRECTOR);
+    }
+
+    private UserEntity psychologist(InterviewEntity interview) {
+        return participantWithRole(interview, Role.PSYCHOLOGIST);
+    }
+
+    private UserEntity participantWithRole(InterviewEntity interview, Role role) {
+        if (interview.getInterviewer() != null && interview.getInterviewer().getRole() == role) {
+            return interview.getInterviewer();
+        }
+        if (interview.getSecondInterviewer() != null && interview.getSecondInterviewer().getRole() == role) {
+            return interview.getSecondInterviewer();
+        }
+        return null;
     }
 
     private List<String> guardianRecipientEmails(cl.mtn.admitiabff.domain.application.ApplicationEntity application) {

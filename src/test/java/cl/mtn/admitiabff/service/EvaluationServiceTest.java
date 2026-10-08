@@ -11,6 +11,7 @@ import static org.mockito.Mockito.when;
 
 import cl.mtn.admitiabff.domain.application.ApplicationEntity;
 import cl.mtn.admitiabff.domain.common.EvaluationStatus;
+import cl.mtn.admitiabff.domain.common.Role;
 import cl.mtn.admitiabff.domain.email.EmailRequestDTO;
 import cl.mtn.admitiabff.domain.evaluation.EvaluationEntity;
 import cl.mtn.admitiabff.domain.interview.InterviewEntity;
@@ -109,8 +110,8 @@ class EvaluationServiceTest {
         AuthService authService = mock(AuthService.class);
         when(authService.requireAuth()).thenReturn(new AuthService.AuthContextHolder(22L, "psicologa@mtn.cl", "PSYCHOLOGIST"));
 
-        UserEntity director = user(11L);
-        UserEntity psychologist = user(22L);
+        UserEntity director = user(11L, Role.CYCLE_DIRECTOR);
+        UserEntity psychologist = user(22L, Role.PSYCHOLOGIST);
         ApplicationEntity application = new ApplicationEntity();
         application.setId(70L);
         InterviewEntity interview = new InterviewEntity();
@@ -151,7 +152,7 @@ class EvaluationServiceTest {
         EvaluationEntity evaluation = new EvaluationEntity();
         evaluation.setId(91L);
         evaluation.setApplication(application);
-        evaluation.setEvaluator(user(11L));
+        evaluation.setEvaluator(user(11L, Role.CYCLE_DIRECTOR));
         evaluation.setEvaluationType("CYCLE_DIRECTOR_REPORT");
         evaluation.setStatus(EvaluationStatus.PENDING);
         when(evaluationRepository.findById(91L)).thenReturn(Optional.of(evaluation));
@@ -172,7 +173,7 @@ class EvaluationServiceTest {
 
         EvaluationEntity evaluation = new EvaluationEntity();
         evaluation.setId(92L);
-        evaluation.setEvaluator(user(22L));
+        evaluation.setEvaluator(user(22L, Role.PSYCHOLOGIST));
         evaluation.setEvaluationType("PSYCHOLOGICAL_INTERVIEW");
         evaluation.setStatus(EvaluationStatus.PENDING);
         when(evaluationRepository.findById(92L)).thenReturn(Optional.of(evaluation));
@@ -191,8 +192,8 @@ class EvaluationServiceTest {
         AuthService authService = mock(AuthService.class);
         when(authService.requireAuth()).thenReturn(new AuthService.AuthContextHolder(22L, "psicologa@mtn.cl", "PSYCHOLOGIST"));
 
-        UserEntity director = user(11L);
-        UserEntity psychologist = user(22L);
+        UserEntity director = user(11L, Role.CYCLE_DIRECTOR);
+        UserEntity psychologist = user(22L, Role.PSYCHOLOGIST);
         ApplicationEntity application = new ApplicationEntity();
         application.setId(70L);
         InterviewEntity interview = new InterviewEntity();
@@ -224,6 +225,81 @@ class EvaluationServiceTest {
         assertEquals(22L, evaluator.get("id"));
     }
 
+    @Test
+    @SuppressWarnings("unchecked")
+    void cycleDirectorReceivesDirectorEvaluationsWhenStoredAsSecondInterviewer() {
+        EvaluationRepository evaluationRepository = mock(EvaluationRepository.class);
+        InterviewRepository interviewRepository = mock(InterviewRepository.class);
+        AuthService authService = mock(AuthService.class);
+        when(authService.requireAuth()).thenReturn(new AuthService.AuthContextHolder(11L, "director@mtn.cl", "CYCLE_DIRECTOR"));
+
+        UserEntity psychologist = user(22L, Role.PSYCHOLOGIST);
+        UserEntity director = user(11L, Role.CYCLE_DIRECTOR);
+        ApplicationEntity application = new ApplicationEntity();
+        application.setId(70L);
+        InterviewEntity interview = new InterviewEntity();
+        interview.setId(80L);
+        interview.setApplication(application);
+        interview.setInterviewType("CYCLE_DIRECTOR");
+        interview.setInterviewer(psychologist);
+        interview.setSecondInterviewer(director);
+        interview.setStatus(InterviewStatus.SCHEDULED);
+
+        EvaluationEntity directorInterview = evaluation(94L, application, director, "CYCLE_DIRECTOR_INTERVIEW");
+        EvaluationEntity directorReport = evaluation(95L, application, director, "CYCLE_DIRECTOR_REPORT");
+
+        when(evaluationRepository.findByEvaluatorIdOrderByCreatedAtDesc(11L)).thenReturn(List.of(directorInterview, directorReport));
+        when(interviewRepository.findVisibleForInterviewer(any(), any())).thenReturn(List.of(interview));
+
+        EvaluationService service = service(evaluationRepository, interviewRepository, authService);
+        Map<String, Object> result = service.myEvaluations();
+        List<Map<String, Object>> data = (List<Map<String, Object>>) result.get("data");
+
+        assertEquals(List.of("CYCLE_DIRECTOR_INTERVIEW", "CYCLE_DIRECTOR_REPORT"),
+            data.stream().map(item -> item.get("type")).toList());
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void ensureInterviewEvaluationsRealignsPendingEvaluationsByRoleWhenParticipantsAreInverted() {
+        EvaluationRepository evaluationRepository = mock(EvaluationRepository.class);
+        InterviewRepository interviewRepository = mock(InterviewRepository.class);
+        AuthService authService = mock(AuthService.class);
+        when(authService.requireAuth()).thenReturn(new AuthService.AuthContextHolder(1L, "admin@mtn.cl", "ADMIN"));
+        when(authService.isAdminContext(any())).thenReturn(true);
+
+        UserEntity psychologist = user(22L, Role.PSYCHOLOGIST);
+        UserEntity director = user(11L, Role.CYCLE_DIRECTOR);
+        ApplicationEntity application = new ApplicationEntity();
+        application.setId(70L);
+        InterviewEntity interview = new InterviewEntity();
+        interview.setId(80L);
+        interview.setApplication(application);
+        interview.setInterviewType("CYCLE_DIRECTOR");
+        interview.setInterviewer(psychologist);
+        interview.setSecondInterviewer(director);
+        interview.setStatus(InterviewStatus.SCHEDULED);
+
+        EvaluationEntity directorReport = evaluation(96L, application, psychologist, "CYCLE_DIRECTOR_REPORT");
+        EvaluationEntity psychological = evaluation(97L, application, director, "PSYCHOLOGICAL_INTERVIEW");
+        when(interviewRepository.findById(80L)).thenReturn(Optional.of(interview));
+        when(evaluationRepository.findByApplicationIdAndEvaluationType(70L, "CYCLE_DIRECTOR_INTERVIEW"))
+            .thenReturn(Optional.empty());
+        when(evaluationRepository.findByApplicationIdAndEvaluationType(70L, "CYCLE_DIRECTOR_REPORT"))
+            .thenReturn(Optional.of(directorReport));
+        when(evaluationRepository.findByApplicationIdAndEvaluationType(70L, "PSYCHOLOGICAL_INTERVIEW"))
+            .thenReturn(Optional.of(psychological));
+        when(evaluationRepository.save(any(EvaluationEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        EvaluationService service = service(evaluationRepository, interviewRepository, authService);
+        Map<String, Object> result = service.ensureInterviewEvaluations(80L);
+        List<Map<String, Object>> data = (List<Map<String, Object>>) result.get("data");
+
+        assertEquals(3, data.size());
+        assertEquals(director, directorReport.getEvaluator());
+        assertEquals(psychologist, psychological.getEvaluator());
+    }
+
     private EvaluationService service(EvaluationRepository evaluationRepository) {
         AuthService authService = mock(AuthService.class);
         AuthService.AuthContextHolder admin = new AuthService.AuthContextHolder(1L, "admin@mtn.cl", "ADMIN");
@@ -249,9 +325,24 @@ class EvaluationServiceTest {
     }
 
     private UserEntity user(Long id) {
+        return user(id, null);
+    }
+
+    private UserEntity user(Long id, Role role) {
         UserEntity user = new UserEntity();
         user.setId(id);
+        user.setRole(role);
         return user;
+    }
+
+    private EvaluationEntity evaluation(Long id, ApplicationEntity application, UserEntity evaluator, String type) {
+        EvaluationEntity evaluation = new EvaluationEntity();
+        evaluation.setId(id);
+        evaluation.setApplication(application);
+        evaluation.setEvaluator(evaluator);
+        evaluation.setEvaluationType(type);
+        evaluation.setStatus(EvaluationStatus.PENDING);
+        return evaluation;
     }
 
     @Test

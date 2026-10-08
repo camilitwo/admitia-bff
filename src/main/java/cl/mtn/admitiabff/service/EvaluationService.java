@@ -689,11 +689,13 @@ public class EvaluationService {
         if (userId == null || interview.getInterviewType() == null) return List.of();
         boolean primary = interview.getInterviewer() != null && userId.equals(interview.getInterviewer().getId());
         boolean secondary = interview.getSecondInterviewer() != null && userId.equals(interview.getSecondInterviewer().getId());
+        boolean cycleDirector = participantHasRole(interview, userId, Role.CYCLE_DIRECTOR);
+        boolean psychologist = participantHasRole(interview, userId, Role.PSYCHOLOGIST);
         return switch (interview.getInterviewType()) {
             case "FAMILY" -> primary || secondary ? List.of("FAMILY_INTERVIEW") : List.of();
-            case "CYCLE_DIRECTOR" -> primary
+            case "CYCLE_DIRECTOR" -> cycleDirector
                 ? List.of("CYCLE_DIRECTOR_INTERVIEW", "CYCLE_DIRECTOR_REPORT")
-                : secondary ? List.of("PSYCHOLOGICAL_INTERVIEW") : List.of();
+                : psychologist ? List.of("PSYCHOLOGICAL_INTERVIEW") : List.of();
             case "PSYCHOLOGICAL" -> primary || secondary ? List.of("PSYCHOLOGICAL_INTERVIEW") : List.of();
             default -> primary || secondary ? List.of(interview.getInterviewType()) : List.of();
         };
@@ -709,11 +711,37 @@ public class EvaluationService {
         cl.mtn.admitiabff.domain.interview.InterviewEntity interview,
         String evaluationType
     ) {
-        if ("CYCLE_DIRECTOR".equals(interview.getInterviewType())
-            && "PSYCHOLOGICAL_INTERVIEW".equals(evaluationType)) {
-            return interview.getSecondInterviewer();
+        if ("CYCLE_DIRECTOR".equals(interview.getInterviewType())) {
+            return switch (evaluationType) {
+                case "CYCLE_DIRECTOR_INTERVIEW", "CYCLE_DIRECTOR_REPORT" ->
+                    participantWithRole(interview, Role.CYCLE_DIRECTOR);
+                case "PSYCHOLOGICAL_INTERVIEW" -> participantWithRole(interview, Role.PSYCHOLOGIST);
+                default -> interview.getInterviewer();
+            };
         }
         return interview.getInterviewer();
+    }
+
+    private boolean participantHasRole(
+        cl.mtn.admitiabff.domain.interview.InterviewEntity interview,
+        Long userId,
+        Role role
+    ) {
+        UserEntity participant = participantWithRole(interview, role);
+        return participant != null && participant.getId().equals(userId);
+    }
+
+    private UserEntity participantWithRole(
+        cl.mtn.admitiabff.domain.interview.InterviewEntity interview,
+        Role role
+    ) {
+        if (interview.getInterviewer() != null && interview.getInterviewer().getRole() == role) {
+            return interview.getInterviewer();
+        }
+        if (interview.getSecondInterviewer() != null && interview.getSecondInterviewer().getRole() == role) {
+            return interview.getSecondInterviewer();
+        }
+        return null;
     }
 
 }

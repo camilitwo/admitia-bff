@@ -1,7 +1,10 @@
 package cl.mtn.admitiabff.service;
 
 import cl.mtn.admitiabff.domain.application.ApplicationEntity;
+import cl.mtn.admitiabff.domain.common.InterviewStatus;
 import cl.mtn.admitiabff.domain.common.Role;
+import cl.mtn.admitiabff.domain.interview.InterviewEntity;
+import cl.mtn.admitiabff.domain.interview.InterviewerPairEntity;
 import cl.mtn.admitiabff.domain.student.StudentEntity;
 import cl.mtn.admitiabff.domain.user.UserEntity;
 import cl.mtn.admitiabff.repository.ApplicationRepository;
@@ -88,6 +91,43 @@ class InterviewerPairServiceTest {
         assertEquals(false, InterviewService.isFamilyInterviewerRole(Role.CYCLE_DIRECTOR));
         assertEquals(false, InterviewService.isFamilyInterviewerRole(Role.PSYCHOLOGIST));
         assertEquals(false, InterviewService.isFamilyInterviewerRole(Role.TEACHER));
+    }
+
+    @Test
+    void normalizesHistoricalCycleDirectorInterviewWhenMembersAreInverted() {
+        InterviewerPairService service = service();
+        UserEntity director = user(11L, Role.CYCLE_DIRECTOR);
+        UserEntity psychologist = user(22L, Role.PSYCHOLOGIST);
+        StudentEntity student = new StudentEntity();
+        student.setGradeApplied("6_BASICO");
+        ApplicationEntity application = new ApplicationEntity();
+        application.setId(120L);
+        application.setStudent(student);
+
+        InterviewEntity interview = new InterviewEntity();
+        interview.setId(80L);
+        interview.setApplication(application);
+        interview.setInterviewType("CYCLE_DIRECTOR");
+        interview.setInterviewer(psychologist);
+        interview.setSecondInterviewer(director);
+        interview.setStatus(InterviewStatus.SCHEDULED);
+
+        InterviewerPairEntity pair = new InterviewerPairEntity();
+        pair.setId(7L);
+        pair.setCycleDirector(director);
+        pair.setPsychologist(psychologist);
+
+        when(interviewRepository.findAllByOrderByCreatedAtDesc()).thenReturn(List.of(interview));
+        when(pairRepository.findActiveByGrade("6_BASICO")).thenReturn(List.of(pair));
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> data = (Map<String, Object>) service.normalizeHistorical(false, null).get("data");
+
+        assertEquals(1L, data.get("linkable"));
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> items = (List<Map<String, Object>>) data.get("items");
+        assertEquals("WOULD_LINK", items.getFirst().get("action"));
+        assertEquals(7L, items.getFirst().get("pairId"));
     }
 
     private InterviewerPairService service() {

@@ -217,6 +217,35 @@ class InterviewServiceManualEntryTest {
     }
 
     @Test
+    void createsCycleDirectorFlowWhenDirectorIsSelectedFirst() {
+        firstInterviewer.setRole(Role.CYCLE_DIRECTOR);
+        secondInterviewer.setRole(Role.PSYCHOLOGIST);
+        when(userRepository.findById(99L)).thenReturn(Optional.of(admin));
+        when(interviewRepository.save(any(InterviewEntity.class))).thenAnswer(invocation -> {
+            InterviewEntity interview = invocation.getArgument(0);
+            interview.setId(904L);
+            return interview;
+        });
+        when(evaluationRepository.findByApplicationIdAndEvaluationType(any(), anyString()))
+            .thenReturn(Optional.empty());
+        when(evaluationRepository.save(any(EvaluationEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        service.createManual(request("CYCLE_DIRECTOR", true), 99L);
+
+        ArgumentCaptor<EvaluationEntity> evaluations = ArgumentCaptor.forClass(EvaluationEntity.class);
+        verify(evaluationRepository, org.mockito.Mockito.times(3)).save(evaluations.capture());
+        Map<String, Long> evaluatorByType = evaluations.getAllValues().stream().collect(
+            java.util.stream.Collectors.toMap(
+                EvaluationEntity::getEvaluationType,
+                evaluation -> evaluation.getEvaluator().getId()
+            )
+        );
+        assertEquals(firstInterviewer.getId(), evaluatorByType.get("CYCLE_DIRECTOR_INTERVIEW"));
+        assertEquals(firstInterviewer.getId(), evaluatorByType.get("CYCLE_DIRECTOR_REPORT"));
+        assertEquals(secondInterviewer.getId(), evaluatorByType.get("PSYCHOLOGICAL_INTERVIEW"));
+    }
+
+    @Test
     void rejectsCycleDirectorEntryWithoutRequiredRoles() {
         IllegalArgumentException error = assertThrows(
             IllegalArgumentException.class,
