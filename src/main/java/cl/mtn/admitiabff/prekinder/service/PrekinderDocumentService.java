@@ -178,7 +178,7 @@ public class PrekinderDocumentService {
                   FROM applications application
                   JOIN prekinder_process_configuration config ON config.process_id = application.process_id
                  WHERE application.application_id = :id
-                   AND config.required_documents ? :category
+                   AND config.required_documents @> to_jsonb(:category::text)
                 """, Map.of("id", applicationId, "category", category), Long.class);
             if (required != null && required > 0) return;
             throw PrekinderDomainException.forbidden("DOCUMENT_CATEGORY_NOT_REQUIRED",
@@ -188,7 +188,7 @@ public class PrekinderDocumentService {
             Long allowed = jdbc.queryForObject("""
                 SELECT count(*) FROM application_correction_requests request
                  WHERE request.application_id = :id AND request.status = 'OPEN'
-                   AND request.allowed_document_categories ? :category
+                   AND request.allowed_document_categories @> to_jsonb(:category::text)
                 """, Map.of("id", applicationId, "category", category), Long.class);
             if (allowed != null && allowed > 0) return;
         }
