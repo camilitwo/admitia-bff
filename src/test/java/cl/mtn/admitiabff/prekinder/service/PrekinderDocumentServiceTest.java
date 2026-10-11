@@ -71,4 +71,27 @@ class PrekinderDocumentServiceTest {
         assertThatCode(() -> service.validateUploadScope(applicationId, "MEDICAL_CERTIFICATE", admin))
             .doesNotThrowAnyException();
     }
+
+    @Test
+    void usesJsonbContainsOperatorForRequiredDocuments() {
+        when(jdbc.queryForObject(org.mockito.ArgumentMatchers.contains("to_jsonb"),
+            org.mockito.ArgumentMatchers.eq(Map.of("id", applicationId, "category", "BIRTH_CERTIFICATE")),
+            org.mockito.ArgumentMatchers.eq(Long.class))).thenReturn(1L);
+
+        assertThatCode(() -> service.validateUploadScope(applicationId, "BIRTH_CERTIFICATE", guardian))
+            .doesNotThrowAnyException();
+    }
+
+    @Test
+    void usesJsonbContainsOperatorForCorrectionAllowedCategories() {
+        when(jdbc.queryForObject(
+            "SELECT status FROM applications WHERE application_id = :id",
+            Map.of("id", applicationId), String.class)).thenReturn("REQUIRES_INFORMATION");
+        when(jdbc.queryForObject(org.mockito.ArgumentMatchers.contains("to_jsonb"),
+            org.mockito.ArgumentMatchers.eq(Map.of("id", applicationId, "category", "PHOTO")),
+            org.mockito.ArgumentMatchers.eq(Long.class))).thenReturn(1L);
+
+        assertThatCode(() -> service.validateUploadScope(applicationId, "PHOTO", guardian))
+            .doesNotThrowAnyException();
+    }
 }
