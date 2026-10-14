@@ -152,8 +152,25 @@ public interface ApplicationRepository extends JpaRepository<ApplicationEntity, 
         """)
     List<ApplicationEntity> findActiveByProcess(@Param("academicYear") Integer academicYear, @Param("processCode") String processCode);
 
+    @Query("""
+        select a.processCode as processCode, a.academicYear as academicYear, count(a) as total
+        from ApplicationEntity a
+        where a.deletedAt is null
+          and a.archived = false
+          and a.processCode is not null
+        group by a.processCode, a.academicYear
+        order by a.academicYear desc, a.processCode desc
+        """)
+    List<ProcessSummaryView> findOperationalProcesses();
+
     interface StatusCountView {
         ApplicationStatus getStatus();
+        long getTotal();
+    }
+
+    interface ProcessSummaryView {
+        String getProcessCode();
+        Integer getAcademicYear();
         long getTotal();
     }
 }

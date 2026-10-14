@@ -58,7 +58,7 @@ public class InterviewService {
     private final InterviewerPairService interviewerPairService;
     private final String activeProcessCode;
 
-    public InterviewService(InterviewRepository interviewRepository, InterviewerScheduleRepository scheduleRepository, ApplicationRepository applicationRepository, UserRepository userRepository, EvaluationRepository evaluationRepository, cl.mtn.admitiabff.service.notification.EmailComposerService emailComposerService, InterviewConfirmationService confirmationService, InterviewerPairService interviewerPairService, @Value("${app.admission.process-code:KIV-2027-02}") String activeProcessCode) {
+    public InterviewService(InterviewRepository interviewRepository, InterviewerScheduleRepository scheduleRepository, ApplicationRepository applicationRepository, UserRepository userRepository, EvaluationRepository evaluationRepository, cl.mtn.admitiabff.service.notification.EmailComposerService emailComposerService, InterviewConfirmationService confirmationService, InterviewerPairService interviewerPairService, @Value("${app.admission-cycle.process-code:KIV-2027-02}") String activeProcessCode) {
         this.interviewRepository = interviewRepository;
         this.scheduleRepository = scheduleRepository;
         this.applicationRepository = applicationRepository;
@@ -121,8 +121,13 @@ public class InterviewService {
     public Map<String, Object> byApplication(Long applicationId) { return wrap(interviewRepository.findByApplicationIdOrderByScheduledDateDesc(applicationId)); }
     public Map<String, Object> summaryStatus(Long applicationId) { return Map.of("success", true, "data", Map.of("applicationId", applicationId, "summarySent", interviewRepository.countByApplicationIdAndSummarySentTrue(applicationId) > 0)); }
     public Map<String, Object> byInterviewer(Long interviewerId) {
-        List<Map<String, Object>> data = interviewRepository.findVisibleForInterviewer(interviewerId, List.of(InterviewStatus.CANCELLED, InterviewStatus.RESCHEDULED)).stream().map(this::toResponse).toList();
-        return Map.of("success", true, "data", data, "count", data.size());
+        return byInterviewer(interviewerId, null);
+    }
+
+    public Map<String, Object> byInterviewer(Long interviewerId, String processCode) {
+        String effectiveProcess = effectiveProcessCode(processCode);
+        List<Map<String, Object>> data = interviewRepository.findVisibleForInterviewerByProcess(interviewerId, effectiveProcess, List.of(InterviewStatus.CANCELLED, InterviewStatus.RESCHEDULED)).stream().map(this::toResponse).toList();
+        return Map.of("success", true, "data", data, "count", data.size(), "processCode", effectiveProcess);
     }
 
     /**

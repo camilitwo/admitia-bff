@@ -129,11 +129,15 @@ class EvaluationServiceTest {
         psychological.setEvaluationType("PSYCHOLOGICAL_INTERVIEW");
         psychological.setStatus(EvaluationStatus.PENDING);
 
-        when(evaluationRepository.findByEvaluatorIdOrderByCreatedAtDesc(22L)).thenReturn(List.of(psychological));
-        when(interviewRepository.findVisibleForInterviewer(any(), any())).thenReturn(List.of(interview));
+        when(evaluationRepository.findByEvaluatorIdAndProcessCodeOrderByCreatedAtDesc(22L, "KIV-2027-02")).thenReturn(List.of(psychological));
+        when(interviewRepository.findVisibleForInterviewerByProcess(
+            22L,
+            "KIV-2027-02",
+            List.of(InterviewStatus.CANCELLED, InterviewStatus.RESCHEDULED, InterviewStatus.REJECTED_BY_FAMILY)
+        )).thenReturn(List.of(interview));
 
         EvaluationService service = service(evaluationRepository, interviewRepository, authService);
-        Map<String, Object> result = service.myEvaluations();
+        Map<String, Object> result = service.myEvaluations("KIV-2027-02");
         List<Map<String, Object>> data = (List<Map<String, Object>>) result.get("data");
 
         assertEquals(1, data.size());
@@ -248,11 +252,15 @@ class EvaluationServiceTest {
         EvaluationEntity directorInterview = evaluation(94L, application, director, "CYCLE_DIRECTOR_INTERVIEW");
         EvaluationEntity directorReport = evaluation(95L, application, director, "CYCLE_DIRECTOR_REPORT");
 
-        when(evaluationRepository.findByEvaluatorIdOrderByCreatedAtDesc(11L)).thenReturn(List.of(directorInterview, directorReport));
-        when(interviewRepository.findVisibleForInterviewer(any(), any())).thenReturn(List.of(interview));
+        when(evaluationRepository.findByEvaluatorIdAndProcessCodeOrderByCreatedAtDesc(11L, "KIV-2027-02")).thenReturn(List.of(directorInterview, directorReport));
+        when(interviewRepository.findVisibleForInterviewerByProcess(
+            11L,
+            "KIV-2027-02",
+            List.of(InterviewStatus.CANCELLED, InterviewStatus.RESCHEDULED, InterviewStatus.REJECTED_BY_FAMILY)
+        )).thenReturn(List.of(interview));
 
         EvaluationService service = service(evaluationRepository, interviewRepository, authService);
-        Map<String, Object> result = service.myEvaluations();
+        Map<String, Object> result = service.myEvaluations("KIV-2027-02");
         List<Map<String, Object>> data = (List<Map<String, Object>>) result.get("data");
 
         assertEquals(List.of("CYCLE_DIRECTOR_INTERVIEW", "CYCLE_DIRECTOR_REPORT"),

@@ -30,7 +30,7 @@ public class EvaluationsController {
     @GetMapping("/evaluator/{id}/completed") @PreAuthorize("hasRole('ADMIN')") public Map<String, Object> evaluatorCompleted(@PathVariable Long id) { return evaluationService.evaluatorCompleted(id); }
     @GetMapping("/type/{type}") @PreAuthorize("hasRole('ADMIN')") public Map<String, Object> byType(@PathVariable String type) { return evaluationService.byType(type); }
     @GetMapping("/subject/{subject}") @PreAuthorize("hasRole('ADMIN')") public Map<String, Object> bySubject(@PathVariable String subject) { return evaluationService.bySubject(subject); }
-    @GetMapping("/my-evaluations") public Map<String, Object> myEvaluations() { return evaluationService.myEvaluations(); }
+    @GetMapping("/my-evaluations") public Map<String, Object> myEvaluations(@RequestParam(required = false) String processCode) { return evaluationService.myEvaluations(processCode); }
     @GetMapping("/family-interview-template/{grade}") public Map<String, Object> familyInterviewTemplate(@PathVariable String grade) { return evaluationService.familyInterviewTemplate(grade); }
     @GetMapping("/{id}") public Map<String, Object> get(@PathVariable Long id) { return evaluationService.get(id); }
     @GetMapping("/{evaluationId}/family-interview-data") public Map<String, Object> familyInterviewData(@PathVariable Long evaluationId) { return evaluationService.familyInterviewData(evaluationId); }

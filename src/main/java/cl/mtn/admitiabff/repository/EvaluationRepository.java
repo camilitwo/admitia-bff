@@ -14,6 +14,8 @@ public interface EvaluationRepository extends JpaRepository<EvaluationEntity, Lo
     List<EvaluationEntity> findByApplicationIdOrderByCreatedAtDesc(Long applicationId);
     @Query("select e from EvaluationEntity e where e.evaluator.id = :evaluatorId and e.application.deletedAt is null and e.application.archived = false order by e.createdAt desc")
     List<EvaluationEntity> findByEvaluatorIdOrderByCreatedAtDesc(@Param("evaluatorId") Long evaluatorId);
+    @Query("select e from EvaluationEntity e where e.evaluator.id = :evaluatorId and e.application.deletedAt is null and e.application.archived = false and e.application.processCode = :processCode order by e.createdAt desc")
+    List<EvaluationEntity> findByEvaluatorIdAndProcessCodeOrderByCreatedAtDesc(@Param("evaluatorId") Long evaluatorId, @Param("processCode") String processCode);
     @Query("select e from EvaluationEntity e where e.evaluator.id = :evaluatorId and e.status in :statuses and e.application.deletedAt is null and e.application.archived = false order by e.createdAt desc")
     List<EvaluationEntity> findByEvaluatorIdAndStatusInOrderByCreatedAtDesc(@Param("evaluatorId") Long evaluatorId, @Param("statuses") List<EvaluationStatus> statuses);
     @Query("select e from EvaluationEntity e where e.evaluator.id = :evaluatorId and e.status = :status and e.application.deletedAt is null and e.application.archived = false order by e.createdAt desc")

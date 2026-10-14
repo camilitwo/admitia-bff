@@ -62,6 +62,7 @@ public class ApplicationsController {
         return applicationService.byUser(userId);
     }
     @GetMapping("/for-evaluation/{evaluatorId}") public Map<String, Object> forEvaluation(@PathVariable Long evaluatorId) { return applicationService.forEvaluation(evaluatorId); }
+    @GetMapping("/processes") public Map<String, Object> processes() { return applicationService.operationalProcesses(); }
     @GetMapping("/special-category/{category}") public Map<String, Object> specialCategory(@PathVariable String category) { return applicationService.specialCategory(category); }
     @GetMapping("/{id}") public Map<String, Object> get(@PathVariable Long id) { return applicationService.get(id); }
     @GetMapping("/{id}/documents") public Map<String, Object> documents(@PathVariable Long id) { return applicationService.documents(id); }

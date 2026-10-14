@@ -187,6 +187,32 @@ public class ApplicationService {
         return Map.of("success", true, "data", data, "count", data.size());
     }
 
+    public Map<String, Object> operationalProcesses() {
+        List<Map<String, Object>> data = new java.util.ArrayList<>();
+        data.add(new LinkedHashMap<>(Map.of(
+            "processCode", activeProcessCode,
+            "academicYear", activeAcademicYear,
+            "active", true,
+            "total", applicationRepository.countByDeletedAtIsNullAndArchivedFalseAndProcessCode(activeProcessCode)
+        )));
+        applicationRepository.findOperationalProcesses().stream()
+            .filter(process -> !activeProcessCode.equals(process.getProcessCode()))
+            .forEach(process -> {
+                Map<String, Object> item = new LinkedHashMap<>();
+                item.put("processCode", process.getProcessCode());
+                item.put("academicYear", process.getAcademicYear());
+                item.put("active", false);
+                item.put("total", process.getTotal());
+                data.add(item);
+            });
+        return Map.of(
+            "success", true,
+            "data", data,
+            "activeProcessCode", activeProcessCode,
+            "activeAcademicYear", activeAcademicYear
+        );
+    }
+
     public Map<String, Object> specialCategory(String category) {
         List<Map<String, Object>> data = applicationRepository.findBySpecialCategory(category.toLowerCase(), activeProcessCode).stream().map(this::toSummaryResponse).toList();
         return Map.of("success", true, "data", data, "count", data.size(), "category", category);

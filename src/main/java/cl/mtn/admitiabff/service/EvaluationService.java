@@ -63,6 +63,8 @@ public class EvaluationService {
     private final cl.mtn.admitiabff.service.notification.EmailComposerService emailComposerService;
     private final AuthService authService;
     private final JsonSupport jsonSupport;
+    @org.springframework.beans.factory.annotation.Value("${app.admission-cycle.process-code:KIV-2027-02}")
+    private String activeProcessCode = "KIV-2027-02";
 
     public EvaluationService(EvaluationRepository evaluationRepository, ApplicationRepository applicationRepository, InterviewRepository interviewRepository, UserRepository userRepository, cl.mtn.admitiabff.service.notification.EmailComposerService emailComposerService, AuthService authService, JsonSupport jsonSupport) {
         this.evaluationRepository = evaluationRepository;
@@ -119,9 +121,14 @@ public class EvaluationService {
     public Map<String, Object> byType(String type) { return wrap(evaluationRepository.findByEvaluationTypeOrderByCreatedAtDesc(type)); }
     public Map<String, Object> bySubject(String subject) { return wrap(evaluationRepository.findBySubjectOrderByCreatedAtDesc(subject)); }
     public Map<String, Object> myEvaluations() {
+        return myEvaluations(null);
+    }
+
+    public Map<String, Object> myEvaluations(String processCode) {
         AuthService.AuthContextHolder auth = authService.requireAuth();
         Long userId = auth.id();
-        List<EvaluationEntity> assignedEvaluations = evaluationRepository.findByEvaluatorIdOrderByCreatedAtDesc(userId);
+        String effectiveProcessCode = processCode == null || processCode.isBlank() ? activeProcessCode : processCode;
+        List<EvaluationEntity> assignedEvaluations = evaluationRepository.findByEvaluatorIdAndProcessCodeOrderByCreatedAtDesc(userId, effectiveProcessCode);
         List<Map<String, Object>> evaluations = new java.util.ArrayList<>(
             assignedEvaluations.stream().map(this::toResponse).toList()
         );
@@ -138,9 +145,9 @@ public class EvaluationService {
             InterviewStatus.RESCHEDULED,
             InterviewStatus.REJECTED_BY_FAMILY
         );
-        interviewRepository.findVisibleForInterviewer(userId, excluded).stream()
+        interviewRepository.findVisibleForInterviewerByProcess(userId, effectiveProcessCode, excluded).stream()
             .forEach(interview -> addLinkedInterviewEvaluations(evaluations, addedKeys, interview, userId));
-        return Map.of("success", true, "data", evaluations, "count", evaluations.size());
+        return Map.of("success", true, "data", evaluations, "count", evaluations.size(), "processCode", effectiveProcessCode);
     }
 
     private void addLinkedInterviewEvaluations(
