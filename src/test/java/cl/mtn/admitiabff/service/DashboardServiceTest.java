@@ -323,6 +323,31 @@ class DashboardServiceTest {
     }
 
     @Test
+    @DisplayName("applicantCard averages two completed family interview evaluations")
+    void applicantCardAveragesTwoIndependentFamilyEvaluations() {
+        ApplicationEntity app = application(31L);
+        EvaluationEntity first = completedFamilyEvaluation(401L, 10L, "first-family-json");
+        EvaluationEntity second = completedFamilyEvaluation(402L, 11L, "second-family-json");
+
+        when(applicationRepository.findActiveById(31L)).thenReturn(Optional.of(app));
+        when(evaluationRepository.findByApplicationIdOrderByCreatedAtDesc(31L)).thenReturn(List.of(first, second));
+        when(interviewRepository.findByApplicationIdOrderByScheduledDateDesc(31L)).thenReturn(List.of());
+        when(documentRepository.findByApplicationIdOrderByUploadDateDesc(31L)).thenReturn(List.of());
+        when(complementaryFormRepository.findByApplicationId(31L)).thenReturn(Optional.empty());
+        when(jsonSupport.readMap("first-family-json")).thenReturn(maximumFamilyInterviewData());
+        when(jsonSupport.readMap("second-family-json")).thenReturn(maximumFamilyInterviewData());
+
+        Map<String, Object> result = dashboardService.applicantCard(31L);
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> data = (Map<String, Object>) result.get("data");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> familyInterview = (Map<String, Object>) data.get("familyInterview");
+        assertEquals(2, familyInterview.get("count"));
+        assertEquals(new BigDecimal("100.00"), familyInterview.get("percentage"));
+    }
+
+    @Test
     @DisplayName("applicantCard keeps a legacy questionnaire attachment when no digital form exists")
     void testApplicantCardQuestionnaireNotStartedWithLegacyAttachment() {
         ApplicationEntity app = application(8L);
@@ -425,6 +450,35 @@ class DashboardServiceTest {
         student.setAdmissionPreference("NINGUNA");
         app.setStudent(student);
         return app;
+    }
+
+    private EvaluationEntity completedFamilyEvaluation(Long id, Long evaluatorId, String interviewData) {
+        UserEntity evaluator = new UserEntity();
+        evaluator.setId(evaluatorId);
+        evaluator.setFirstName("Entrevistador");
+        evaluator.setLastName(String.valueOf(evaluatorId));
+
+        EvaluationEntity evaluation = new EvaluationEntity();
+        evaluation.setId(id);
+        evaluation.setEvaluator(evaluator);
+        evaluation.setEvaluationType("FAMILY_INTERVIEW");
+        evaluation.setStatus(EvaluationStatus.COMPLETED);
+        evaluation.setFamilyInterviewScore(new BigDecimal("31.00"));
+        evaluation.setInterviewData(interviewData);
+        return evaluation;
+    }
+
+    private Map<String, Object> maximumFamilyInterviewData() {
+        return Map.of(
+            "section1", Map.of("q1", Map.of("score", 3), "q2", Map.of("score", 3), "q3", Map.of("score", 3)),
+            "section2", Map.of("q1", Map.of("score", 3), "q2", Map.of("score", 2)),
+            "section3", Map.of("q1", Map.of("score", 3)),
+            "section4", Map.of("q1", Map.of("score", 3)),
+            "observations", Map.of(
+                "checklist", Map.of("obs1", 1, "obs2", 2, "obs3", 2, "obs4", 1),
+                "overallOpinion", Map.of("score", 5)
+            )
+        );
     }
 
     private ComplementaryFormEntity questionnaireForm(ApplicationEntity app, boolean submitted) {

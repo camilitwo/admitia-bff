@@ -123,8 +123,6 @@ class InterviewServiceManualEntryTest {
             interview.setId(901L);
             return interview;
         });
-        when(evaluationRepository.findByApplicationIdAndEvaluationType(120L, "FAMILY_INTERVIEW"))
-            .thenReturn(Optional.empty());
         when(evaluationRepository.save(any(EvaluationEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
         Map<String, Object> response = service.createManual(request(true), 99L);
@@ -153,7 +151,15 @@ class InterviewServiceManualEntryTest {
         ).get("data");
         assertEquals(List.of(901L), applicationInterviews.stream().map(item -> item.get("id")).toList());
         assertEquals(List.of(901L), calendarInterviews.stream().map(item -> item.get("id")).toList());
-        verify(evaluationRepository).save(any(EvaluationEntity.class));
+        ArgumentCaptor<EvaluationEntity> familyEvaluations = ArgumentCaptor.forClass(EvaluationEntity.class);
+        verify(evaluationRepository, org.mockito.Mockito.times(2)).save(familyEvaluations.capture());
+        assertEquals(
+            List.of(firstInterviewer.getId(), secondInterviewer.getId()),
+            familyEvaluations.getAllValues().stream()
+                .map(evaluation -> evaluation.getEvaluator().getId())
+                .sorted()
+                .toList()
+        );
         verifyNoInteractions(emailComposerService);
     }
 
@@ -165,8 +171,6 @@ class InterviewServiceManualEntryTest {
             interview.setId(903L);
             return interview;
         });
-        when(evaluationRepository.findByApplicationIdAndEvaluationType(120L, "FAMILY_INTERVIEW"))
-            .thenReturn(Optional.empty());
         when(evaluationRepository.save(any(EvaluationEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
         Map<String, Object> response = service.createManual(request("FAMILY", true, true), 99L);
@@ -285,18 +289,25 @@ class InterviewServiceManualEntryTest {
         interview.setMode("IN_PERSON");
         interview.setStatus(InterviewStatus.CANCELLED);
 
-        EvaluationEntity evaluation = new EvaluationEntity();
-        evaluation.setId(77L);
-        evaluation.setApplication(application);
-        evaluation.setEvaluationType("FAMILY_INTERVIEW");
-        evaluation.setEvaluator(firstInterviewer);
-        evaluation.setEvaluationDate(LocalDate.of(2026, 8, 31).atTime(9, 0));
-        evaluation.setStatus(EvaluationStatus.CANCELLED);
+        EvaluationEntity firstEvaluation = new EvaluationEntity();
+        firstEvaluation.setId(77L);
+        firstEvaluation.setApplication(application);
+        firstEvaluation.setEvaluationType("FAMILY_INTERVIEW");
+        firstEvaluation.setEvaluator(firstInterviewer);
+        firstEvaluation.setEvaluationDate(LocalDate.of(2026, 8, 31).atTime(9, 0));
+        firstEvaluation.setStatus(EvaluationStatus.CANCELLED);
+        EvaluationEntity secondEvaluation = new EvaluationEntity();
+        secondEvaluation.setId(78L);
+        secondEvaluation.setApplication(application);
+        secondEvaluation.setEvaluationType("FAMILY_INTERVIEW");
+        secondEvaluation.setEvaluator(secondInterviewer);
+        secondEvaluation.setEvaluationDate(LocalDate.of(2026, 8, 31).atTime(9, 0));
+        secondEvaluation.setStatus(EvaluationStatus.CANCELLED);
 
         when(interviewRepository.findById(910L)).thenReturn(Optional.of(interview));
         when(interviewRepository.save(interview)).thenReturn(interview);
-        when(evaluationRepository.findByApplicationIdAndEvaluationType(120L, "FAMILY_INTERVIEW"))
-            .thenReturn(Optional.of(evaluation));
+        when(evaluationRepository.findFamilyInterviewByApplicationId(120L))
+            .thenReturn(List.of(firstEvaluation, secondEvaluation));
 
         service.reschedule(910L, Map.of(
             "scheduledDate", "2026-09-01",
@@ -307,9 +318,12 @@ class InterviewServiceManualEntryTest {
 
         assertEquals(InterviewStatus.SCHEDULED, interview.getStatus());
         assertNull(interview.getConfirmationStatus());
-        assertEquals(replacementInterviewer, evaluation.getEvaluator());
-        assertEquals(LocalDate.of(2026, 9, 1).atTime(10, 30), evaluation.getEvaluationDate());
-        assertEquals(EvaluationStatus.PENDING, evaluation.getStatus());
+        assertEquals(replacementInterviewer, firstEvaluation.getEvaluator());
+        assertEquals(secondInterviewer, secondEvaluation.getEvaluator());
+        assertEquals(LocalDate.of(2026, 9, 1).atTime(10, 30), firstEvaluation.getEvaluationDate());
+        assertEquals(LocalDate.of(2026, 9, 1).atTime(10, 30), secondEvaluation.getEvaluationDate());
+        assertEquals(EvaluationStatus.PENDING, firstEvaluation.getStatus());
+        assertEquals(EvaluationStatus.PENDING, secondEvaluation.getStatus());
 
         ArgumentCaptor<EmailRequestDTO> emails = ArgumentCaptor.forClass(EmailRequestDTO.class);
         verify(emailComposerService, org.mockito.Mockito.times(2)).send(emails.capture());
@@ -330,24 +344,31 @@ class InterviewServiceManualEntryTest {
         interview.setSecondInterviewer(secondInterviewer);
         interview.setStatus(InterviewStatus.SCHEDULED);
 
-        EvaluationEntity evaluation = new EvaluationEntity();
-        evaluation.setId(78L);
-        evaluation.setApplication(application);
-        evaluation.setEvaluationType("FAMILY_INTERVIEW");
-        evaluation.setEvaluator(firstInterviewer);
-        evaluation.setStatus(EvaluationStatus.IN_PROGRESS);
+        EvaluationEntity firstEvaluation = new EvaluationEntity();
+        firstEvaluation.setId(78L);
+        firstEvaluation.setApplication(application);
+        firstEvaluation.setEvaluationType("FAMILY_INTERVIEW");
+        firstEvaluation.setEvaluator(firstInterviewer);
+        firstEvaluation.setStatus(EvaluationStatus.IN_PROGRESS);
+        EvaluationEntity secondEvaluation = new EvaluationEntity();
+        secondEvaluation.setId(79L);
+        secondEvaluation.setApplication(application);
+        secondEvaluation.setEvaluationType("FAMILY_INTERVIEW");
+        secondEvaluation.setEvaluator(secondInterviewer);
+        secondEvaluation.setStatus(EvaluationStatus.PENDING);
 
         when(interviewRepository.findById(911L)).thenReturn(Optional.of(interview));
         when(interviewRepository.save(interview)).thenReturn(interview);
-        when(evaluationRepository.findByApplicationIdAndEvaluationType(120L, "FAMILY_INTERVIEW"))
-            .thenReturn(Optional.of(evaluation));
+        when(evaluationRepository.findFamilyInterviewByApplicationId(120L))
+            .thenReturn(List.of(firstEvaluation, secondEvaluation));
 
         service.cancel(911L, Map.of("reason", "Cambio solicitado por la familia"));
 
         assertEquals(InterviewStatus.CANCELLED, interview.getStatus());
-        assertEquals(EvaluationStatus.CANCELLED, evaluation.getStatus());
+        assertEquals(EvaluationStatus.CANCELLED, firstEvaluation.getStatus());
+        assertEquals(EvaluationStatus.CANCELLED, secondEvaluation.getStatus());
         assertTrue(interview.getNotes().contains("Cambio solicitado"));
-        verify(evaluationRepository).save(evaluation);
+        verify(evaluationRepository, org.mockito.Mockito.times(2)).save(any(EvaluationEntity.class));
     }
 
     private ManualInterviewCreateRequest request(boolean confirmWarnings) {

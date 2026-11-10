@@ -232,9 +232,16 @@ public class EvaluationService {
             : evaluationTypesForUser(interview, auth.id());
         List<Map<String, Object>> data = accessibleTypes.stream()
             .map(evaluationType -> {
-                UserEntity expectedEvaluator = expectedEvaluator(interview, evaluationType);
-                EvaluationEntity evaluation = evaluationRepository
-                    .findByApplicationIdAndEvaluationType(interview.getApplication().getId(), evaluationType)
+                boolean familyEvaluation = "FAMILY_INTERVIEW".equals(evaluationType);
+                UserEntity expectedEvaluator = familyEvaluation && !authService.isAdminContext(auth)
+                    ? participantForUser(interview, auth.id())
+                    : expectedEvaluator(interview, evaluationType);
+                java.util.Optional<EvaluationEntity> existing = familyEvaluation && expectedEvaluator != null
+                    ? evaluationRepository.findByApplicationIdAndEvaluationTypeAndEvaluatorId(
+                        interview.getApplication().getId(), evaluationType, expectedEvaluator.getId())
+                    : evaluationRepository.findByApplicationIdAndEvaluationType(
+                        interview.getApplication().getId(), evaluationType);
+                EvaluationEntity evaluation = existing
                     .orElseGet(() -> {
                         EvaluationEntity created = new EvaluationEntity();
                         created.setApplication(interview.getApplication());
@@ -484,6 +491,9 @@ public class EvaluationService {
         EvaluationEntity entity = load(id);
         if (authService.isAdminContext(auth)) return entity;
         if (entity.getEvaluator() != null && entity.getEvaluator().getId().equals(auth.id())) return entity;
+        if ("FAMILY_INTERVIEW".equals(entity.getEvaluationType()) && entity.getEvaluator() != null) {
+            throw new AccessDeniedException("La evaluación familiar pertenece a otro entrevistador");
+        }
 
         Long applicationId = entity.getApplication() == null ? null : entity.getApplication().getId();
         boolean linkedToUser = applicationId != null
@@ -746,6 +756,19 @@ public class EvaluationService {
             return interview.getInterviewer();
         }
         if (interview.getSecondInterviewer() != null && interview.getSecondInterviewer().getRole() == role) {
+            return interview.getSecondInterviewer();
+        }
+        return null;
+    }
+
+    private UserEntity participantForUser(
+        cl.mtn.admitiabff.domain.interview.InterviewEntity interview,
+        Long userId
+    ) {
+        if (interview.getInterviewer() != null && userId.equals(interview.getInterviewer().getId())) {
+            return interview.getInterviewer();
+        }
+        if (interview.getSecondInterviewer() != null && userId.equals(interview.getSecondInterviewer().getId())) {
             return interview.getSecondInterviewer();
         }
         return null;

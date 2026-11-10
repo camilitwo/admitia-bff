@@ -851,12 +851,12 @@ public class DashboardService {
             BigDecimal checklistScore = components.checklist;
             BigDecimal opinionScore = components.opinion;
 
-            // Weighted formula: (sections/40)*0.9 + (observations/22)*0.1) * 100
-            // sections: sum of 4 sections, max 40 (10 pts each); observations: checklist + opinion, max 22
+            // Each interviewer completes an independent rubric: sections max 20,
+            // observations max 11. The caller averages the resulting percentages.
             BigDecimal observationsScore = checklistScore.add(opinionScore);
-            BigDecimal sectionsContribution = sectionsScore.divide(BigDecimal.valueOf(40), 6, java.math.RoundingMode.HALF_UP)
+            BigDecimal sectionsContribution = sectionsScore.divide(BigDecimal.valueOf(20), 6, java.math.RoundingMode.HALF_UP)
                 .multiply(BigDecimal.valueOf(0.9));
-            BigDecimal observationsContribution = observationsScore.divide(BigDecimal.valueOf(22), 6, java.math.RoundingMode.HALF_UP)
+            BigDecimal observationsContribution = observationsScore.divide(BigDecimal.valueOf(11), 6, java.math.RoundingMode.HALF_UP)
                 .multiply(BigDecimal.valueOf(0.1));
 
             BigDecimal percentage = sectionsContribution.add(observationsContribution)
@@ -890,6 +890,8 @@ public class DashboardService {
                 for (Object value : checklistMap.values()) {
                     if (value instanceof Boolean bool && bool) {
                         checklist = checklist.add(BigDecimal.ONE);
+                    } else if (value instanceof Number number) {
+                        checklist = checklist.add(BigDecimal.valueOf(number.doubleValue()));
                     }
                 }
             }
