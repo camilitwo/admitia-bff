@@ -876,7 +876,10 @@ public class InterviewService {
         if (interview.getInterviewType() == null || interview.getApplication() == null) return;
 
         switch (interview.getInterviewType()) {
-            case "FAMILY" -> createEvaluationIfNotExists(interview, "FAMILY_INTERVIEW");
+            case "FAMILY" -> {
+                createFamilyEvaluationIfNotExists(interview, interview.getInterviewer());
+                createFamilyEvaluationIfNotExists(interview, interview.getSecondInterviewer());
+            }
             case "CYCLE_DIRECTOR" -> {
                 // El par trabaja el mismo caso desde sus dos portales.
                 createEvaluationIfNotExists(interview, "CYCLE_DIRECTOR_INTERVIEW", cycleDirector(interview));
@@ -892,7 +895,7 @@ public class InterviewService {
         if (interview.getInterviewType() == null || interview.getApplication() == null) return;
 
         switch (interview.getInterviewType()) {
-            case "FAMILY" -> syncEvaluationForInterview(interview, "FAMILY_INTERVIEW", interview.getInterviewer());
+            case "FAMILY" -> syncFamilyEvaluationsForRescheduledInterview(interview);
             case "CYCLE_DIRECTOR" -> {
                 syncEvaluationForInterview(interview, "CYCLE_DIRECTOR_INTERVIEW", cycleDirector(interview));
                 syncEvaluationForInterview(interview, "CYCLE_DIRECTOR_REPORT", cycleDirector(interview));
@@ -925,8 +928,46 @@ public class InterviewService {
         }
     }
 
+    private void syncFamilyEvaluationsForRescheduledInterview(InterviewEntity interview) {
+        List<EvaluationEntity> evaluations = new java.util.ArrayList<>(
+            evaluationRepository.findFamilyInterviewByApplicationId(interview.getApplication().getId())
+        );
+        List<UserEntity> interviewers = List.of(interview.getInterviewer(), interview.getSecondInterviewer());
+
+        for (UserEntity interviewer : interviewers) {
+            EvaluationEntity evaluation = evaluations.stream()
+                .filter(candidate -> candidate.getEvaluator() != null
+                    && interviewer.getId().equals(candidate.getEvaluator().getId()))
+                .findFirst()
+                .orElseGet(() -> evaluations.stream()
+                    .filter(candidate -> candidate.getStatus() != EvaluationStatus.COMPLETED)
+                    .filter(candidate -> interviewers.stream().noneMatch(current ->
+                        candidate.getEvaluator() != null && current.getId().equals(candidate.getEvaluator().getId())))
+                    .findFirst()
+                    .orElse(null));
+
+            if (evaluation == null) {
+                createFamilyEvaluationIfNotExists(interview, interviewer);
+                continue;
+            }
+            if (applyInterviewAssignment(evaluation, interview, interviewer)) {
+                evaluationRepository.save(evaluation);
+            }
+            evaluations.remove(evaluation);
+        }
+    }
+
     private void cancelPendingInterviewEvaluations(InterviewEntity interview) {
         if (interview.getInterviewType() == null || interview.getApplication() == null) return;
+        if ("FAMILY".equals(interview.getInterviewType())) {
+            evaluationRepository.findFamilyInterviewByApplicationId(interview.getApplication().getId()).stream()
+                .filter(evaluation -> evaluation.getStatus() != EvaluationStatus.COMPLETED)
+                .forEach(evaluation -> {
+                    evaluation.setStatus(EvaluationStatus.CANCELLED);
+                    evaluationRepository.save(evaluation);
+                });
+            return;
+        }
         evaluationTypesForInterview(interview).forEach(evaluationType ->
             evaluationRepository.findByApplicationIdAndEvaluationType(interview.getApplication().getId(), evaluationType)
                 .filter(evaluation -> evaluation.getStatus() != EvaluationStatus.COMPLETED)
@@ -948,6 +989,29 @@ public class InterviewService {
 
     private void createEvaluationIfNotExists(InterviewEntity interview, String evaluationType) {
         createEvaluationIfNotExists(interview, evaluationType, interview.getInterviewer());
+    }
+
+    private void createFamilyEvaluationIfNotExists(InterviewEntity interview, UserEntity evaluator) {
+        if (evaluator == null) return;
+
+        var existing = evaluationRepository.findByApplicationIdAndEvaluationTypeAndEvaluatorId(
+            interview.getApplication().getId(),
+            "FAMILY_INTERVIEW",
+            evaluator.getId()
+        );
+        if (existing.isPresent()) {
+            EvaluationEntity evaluation = existing.get();
+            boolean changed = applyInterviewAssignment(evaluation, interview, evaluator);
+            if (changed) evaluationRepository.save(evaluation);
+            return;
+        }
+
+        EvaluationEntity evaluation = new EvaluationEntity();
+        evaluation.setApplication(interview.getApplication());
+        evaluation.setEvaluationType("FAMILY_INTERVIEW");
+        evaluation.setStatus(EvaluationStatus.PENDING);
+        applyInterviewAssignment(evaluation, interview, evaluator);
+        evaluationRepository.save(evaluation);
     }
 
     private void createEvaluationIfNotExists(InterviewEntity interview,

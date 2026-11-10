@@ -169,6 +169,35 @@ class EvaluationServiceTest {
     }
 
     @Test
+    void familyInterviewerCannotUpdateTheOtherInterviewersEvaluation() {
+        EvaluationRepository evaluationRepository = mock(EvaluationRepository.class);
+        InterviewRepository interviewRepository = mock(InterviewRepository.class);
+        AuthService authService = mock(AuthService.class);
+        when(authService.requireAuth()).thenReturn(new AuthService.AuthContextHolder(22L, "segunda@mtn.cl", "INTERVIEWER"));
+
+        ApplicationEntity application = new ApplicationEntity();
+        application.setId(70L);
+        UserEntity firstInterviewer = user(11L, Role.INTERVIEWER);
+        UserEntity secondInterviewer = user(22L, Role.INTERVIEWER);
+
+        EvaluationEntity firstEvaluation = evaluation(91L, application, firstInterviewer, "FAMILY_INTERVIEW");
+        when(evaluationRepository.findById(91L)).thenReturn(Optional.of(firstEvaluation));
+
+        InterviewEntity interview = new InterviewEntity();
+        interview.setApplication(application);
+        interview.setInterviewType("FAMILY");
+        interview.setInterviewer(firstInterviewer);
+        interview.setSecondInterviewer(secondInterviewer);
+        interview.setStatus(InterviewStatus.SCHEDULED);
+        when(interviewRepository.findByApplicationIdOrderByScheduledDateDesc(70L)).thenReturn(List.of(interview));
+
+        EvaluationService service = service(evaluationRepository, interviewRepository, authService);
+
+        assertThrows(AccessDeniedException.class,
+            () -> service.saveFamilyInterviewData(91L, Map.of("interviewData", Map.of())));
+    }
+
+    @Test
     void evaluatorCannotChangeAssignmentFieldsOnOwnEvaluation() {
         EvaluationRepository evaluationRepository = mock(EvaluationRepository.class);
         InterviewRepository interviewRepository = mock(InterviewRepository.class);
@@ -227,6 +256,40 @@ class EvaluationServiceTest {
         assertEquals("PSYCHOLOGICAL_INTERVIEW", data.getFirst().get("type"));
         assertEquals(22L, data.getFirst().get("evaluatorId"));
         assertEquals(22L, evaluator.get("id"));
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void familyEnsureReturnsTheAuthenticatedInterviewersOwnEvaluation() {
+        EvaluationRepository evaluationRepository = mock(EvaluationRepository.class);
+        InterviewRepository interviewRepository = mock(InterviewRepository.class);
+        AuthService authService = mock(AuthService.class);
+        when(authService.requireAuth()).thenReturn(new AuthService.AuthContextHolder(22L, "segunda@mtn.cl", "INTERVIEWER"));
+
+        UserEntity firstInterviewer = user(11L, Role.INTERVIEWER);
+        UserEntity secondInterviewer = user(22L, Role.INTERVIEWER);
+        ApplicationEntity application = new ApplicationEntity();
+        application.setId(70L);
+        InterviewEntity interview = new InterviewEntity();
+        interview.setId(80L);
+        interview.setApplication(application);
+        interview.setInterviewType("FAMILY");
+        interview.setInterviewer(firstInterviewer);
+        interview.setSecondInterviewer(secondInterviewer);
+        interview.setStatus(InterviewStatus.SCHEDULED);
+
+        EvaluationEntity secondEvaluation = evaluation(99L, application, secondInterviewer, "FAMILY_INTERVIEW");
+        when(interviewRepository.findById(80L)).thenReturn(Optional.of(interview));
+        when(evaluationRepository.findByApplicationIdAndEvaluationTypeAndEvaluatorId(70L, "FAMILY_INTERVIEW", 22L))
+            .thenReturn(Optional.of(secondEvaluation));
+
+        EvaluationService service = service(evaluationRepository, interviewRepository, authService);
+        Map<String, Object> result = service.ensureInterviewEvaluations(80L);
+        List<Map<String, Object>> data = (List<Map<String, Object>>) result.get("data");
+
+        assertEquals(1, data.size());
+        assertEquals(99L, data.getFirst().get("id"));
+        assertEquals(22L, data.getFirst().get("evaluatorId"));
     }
 
     @Test
