@@ -383,11 +383,13 @@ public class DashboardService {
     private Map<String, Object> finalFamilyEvaluation(List<ApplicationEntity> applications) {
         // Get all evaluations from all applications in the family, deduplicated by id
         Set<Long> seenEvalIds = new java.util.HashSet<>();
-        List<EvaluationEntity> familyEvals = applications.stream()
+        List<EvaluationEntity> allFamilyEvals = applications.stream()
             .flatMap(application -> evaluationRepository.findByApplicationIdOrderByCreatedAtDesc(application.getId()).stream())
             .filter(item -> "FAMILY_INTERVIEW".equals(item.getEvaluationType()))
-            .filter(item -> item.getStatus() == EvaluationStatus.COMPLETED)
             .filter(item -> seenEvalIds.add(item.getId()))
+            .toList();
+        List<EvaluationEntity> familyEvals = allFamilyEvals.stream()
+            .filter(item -> item.getStatus() == EvaluationStatus.COMPLETED)
             .toList();
 
         Map<String, Object> result = new LinkedHashMap<>();
@@ -397,44 +399,66 @@ public class DashboardService {
         result.put("rating", null);
         result.put("justification", null);
         result.put("evaluationId", null);
+        result.put("completedCount", 0);
+        result.put("expectedCount", allFamilyEvals.size());
+        result.put("sectionScore", null);
+        result.put("sectionMaxScore", null);
 
         if (familyEvals.isEmpty()) return result;
 
         try {
-            // Sum sections and observations across all interviewers
-            BigDecimal totalSections = BigDecimal.ZERO;
+            // Normalize every rubric before averaging so legacy forms (/40)
+            // and the new grade-filtered forms (/20) can coexist safely.
+            BigDecimal totalNormalizedSections = BigDecimal.ZERO;
+            BigDecimal totalRawSections = BigDecimal.ZERO;
             BigDecimal totalObservations = BigDecimal.ZERO;
             BigDecimal totalOpinion = BigDecimal.ZERO;
+            BigDecimal totalPercentage = BigDecimal.ZERO;
+            BigDecimal commonSectionMaximum = null;
+            boolean mixedSectionMaximums = false;
             int validEvalCount = 0;
 
             for (EvaluationEntity eval : familyEvals) {
                 if (eval.getInterviewData() == null || eval.getInterviewData().isBlank()) continue;
                 Map<String, Object> data = jsonSupport.readMap(eval.getInterviewData());
                 FamilyInterviewComponents components = extractFamilyInterviewComponents(data);
-                totalSections = totalSections.add(components.sections());
+                BigDecimal sectionMaximum = familyInterviewSectionMaximum(data, components.sections());
+                totalRawSections = totalRawSections.add(components.sections());
+                if (commonSectionMaximum == null) {
+                    commonSectionMaximum = sectionMaximum;
+                } else if (commonSectionMaximum.compareTo(sectionMaximum) != 0) {
+                    mixedSectionMaximums = true;
+                }
+                totalNormalizedSections = totalNormalizedSections.add(
+                    components.sections().multiply(BigDecimal.valueOf(40))
+                        .divide(sectionMaximum, 6, java.math.RoundingMode.HALF_UP)
+                );
                 BigDecimal obs = components.checklist().add(components.opinion());
                 totalObservations = totalObservations.add(obs);
                 totalOpinion = totalOpinion.add(components.opinion());
+                totalPercentage = totalPercentage.add(calculateFamilyInterviewPercentage(components, sectionMaximum));
                 validEvalCount++;
             }
 
-            // percentage: formula adapts based on number of evaluators
-            // 1 evaluator: (sections/20)*0.9 + (observations/11)*0.1
-            // 2 evaluators (sum): (totalSections/40)*0.9 + (totalObservations/22)*0.1
-            int sectionsMax = validEvalCount == 1 ? 20 : 40;
-            int observationsMax = validEvalCount == 1 ? 11 : 22;
-            BigDecimal sectionsContribution = totalSections.divide(BigDecimal.valueOf(sectionsMax), 6, java.math.RoundingMode.HALF_UP)
-                .multiply(BigDecimal.valueOf(0.9));
-            BigDecimal observationsContribution = totalObservations.divide(BigDecimal.valueOf(observationsMax), 6, java.math.RoundingMode.HALF_UP)
-                .multiply(BigDecimal.valueOf(0.1));
-            BigDecimal percentage = sectionsContribution.add(observationsContribution)
-                .multiply(BigDecimal.valueOf(100))
-                .setScale(2, java.math.RoundingMode.HALF_UP);
+            if (validEvalCount == 0) return result;
 
-            result.put("percentage", percentage);
-            result.put("score40", totalSections);
-            result.put("score11", totalObservations);
-            result.put("rating", validEvalCount > 0 ? totalOpinion.divide(BigDecimal.valueOf(validEvalCount), 2, java.math.RoundingMode.HALF_UP) : null);
+            BigDecimal count = BigDecimal.valueOf(validEvalCount);
+            BigDecimal sectionScore;
+            BigDecimal sectionMaxScore;
+            if (mixedSectionMaximums) {
+                sectionScore = totalNormalizedSections.divide(count, 2, java.math.RoundingMode.HALF_UP);
+                sectionMaxScore = BigDecimal.valueOf(40);
+            } else {
+                sectionScore = totalRawSections.divide(count, 2, java.math.RoundingMode.HALF_UP);
+                sectionMaxScore = commonSectionMaximum;
+            }
+            result.put("percentage", totalPercentage.divide(count, 2, java.math.RoundingMode.HALF_UP));
+            result.put("score40", totalNormalizedSections.divide(count, 2, java.math.RoundingMode.HALF_UP));
+            result.put("score11", totalObservations.divide(count, 2, java.math.RoundingMode.HALF_UP));
+            result.put("rating", totalOpinion.divide(count, 2, java.math.RoundingMode.HALF_UP));
+            result.put("completedCount", validEvalCount);
+            result.put("sectionScore", sectionScore);
+            result.put("sectionMaxScore", sectionMaxScore);
             result.put("justification", extractJustification(familyEvals));
             result.put("evaluationId", familyEvals.get(0).getId());
         } catch (Exception ignored) {
@@ -850,23 +874,47 @@ public class DashboardService {
             BigDecimal sectionsScore = components.sections;
             BigDecimal checklistScore = components.checklist;
             BigDecimal opinionScore = components.opinion;
-
-            // Each interviewer completes an independent rubric: sections max 20,
-            // observations max 11. The caller averages the resulting percentages.
-            BigDecimal observationsScore = checklistScore.add(opinionScore);
-            BigDecimal sectionsContribution = sectionsScore.divide(BigDecimal.valueOf(20), 6, java.math.RoundingMode.HALF_UP)
-                .multiply(BigDecimal.valueOf(0.9));
-            BigDecimal observationsContribution = observationsScore.divide(BigDecimal.valueOf(11), 6, java.math.RoundingMode.HALF_UP)
-                .multiply(BigDecimal.valueOf(0.1));
-
-            BigDecimal percentage = sectionsContribution.add(observationsContribution)
-                .multiply(BigDecimal.valueOf(100))
-                .setScale(2, java.math.RoundingMode.HALF_UP);
-
-            return percentage;
+            BigDecimal sectionMaximum = familyInterviewSectionMaximum(data, sectionsScore);
+            return calculateFamilyInterviewPercentage(
+                new FamilyInterviewComponents(sectionsScore, checklistScore, opinionScore),
+                sectionMaximum
+            );
         } catch (Exception e) {
             return null;
         }
+    }
+
+    private BigDecimal calculateFamilyInterviewPercentage(
+        FamilyInterviewComponents components,
+        BigDecimal sectionMaximum
+    ) {
+        BigDecimal observationsScore = components.checklist().add(components.opinion());
+        BigDecimal sectionsContribution = components.sections().divide(sectionMaximum, 6, java.math.RoundingMode.HALF_UP)
+            .multiply(BigDecimal.valueOf(0.9));
+        BigDecimal observationsContribution = observationsScore.divide(BigDecimal.valueOf(11), 6, java.math.RoundingMode.HALF_UP)
+            .multiply(BigDecimal.valueOf(0.1));
+
+        return sectionsContribution.add(observationsContribution)
+            .multiply(BigDecimal.valueOf(100))
+            .min(BigDecimal.valueOf(100))
+            .setScale(2, java.math.RoundingMode.HALF_UP);
+    }
+
+    private BigDecimal familyInterviewSectionMaximum(Map<String, Object> data, BigDecimal sectionsScore) {
+        if (sectionsScore.compareTo(BigDecimal.valueOf(20)) > 0 || usesLegacyFullFamilyTemplate(data)) {
+            return BigDecimal.valueOf(40);
+        }
+        return BigDecimal.valueOf(20);
+    }
+
+    private boolean usesLegacyFullFamilyTemplate(Map<String, Object> data) {
+        Object section1 = data.get("section1");
+        if (!(section1 instanceof Map<?, ?> questions)) return false;
+        boolean hasBothQuestion2Variants = questions.containsKey("q2_prekinder_2basico")
+            && questions.containsKey("q2_3basico_4medio");
+        boolean hasBothQuestion3Variants = questions.containsKey("q3_prekinder_4basico")
+            && questions.containsKey("q3_5basico_3medio");
+        return hasBothQuestion2Variants || hasBothQuestion3Variants;
     }
 
     private FamilyInterviewComponents extractFamilyInterviewComponents(Map<String, Object> data) {

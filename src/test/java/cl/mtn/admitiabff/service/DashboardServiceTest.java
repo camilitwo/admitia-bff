@@ -179,10 +179,96 @@ class DashboardServiceTest {
         assertEquals(2, data.get(0).get("siblingGroupSize"));
         @SuppressWarnings("unchecked")
         Map<String, Object> familyEvaluation = (Map<String, Object>) data.get(0).get("familyEvaluation");
-        assertEquals(new BigDecimal("7.0"), familyEvaluation.get("score40"));
-        assertEquals(new BigDecimal("5.0"), familyEvaluation.get("score11"));
+        assertEquals(new BigDecimal("14.00"), familyEvaluation.get("score40"));
+        assertEquals(new BigDecimal("5.00"), familyEvaluation.get("score11"));
         assertEquals(new BigDecimal("4.00"), familyEvaluation.get("rating"));
+        assertEquals(1, familyEvaluation.get("completedCount"));
+        assertEquals(1, familyEvaluation.get("expectedCount"));
+        assertEquals(new BigDecimal("7.00"), familyEvaluation.get("sectionScore"));
+        assertEquals(new BigDecimal("20"), familyEvaluation.get("sectionMaxScore"));
         assertEquals("Familia alineada con el proyecto", familyEvaluation.get("justification"));
+    }
+
+    @Test
+    @DisplayName("finalSummary normalizes legacy family evaluations without exceeding 100 percent")
+    void finalSummaryUsesLegacyFortyPointMaximum() {
+        ApplicationEntity app = application(24L);
+        app.setAcademicYear(2027);
+
+        EvaluationEntity interview = new EvaluationEntity();
+        interview.setId(301L);
+        interview.setEvaluationType("FAMILY_INTERVIEW");
+        interview.setStatus(EvaluationStatus.COMPLETED);
+        interview.setInterviewData("legacy-family-json");
+
+        EvaluationEntity pendingInterview = new EvaluationEntity();
+        pendingInterview.setId(304L);
+        pendingInterview.setEvaluationType("FAMILY_INTERVIEW");
+        pendingInterview.setStatus(EvaluationStatus.PENDING);
+
+        when(applicationRepository.findAll()).thenReturn(List.of(app));
+        when(evaluationRepository.findByApplicationIdOrderByCreatedAtDesc(24L)).thenReturn(List.of(pendingInterview, interview));
+        when(jsonSupport.readMap("legacy-family-json")).thenReturn(Map.of(
+            "section1", Map.of(
+                "q1", Map.of("score", 3),
+                "q2_prekinder_2basico", Map.of("score", 3),
+                "q2_3basico_4medio", Map.of("score", 3),
+                "q3_prekinder_4basico", Map.of("score", 3),
+                "q3_5basico_3medio", Map.of("score", 3)
+            ),
+            "section2", Map.of("q1", Map.of("score", 3), "q2", Map.of("score", 2)),
+            "section3", Map.of("q1", Map.of("score", 3)),
+            "section4", Map.of("q1", Map.of("score", 3)),
+            "observations", Map.of(
+                "checklist", Map.of("obs1", 1, "obs2", 1, "obs3", 1, "obs4", 1),
+                "overallOpinion", Map.of("score", 5),
+                "justification", "Familia alineada con el proyecto"
+            )
+        ));
+
+        Map<String, Object> result = dashboardService.finalSummary(2027);
+
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> data = (List<Map<String, Object>>) result.get("data");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> familyEvaluation = (Map<String, Object>) data.get(0).get("familyEvaluation");
+        assertEquals(new BigDecimal("66.68"), familyEvaluation.get("percentage"));
+        assertEquals(new BigDecimal("26.00"), familyEvaluation.get("score40"));
+        assertEquals(new BigDecimal("9.00"), familyEvaluation.get("score11"));
+        assertEquals(new BigDecimal("5.00"), familyEvaluation.get("rating"));
+        assertEquals(1, familyEvaluation.get("completedCount"));
+        assertEquals(2, familyEvaluation.get("expectedCount"));
+        assertEquals(new BigDecimal("26.00"), familyEvaluation.get("sectionScore"));
+        assertEquals(new BigDecimal("40"), familyEvaluation.get("sectionMaxScore"));
+    }
+
+    @Test
+    @DisplayName("finalSummary averages two independent family evaluations instead of adding their maxima")
+    void finalSummaryAveragesTwoIndependentFamilyEvaluations() {
+        ApplicationEntity app = application(25L);
+        app.setAcademicYear(2027);
+        EvaluationEntity first = completedFamilyEvaluation(302L, 10L, "first-summary-family-json");
+        EvaluationEntity second = completedFamilyEvaluation(303L, 11L, "second-summary-family-json");
+
+        when(applicationRepository.findAll()).thenReturn(List.of(app));
+        when(evaluationRepository.findByApplicationIdOrderByCreatedAtDesc(25L)).thenReturn(List.of(first, second));
+        when(jsonSupport.readMap("first-summary-family-json")).thenReturn(maximumFamilyInterviewData());
+        when(jsonSupport.readMap("second-summary-family-json")).thenReturn(maximumFamilyInterviewData());
+
+        Map<String, Object> result = dashboardService.finalSummary(2027);
+
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> data = (List<Map<String, Object>>) result.get("data");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> familyEvaluation = (Map<String, Object>) data.get(0).get("familyEvaluation");
+        assertEquals(new BigDecimal("100.00"), familyEvaluation.get("percentage"));
+        assertEquals(new BigDecimal("40.00"), familyEvaluation.get("score40"));
+        assertEquals(new BigDecimal("11.00"), familyEvaluation.get("score11"));
+        assertEquals(new BigDecimal("5.00"), familyEvaluation.get("rating"));
+        assertEquals(2, familyEvaluation.get("completedCount"));
+        assertEquals(2, familyEvaluation.get("expectedCount"));
+        assertEquals(new BigDecimal("20.00"), familyEvaluation.get("sectionScore"));
+        assertEquals(new BigDecimal("20"), familyEvaluation.get("sectionMaxScore"));
     }
 
     @Test
