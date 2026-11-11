@@ -5,12 +5,14 @@ import cl.mtn.admitiabff.domain.interview.InterviewEntity;
 import java.time.LocalDate;
 import java.time.LocalTime;
 import java.util.List;
+import org.springframework.data.jpa.repository.EntityGraph;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 public interface InterviewRepository extends JpaRepository<InterviewEntity, Long> {
     List<InterviewEntity> findAllByOrderByCreatedAtDesc();
+    @EntityGraph(attributePaths = {"application", "interviewer", "secondInterviewer"})
     @Query("select i from InterviewEntity i where i.application.deletedAt is null and i.application.archived = false and i.application.processCode = :processCode order by i.createdAt desc")
     List<InterviewEntity> findActiveByProcessOrderByCreatedAtDesc(@Param("processCode") String processCode);
     List<InterviewEntity> findByApplicationIdOrderByScheduledDateDesc(Long applicationId);
