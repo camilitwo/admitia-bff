@@ -80,23 +80,34 @@ class EvaluationServiceTest {
         evaluation.setId(52L);
         evaluation.setEvaluationType("FAMILY_INTERVIEW");
         evaluation.setStatus(EvaluationStatus.IN_PROGRESS);
+        ApplicationEntity application = new ApplicationEntity();
+        StudentEntity student = new StudentEntity();
+        student.setGradeApplied("KINDER");
+        application.setStudent(student);
+        evaluation.setApplication(application);
         when(evaluationRepository.findById(52L)).thenReturn(Optional.of(evaluation));
 
         EvaluationService service = service(evaluationRepository);
         Map<String, Object> answers = Map.of(
             "section1", Map.of(
-                "question1", Map.of("score", 3, "text", "Respuesta uno"),
-                "question2", Map.of("score", 4, "text", "Respuesta dos")
+                "q1", Map.of("score", 3, "text", "Respuesta uno"),
+                "q2_prekinder_2basico", Map.of("score", 3),
+                "q2_3basico_4medio", Map.of("score", 3),
+                "q3_prekinder_4basico", Map.of("score", 3),
+                "q3_5basico_3medio", Map.of("score", 3)
             ),
+            "section2", Map.of("q1", Map.of("score", 3), "q2", Map.of("score", 2)),
+            "section3", Map.of("q1", Map.of("score", 3)),
+            "section4", Map.of("q1", Map.of("score", 3)),
             "observations", Map.of(
-                "checklist", Map.of("collaborative", true, "punctual", false),
+                "checklist", Map.of("obs1", 1, "obs2", 1, "obs3", 1, "obs4", 1),
                 "overallOpinion", Map.of("score", 5)
             )
         );
 
         service.saveFamilyInterviewData(52L, Map.of("interviewData", answers));
 
-        assertEquals(new BigDecimal("13.0"), evaluation.getFamilyInterviewScore());
+        assertEquals(new BigDecimal("29.0"), evaluation.getFamilyInterviewScore());
         assertEquals(EvaluationStatus.COMPLETED, evaluation.getStatus());
         assertTrue(evaluation.getInterviewData().contains("Respuesta uno"));
         verify(evaluationRepository).save(evaluation);
