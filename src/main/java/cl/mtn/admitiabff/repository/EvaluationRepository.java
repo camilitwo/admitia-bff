@@ -5,12 +5,16 @@ import cl.mtn.admitiabff.domain.evaluation.EvaluationEntity;
 import java.math.BigDecimal;
 import java.util.List;
 import java.util.Optional;
+import org.springframework.data.jpa.repository.EntityGraph;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 public interface EvaluationRepository extends JpaRepository<EvaluationEntity, Long> {
     List<EvaluationEntity> findAllByOrderByCreatedAtDesc();
+    @EntityGraph(attributePaths = {"application", "evaluator"})
+    @Query("select e from EvaluationEntity e where e.application.deletedAt is null and e.application.archived = false and e.application.processCode = :processCode order by e.createdAt desc")
+    List<EvaluationEntity> findActiveByProcessOrderByCreatedAtDesc(@Param("processCode") String processCode);
     List<EvaluationEntity> findByApplicationIdOrderByCreatedAtDesc(Long applicationId);
     @Query("select e from EvaluationEntity e where e.evaluator.id = :evaluatorId and e.application.deletedAt is null and e.application.archived = false order by e.createdAt desc")
     List<EvaluationEntity> findByEvaluatorIdOrderByCreatedAtDesc(@Param("evaluatorId") Long evaluatorId);

@@ -2,7 +2,11 @@ package cl.mtn.admitiabff.controller;
 
 import cl.mtn.admitiabff.service.UserService;
 import cl.mtn.admitiabff.service.TemporaryPasswordService;
+import cl.mtn.admitiabff.service.ProfessionalActivityService;
+import cl.mtn.admitiabff.domain.common.Role;
+import java.util.Locale;
 import java.util.Map;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
 @RestController
@@ -10,10 +14,15 @@ import org.springframework.web.bind.annotation.*;
 public class UsersController {
     private final UserService userService;
     private final TemporaryPasswordService temporaryPasswordService;
+    private final ProfessionalActivityService professionalActivityService;
 
-    public UsersController(UserService userService, TemporaryPasswordService temporaryPasswordService) {
+    public UsersController(
+            UserService userService,
+            TemporaryPasswordService temporaryPasswordService,
+            ProfessionalActivityService professionalActivityService) {
         this.userService = userService;
         this.temporaryPasswordService = temporaryPasswordService;
+        this.professionalActivityService = professionalActivityService;
     }
 
     @GetMapping("/roles") public Map<String, Object> roles() { return userService.roles(); }
@@ -25,6 +34,17 @@ public class UsersController {
     @GetMapping("/evaluators") public Map<String, Object> evaluators(@RequestParam(required = false) String subject, @RequestParam(required = false) Boolean activeOnly) { return userService.evaluators(subject, activeOnly); }
     @GetMapping("/guardians") public Map<String, Object> guardians(@RequestParam(defaultValue = "0") int page, @RequestParam(defaultValue = "15") int size, @RequestParam(required = false) String search, @RequestParam(required = false) Boolean active) { return userService.guardians(page, size, search, active); }
     @GetMapping("/staff") public Map<String, Object> staff(@RequestParam(defaultValue = "0") int page, @RequestParam(defaultValue = "15") int size, @RequestParam(required = false) String search, @RequestParam(required = false) String role, @RequestParam(required = false) Boolean active) { return userService.staff(page, size, search, role, active); }
+    @GetMapping("/professional-activity")
+    @PreAuthorize("hasAnyRole('ADMIN', 'COORDINATOR')")
+    public Map<String, Object> professionalActivity(
+            @RequestParam(required = false) String processCode,
+            @RequestParam(required = false) String role) {
+        Role normalizedRole = role == null || role.isBlank()
+                ? null
+                : Role.valueOf(role.trim().toUpperCase(Locale.ROOT));
+        var data = professionalActivityService.getActivity(processCode, normalizedRole);
+        return Map.of("success", true, "data", data, "count", data.professionals().size());
+    }
     @GetMapping("/search") public Map<String, Object> search(@RequestParam String query, @RequestParam(required = false) String role, @RequestParam(required = false) Boolean activeOnly) { return userService.search(query, role, activeOnly); }
     @GetMapping("/{id}/associated-data") public Map<String, Object> associatedData(@PathVariable Long id) { return userService.associatedData(id); }
     @GetMapping("/{id}") public Map<String, Object> get(@PathVariable Long id) { return userService.get(id); }
