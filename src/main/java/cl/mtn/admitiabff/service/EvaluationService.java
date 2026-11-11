@@ -374,7 +374,8 @@ public class EvaluationService {
     public Map<String, Object> saveFamilyInterviewData(Long evaluationId, Map<String, Object> payload) {
         EvaluationEntity entity = loadAccessible(evaluationId);
         Map<String, Object> interviewData = payload.get("interviewData") instanceof Map<?, ?> map ? (Map<String, Object>) map : payload;
-        BigDecimal score = calculateInterviewScore(interviewData);
+        String grade = entity.getApplication().getStudent().getGradeApplied();
+        BigDecimal score = calculateInterviewScore(interviewData, grade);
         entity.setInterviewData(jsonSupport.write(interviewData));
         entity.setFamilyInterviewScore(score);
         entity.setStatus(EvaluationStatus.COMPLETED);
@@ -619,23 +620,48 @@ public class EvaluationService {
 
     private String value(String value) { return value == null ? "" : value; }
 
-    private BigDecimal calculateInterviewScore(Map<String, Object> interviewData) {
-        return sumInterviewScores(interviewData, false);
+    private BigDecimal calculateInterviewScore(Map<String, Object> interviewData, String grade) {
+        BigDecimal total = BigDecimal.ZERO;
+        for (int sectionNumber = 1; sectionNumber <= 4; sectionNumber++) {
+            Object section = interviewData.get("section" + sectionNumber);
+            if (!(section instanceof Map<?, ?> questions)) continue;
+            for (Map.Entry<?, ?> entry : questions.entrySet()) {
+                if (sectionNumber == 1 && !isApplicableFamilyQuestion(String.valueOf(entry.getKey()), grade)) continue;
+                if (entry.getValue() instanceof Map<?, ?> response && response.get("score") instanceof Number number) {
+                    total = total.add(BigDecimal.valueOf(number.doubleValue()));
+                }
+            }
+        }
+
+        Object observations = interviewData.get("observations");
+        if (observations instanceof Map<?, ?> observationMap) {
+            Object checklist = observationMap.get("checklist");
+            if (checklist instanceof Map<?, ?> checklistMap) {
+                for (Object value : checklistMap.values()) {
+                    if (value instanceof Number number) total = total.add(BigDecimal.valueOf(number.doubleValue()));
+                    else if (Boolean.TRUE.equals(value)) total = total.add(BigDecimal.ONE);
+                }
+            }
+            Object opinion = observationMap.get("overallOpinion");
+            if (opinion instanceof Map<?, ?> opinionMap && opinionMap.get("score") instanceof Number number) {
+                total = total.add(BigDecimal.valueOf(number.doubleValue()));
+            }
+        }
+        return total;
     }
 
-    private BigDecimal sumInterviewScores(Object value, boolean scoreField) {
-        if (scoreField && value instanceof Number number) {
-            return BigDecimal.valueOf(number.doubleValue());
-        }
-        if (value instanceof Boolean booleanValue) {
-            return booleanValue ? BigDecimal.ONE : BigDecimal.ZERO;
-        }
-        if (value instanceof Map<?, ?> map) {
-            return map.entrySet().stream()
-                .map(entry -> sumInterviewScores(entry.getValue(), "score".equals(String.valueOf(entry.getKey()))))
-                .reduce(BigDecimal.ZERO, BigDecimal::add);
-        }
-        return BigDecimal.ZERO;
+    private boolean isApplicableFamilyQuestion(String questionKey, String grade) {
+        String normalizedGrade = grade == null ? "" : grade.trim().toUpperCase().replace(' ', '_');
+        boolean lowerGrade = java.util.Set.of("PREKINDER", "PRE_KINDER", "KINDER", "1_BASICO", "2_BASICO")
+            .contains(normalizedGrade);
+        boolean middleGrade = java.util.Set.of("3_BASICO", "4_BASICO").contains(normalizedGrade);
+        return switch (questionKey) {
+            case "q2_prekinder_2basico" -> lowerGrade;
+            case "q2_3basico_4medio" -> !lowerGrade;
+            case "q3_prekinder_4basico" -> lowerGrade || middleGrade;
+            case "q3_5basico_3medio" -> !lowerGrade && !middleGrade;
+            default -> true;
+        };
     }
 
     private BigDecimal decimalValue(Object value) {

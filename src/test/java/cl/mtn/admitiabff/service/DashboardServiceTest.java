@@ -157,6 +157,7 @@ class DashboardServiceTest {
         interview.setStatus(EvaluationStatus.COMPLETED);
         interview.setCompletedAt(LocalDateTime.of(2026, 8, 10, 12, 0));
         interview.setInterviewData("family-json");
+        interview.setApplication(first);
 
         when(applicationRepository.findAll()).thenReturn(List.of(first, second));
         when(evaluationRepository.findByApplicationIdOrderByCreatedAtDesc(21L)).thenReturn(List.of(interview));
@@ -190,16 +191,18 @@ class DashboardServiceTest {
     }
 
     @Test
-    @DisplayName("finalSummary normalizes legacy family evaluations without exceeding 100 percent")
-    void finalSummaryUsesLegacyFortyPointMaximum() {
+    @DisplayName("finalSummary ignores legacy questions that do not apply to the student's grade")
+    void finalSummaryUsesOnlyQuestionsApplicableToGrade() {
         ApplicationEntity app = application(24L);
         app.setAcademicYear(2027);
+        app.getStudent().setGradeApplied("KINDER");
 
         EvaluationEntity interview = new EvaluationEntity();
         interview.setId(301L);
         interview.setEvaluationType("FAMILY_INTERVIEW");
         interview.setStatus(EvaluationStatus.COMPLETED);
         interview.setInterviewData("legacy-family-json");
+        interview.setApplication(app);
 
         EvaluationEntity pendingInterview = new EvaluationEntity();
         pendingInterview.setId(304L);
@@ -232,14 +235,14 @@ class DashboardServiceTest {
         List<Map<String, Object>> data = (List<Map<String, Object>>) result.get("data");
         @SuppressWarnings("unchecked")
         Map<String, Object> familyEvaluation = (Map<String, Object>) data.get(0).get("familyEvaluation");
-        assertEquals(new BigDecimal("66.68"), familyEvaluation.get("percentage"));
-        assertEquals(new BigDecimal("26.00"), familyEvaluation.get("score40"));
+        assertEquals(new BigDecimal("98.18"), familyEvaluation.get("percentage"));
+        assertEquals(new BigDecimal("40.00"), familyEvaluation.get("score40"));
         assertEquals(new BigDecimal("9.00"), familyEvaluation.get("score11"));
         assertEquals(new BigDecimal("5.00"), familyEvaluation.get("rating"));
         assertEquals(1, familyEvaluation.get("completedCount"));
         assertEquals(2, familyEvaluation.get("expectedCount"));
-        assertEquals(new BigDecimal("26.00"), familyEvaluation.get("sectionScore"));
-        assertEquals(new BigDecimal("40"), familyEvaluation.get("sectionMaxScore"));
+        assertEquals(new BigDecimal("20.00"), familyEvaluation.get("sectionScore"));
+        assertEquals(new BigDecimal("20"), familyEvaluation.get("sectionMaxScore"));
     }
 
     @Test
@@ -551,6 +554,9 @@ class DashboardServiceTest {
         evaluation.setStatus(EvaluationStatus.COMPLETED);
         evaluation.setFamilyInterviewScore(new BigDecimal("31.00"));
         evaluation.setInterviewData(interviewData);
+        ApplicationEntity app = application(1000L + id);
+        app.getStudent().setGradeApplied("KINDER");
+        evaluation.setApplication(app);
         return evaluation;
     }
 

@@ -421,8 +421,9 @@ public class DashboardService {
             for (EvaluationEntity eval : familyEvals) {
                 if (eval.getInterviewData() == null || eval.getInterviewData().isBlank()) continue;
                 Map<String, Object> data = jsonSupport.readMap(eval.getInterviewData());
-                FamilyInterviewComponents components = extractFamilyInterviewComponents(data);
-                BigDecimal sectionMaximum = familyInterviewSectionMaximum(data, components.sections());
+                String grade = eval.getApplication().getStudent().getGradeApplied();
+                FamilyInterviewComponents components = extractFamilyInterviewComponents(data, grade);
+                BigDecimal sectionMaximum = familyInterviewSectionMaximum(grade);
                 totalRawSections = totalRawSections.add(components.sections());
                 if (commonSectionMaximum == null) {
                     commonSectionMaximum = sectionMaximum;
@@ -869,12 +870,13 @@ public class DashboardService {
         }
         try {
             Map<String, Object> data = jsonSupport.readMap(evaluation.getInterviewData());
-            FamilyInterviewComponents components = extractFamilyInterviewComponents(data);
+            String grade = evaluation.getApplication().getStudent().getGradeApplied();
+            FamilyInterviewComponents components = extractFamilyInterviewComponents(data, grade);
 
             BigDecimal sectionsScore = components.sections;
             BigDecimal checklistScore = components.checklist;
             BigDecimal opinionScore = components.opinion;
-            BigDecimal sectionMaximum = familyInterviewSectionMaximum(data, sectionsScore);
+            BigDecimal sectionMaximum = familyInterviewSectionMaximum(grade);
             return calculateFamilyInterviewPercentage(
                 new FamilyInterviewComponents(sectionsScore, checklistScore, opinionScore),
                 sectionMaximum
@@ -900,24 +902,11 @@ public class DashboardService {
             .setScale(2, java.math.RoundingMode.HALF_UP);
     }
 
-    private BigDecimal familyInterviewSectionMaximum(Map<String, Object> data, BigDecimal sectionsScore) {
-        if (sectionsScore.compareTo(BigDecimal.valueOf(20)) > 0 || usesLegacyFullFamilyTemplate(data)) {
-            return BigDecimal.valueOf(40);
-        }
+    private BigDecimal familyInterviewSectionMaximum(String grade) {
         return BigDecimal.valueOf(20);
     }
 
-    private boolean usesLegacyFullFamilyTemplate(Map<String, Object> data) {
-        Object section1 = data.get("section1");
-        if (!(section1 instanceof Map<?, ?> questions)) return false;
-        boolean hasBothQuestion2Variants = questions.containsKey("q2_prekinder_2basico")
-            && questions.containsKey("q2_3basico_4medio");
-        boolean hasBothQuestion3Variants = questions.containsKey("q3_prekinder_4basico")
-            && questions.containsKey("q3_5basico_3medio");
-        return hasBothQuestion2Variants || hasBothQuestion3Variants;
-    }
-
-    private FamilyInterviewComponents extractFamilyInterviewComponents(Map<String, Object> data) {
+    private FamilyInterviewComponents extractFamilyInterviewComponents(Map<String, Object> data, String grade) {
         BigDecimal sections = BigDecimal.ZERO;
         BigDecimal checklist = BigDecimal.ZERO;
         BigDecimal opinion = BigDecimal.ZERO;
@@ -926,7 +915,7 @@ public class DashboardService {
         for (int i = 1; i <= 4; i++) {
             Object section = data.get("section" + i);
             if (section instanceof Map<?, ?> sectionMap) {
-                sections = sections.add(extractScoreFromSection(sectionMap));
+                sections = sections.add(extractScoreFromSection(sectionMap, i, grade));
             }
         }
 
@@ -955,9 +944,11 @@ public class DashboardService {
         return new FamilyInterviewComponents(sections, checklist, opinion);
     }
 
-    private BigDecimal extractScoreFromSection(Map<?, ?> sectionMap) {
+    private BigDecimal extractScoreFromSection(Map<?, ?> sectionMap, int sectionNumber, String grade) {
         BigDecimal sum = BigDecimal.ZERO;
-        for (Object value : sectionMap.values()) {
+        for (Map.Entry<?, ?> entry : sectionMap.entrySet()) {
+            if (sectionNumber == 1 && !isApplicableFamilyQuestion(String.valueOf(entry.getKey()), grade)) continue;
+            Object value = entry.getValue();
             if (value instanceof Map<?, ?> questionMap) {
                 Object score = questionMap.get("score");
                 if (score instanceof Number num) {
@@ -966,6 +957,21 @@ public class DashboardService {
             }
         }
         return sum;
+    }
+
+    private boolean isApplicableFamilyQuestion(String questionKey, String grade) {
+        String normalizedGrade = grade == null ? "" : grade.trim().toUpperCase().replace(' ', '_');
+        boolean lowerGrade = Set.of("PREKINDER", "PRE_KINDER", "KINDER", "1_BASICO", "2_BASICO")
+            .contains(normalizedGrade);
+        boolean middleGrade = Set.of("3_BASICO", "4_BASICO").contains(normalizedGrade);
+
+        return switch (questionKey) {
+            case "q2_prekinder_2basico" -> lowerGrade;
+            case "q2_3basico_4medio" -> !lowerGrade;
+            case "q3_prekinder_4basico" -> lowerGrade || middleGrade;
+            case "q3_5basico_3medio" -> !lowerGrade && !middleGrade;
+            default -> true;
+        };
     }
 
     private record FamilyInterviewComponents(BigDecimal sections, BigDecimal checklist, BigDecimal opinion) {}
