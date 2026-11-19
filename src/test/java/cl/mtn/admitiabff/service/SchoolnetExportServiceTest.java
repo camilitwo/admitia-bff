@@ -19,6 +19,7 @@ import java.io.ByteArrayInputStream;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Arrays;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 import org.junit.jupiter.api.Test;
 
@@ -59,6 +60,33 @@ class SchoolnetExportServiceTest {
             assertEquals("Montenegro Reyes", row.getCell(46).getStringCellValue());
             assertEquals("2027", row.getCell(50).getStringCellValue());
             assertEquals("reyes.loreto@gmail.com", row.getCell(51).getStringCellValue());
+        }
+    }
+
+    @Test
+    void defaultExportIncludesPendingApplicantsAndPreservesHeaders() throws Exception {
+        ApplicationRepository repository = mock(ApplicationRepository.class);
+        var statuses = Arrays.stream(ApplicationStatus.values())
+            .filter(status -> status != ApplicationStatus.ARCHIVED).toList();
+        var pending = application();
+        pending.setStatus(ApplicationStatus.PENDING);
+        when(repository.findActiveForSchoolnetExport(2027, "KIV-2027-02", statuses))
+            .thenReturn(List.of(pending));
+        var service = new SchoolnetExportService(repository);
+
+        for (List<ApplicationStatus> requested : Arrays.asList(null, List.<ApplicationStatus>of())) {
+            try (var workbook = new XSSFWorkbook(new ByteArrayInputStream(
+                    service.exportStudents(2027, "KIV-2027-02", requested)))) {
+                var sheet = workbook.getSheet("Alumnos");
+                assertEquals(1, sheet.getLastRowNum());
+                assertEquals(52, sheet.getRow(0).getLastCellNum());
+                for (int i = 0; i < SchoolnetExportService.HEADERS.size(); i++) {
+                    assertEquals(SchoolnetExportService.HEADERS.get(i),
+                        sheet.getRow(0).getCell(i).getStringCellValue());
+                }
+                assertEquals("María Florencia", sheet.getRow(1).getCell(0).getStringCellValue());
+                assertEquals("233428825", sheet.getRow(1).getCell(3).getStringCellValue());
+            }
         }
     }
 

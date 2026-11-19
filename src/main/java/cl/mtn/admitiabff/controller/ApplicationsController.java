@@ -43,10 +43,10 @@ public class ApplicationsController {
     @org.springframework.security.access.prepost.PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<ByteArrayResource> exportSchoolnet(@RequestParam(required = false) Integer academicYear, @RequestParam(required = false) String processCode, @RequestParam(required = false) String statuses) {
         List<ApplicationStatus> parsedStatuses = statuses == null || statuses.isBlank()
-            ? List.of(ApplicationStatus.APPROVED)
+            ? List.of()
             : Arrays.stream(statuses.split(",")).map(String::trim).filter(item -> !item.isBlank()).map(item -> ApplicationStatus.valueOf(item.toUpperCase())).toList();
         byte[] bytes = schoolnetExportService.exportStudents(academicYear, processCode, parsedStatuses);
-        String suffix = processCode == null || processCode.isBlank() ? "aceptados" : processCode;
+        String suffix = processCode == null || processCode.isBlank() ? "postulantes" : processCode;
         String filename = "schoolnet_alumnos_" + suffix + "_" + LocalDate.now() + ".xlsx";
         return ResponseEntity.ok()
             .contentType(MediaType.parseMediaType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"))
