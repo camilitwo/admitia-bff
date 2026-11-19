@@ -13,6 +13,7 @@ import java.io.IOException;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.util.LinkedHashMap;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -98,7 +99,9 @@ public class SchoolnetExportService {
     }
 
     public byte[] exportStudents(Integer academicYear, String processCode, List<ApplicationStatus> statuses) {
-        List<ApplicationStatus> effectiveStatuses = statuses == null || statuses.isEmpty() ? List.of(ApplicationStatus.APPROVED) : statuses;
+        List<ApplicationStatus> effectiveStatuses = statuses == null || statuses.isEmpty()
+            ? Arrays.stream(ApplicationStatus.values()).filter(status -> status != ApplicationStatus.ARCHIVED).toList()
+            : statuses;
         String effectiveProcessCode = processCode == null || processCode.isBlank() ? null : processCode;
         List<ApplicationEntity> applications = applicationRepository.findActiveForSchoolnetExport(academicYear, effectiveProcessCode, effectiveStatuses);
         try (XSSFWorkbook workbook = new XSSFWorkbook(); ByteArrayOutputStream output = new ByteArrayOutputStream()) {
