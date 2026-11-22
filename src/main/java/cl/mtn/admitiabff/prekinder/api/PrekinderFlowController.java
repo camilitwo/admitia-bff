@@ -11,6 +11,7 @@ import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Past;
 import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 import java.time.Instant;
@@ -341,7 +342,7 @@ public class PrekinderFlowController {
 
     private static PrekinderFlowService.FamilyAdultDetails adult(FamilyAdultDetails value) {
         return new PrekinderFlowService.FamilyAdultDetails(value.fullName(), value.rut(), value.email(), value.phone(),
-            value.address(), value.profession());
+            value.address(), value.profession(), value.birthDate());
     }
 
     private static PrekinderFlowService.ResponsibleAdultDetails responsible(ResponsibleAdultDetails value) {
@@ -363,7 +364,7 @@ public class PrekinderFlowController {
     public record FamilyAdultDetails(@NotBlank @Size(max = 200) String fullName,
         @NotBlank @Size(max = 16) String rut, @Email @NotBlank @Size(max = 254) String email,
         @NotBlank @Size(max = 32) String phone, @NotBlank @Size(max = 300) String address,
-        @Size(max = 160) String profession) {}
+        @Size(max = 160) String profession, @NotNull @Past LocalDate birthDate) {}
     public record ResponsibleAdultDetails(@NotBlank @Size(max = 200) String fullName,
         @NotBlank @Size(max = 16) String rut, @Email @NotBlank @Size(max = 254) String email,
         @NotBlank @Size(max = 32) String phone, @NotBlank @Size(max = 64) String relationship) {}
