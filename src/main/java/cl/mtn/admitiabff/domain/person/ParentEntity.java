@@ -9,6 +9,7 @@ import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 import lombok.Getter;
 import lombok.Setter;
+import java.time.LocalDate;
 
 @Getter
 @Setter
@@ -39,6 +40,9 @@ public class ParentEntity extends BaseEntity {
 
     @Column
     private String workplace;
+
+    @Column(name = "birth_date")
+    private LocalDate birthDate;
 
     @Column(name = "parent_type", nullable = false)
     private String parentType;

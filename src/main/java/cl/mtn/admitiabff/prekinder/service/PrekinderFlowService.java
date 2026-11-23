@@ -2443,12 +2443,6 @@ public class PrekinderFlowService {
         return employee || alumni ? "STAFF_OR_ALUMNI" : "NEW_FAMILIES";
     }
 
-    private static void validateAdultBirthDate(LocalDate birthDate, String who) {
-        if (birthDate == null || birthDate.isAfter(LocalDate.now()) || birthDate.isBefore(LocalDate.of(1920, 1, 1))) {
-            throw new IllegalArgumentException("La fecha de nacimiento del " + who + " no es válida");
-        }
-    }
-
     private void validateApplicationDetails(SubmitApplication command, String category) {
         ApplicationDetails details = command.applicationDetails();
         if (details == null) throw new IllegalArgumentException("Los antecedentes de la postulación son obligatorios");
@@ -2464,8 +2458,8 @@ public class PrekinderFlowService {
         }
         PrekinderRut.normalize(details.father().rut());
         PrekinderRut.normalize(details.mother().rut());
-        validateAdultBirthDate(details.father().birthDate(), "padre");
-        validateAdultBirthDate(details.mother().birthDate(), "madre");
+        cl.mtn.admitiabff.service.AdultBirthDateValidator.requireAdult(details.father().birthDate(), "padre");
+        cl.mtn.admitiabff.service.AdultBirthDateValidator.requireAdult(details.mother().birthDate(), "madre");
         PrekinderRut.normalize(details.supporter().rut());
         PrekinderRut.normalize(details.guardian().rut());
         if (command.eligibility().siblings() != null) {
