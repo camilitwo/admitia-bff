@@ -628,8 +628,22 @@ public class ApplicationService {
         if (payload.get(flatPrefix + "Name") == null && (nested == null || nested.get("fullName") == null) && !required) {
             return null;
         }
+        boolean hasNestedBirthDate = nested != null && nested.containsKey("birthDate");
+        boolean hasFlatBirthDate = payload.containsKey(flatPrefix + "BirthDate");
+        Object rawBirthDate = hasNestedBirthDate ? nested.get("birthDate") : payload.get(flatPrefix + "BirthDate");
+        String person = "FATHER".equals(parentType) ? "padre" : "madre";
         if (payload.get(flatPrefix + "Id") instanceof Number id) {
-            return parentRepository.findById(id.longValue()).orElseThrow(() -> new IllegalArgumentException("Pariente no encontrado"));
+            ParentEntity existing = parentRepository.findById(id.longValue())
+                .orElseThrow(() -> new IllegalArgumentException("Pariente no encontrado"));
+            LocalDate birthDate = hasNestedBirthDate || hasFlatBirthDate
+                ? parseDate(rawBirthDate)
+                : existing.getBirthDate();
+            AdultBirthDateValidator.requireAdult(birthDate, person);
+            if (hasNestedBirthDate || hasFlatBirthDate) {
+                existing.setBirthDate(birthDate);
+                return parentRepository.save(existing);
+            }
+            return existing;
         }
         ParentEntity entity = new ParentEntity();
         entity.setFullName(value(nested != null ? nested.get("fullName") : payload.get(flatPrefix + "Name")));
@@ -638,8 +652,8 @@ public class ApplicationService {
         entity.setPhone(value(nested != null ? nested.get("phone") : payload.get(flatPrefix + "Phone")));
         entity.setAddress(value(nested != null ? nested.get("address") : payload.get(flatPrefix + "Address")));
         entity.setProfession(value(nested != null ? nested.get("profession") : payload.get(flatPrefix + "Profession")));
-        LocalDate birthDate = parseDate(nested != null ? nested.get("birthDate") : payload.get(flatPrefix + "BirthDate"));
-        AdultBirthDateValidator.requireAdult(birthDate, "FATHER".equals(parentType) ? "padre" : "madre");
+        LocalDate birthDate = parseDate(rawBirthDate);
+        AdultBirthDateValidator.requireAdult(birthDate, person);
         entity.setBirthDate(birthDate);
         entity.setParentType(parentType);
         return parentRepository.save(entity);
