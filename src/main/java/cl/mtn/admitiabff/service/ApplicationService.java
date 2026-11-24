@@ -255,7 +255,7 @@ public class ApplicationService {
         }
 
         entity.setFather(resolveParent(payload, "father", "parent1", "FATHER", true));
-        entity.setMother(resolveParent(payload, "mother", "parent2", "MOTHER", false));
+        entity.setMother(resolveParent(payload, "mother", "parent2", "MOTHER", true));
         entity.setGuardian(resolveGuardian(payload));
         entity.setSupporter(resolveSupporter(payload));
         entity.setApplicantUser(resolveApplicant(payload));
@@ -279,6 +279,12 @@ public class ApplicationService {
         ApplicationEntity entity = loadForUpdate(id);
         if (payload.containsKey("status")) statusTransitions.transition(entity, parseStatus(value(payload.get("status"))));
         if (payload.containsKey("notes")) entity.setNotes(value(payload.get("notes")));
+        if (hasParentData(payload, "father", "parent1")) {
+            entity.setFather(resolveParent(payload, "father", "parent1", "FATHER", true));
+        }
+        if (hasParentData(payload, "mother", "parent2")) {
+            entity.setMother(resolveParent(payload, "mother", "parent2", "MOTHER", true));
+        }
         Object nestedStudent = payload.get("student");
         if (nestedStudent instanceof Map<?, ?> nested) {
             @SuppressWarnings("unchecked")
@@ -613,12 +619,31 @@ public class ApplicationService {
 
     private ParentEntity resolveParent(Map<String, Object> payload, String nestedKey, String flatPrefix, String parentType, boolean required) {
         Object parents = payload.get("parents");
-        Map<String, Object> nested = parents instanceof Map<?, ?> map && map.get(nestedKey) instanceof Map<?, ?> inner ? (Map<String, Object>) inner : null;
+        Object directParent = payload.get(nestedKey);
+        Map<String, Object> nested = directParent instanceof Map<?, ?> direct
+            ? (Map<String, Object>) direct
+            : parents instanceof Map<?, ?> map && map.get(nestedKey) instanceof Map<?, ?> inner
+                ? (Map<String, Object>) inner
+                : null;
         if (payload.get(flatPrefix + "Name") == null && (nested == null || nested.get("fullName") == null) && !required) {
             return null;
         }
+        boolean hasNestedBirthDate = nested != null && nested.containsKey("birthDate");
+        boolean hasFlatBirthDate = payload.containsKey(flatPrefix + "BirthDate");
+        Object rawBirthDate = hasNestedBirthDate ? nested.get("birthDate") : payload.get(flatPrefix + "BirthDate");
+        String person = "FATHER".equals(parentType) ? "padre" : "madre";
         if (payload.get(flatPrefix + "Id") instanceof Number id) {
-            return parentRepository.findById(id.longValue()).orElseThrow(() -> new IllegalArgumentException("Pariente no encontrado"));
+            ParentEntity existing = parentRepository.findById(id.longValue())
+                .orElseThrow(() -> new IllegalArgumentException("Pariente no encontrado"));
+            LocalDate birthDate = hasNestedBirthDate || hasFlatBirthDate
+                ? parseDate(rawBirthDate)
+                : existing.getBirthDate();
+            AdultBirthDateValidator.requireAdult(birthDate, person);
+            if (hasNestedBirthDate || hasFlatBirthDate) {
+                existing.setBirthDate(birthDate);
+                return parentRepository.save(existing);
+            }
+            return existing;
         }
         ParentEntity entity = new ParentEntity();
         entity.setFullName(value(nested != null ? nested.get("fullName") : payload.get(flatPrefix + "Name")));
@@ -627,8 +652,19 @@ public class ApplicationService {
         entity.setPhone(value(nested != null ? nested.get("phone") : payload.get(flatPrefix + "Phone")));
         entity.setAddress(value(nested != null ? nested.get("address") : payload.get(flatPrefix + "Address")));
         entity.setProfession(value(nested != null ? nested.get("profession") : payload.get(flatPrefix + "Profession")));
+        LocalDate birthDate = parseDate(rawBirthDate);
+        AdultBirthDateValidator.requireAdult(birthDate, person);
+        entity.setBirthDate(birthDate);
         entity.setParentType(parentType);
         return parentRepository.save(entity);
+    }
+
+    private static boolean hasParentData(Map<String, Object> payload, String nestedKey, String flatPrefix) {
+        Object parents = payload.get("parents");
+        return payload.containsKey(flatPrefix + "BirthDate")
+            || payload.containsKey(flatPrefix + "Name")
+            || payload.get(nestedKey) instanceof Map<?, ?>
+            || parents instanceof Map<?, ?> map && map.containsKey(nestedKey);
     }
 
     private GuardianEntity resolveGuardian(Map<String, Object> payload) {
@@ -736,6 +772,7 @@ public class ApplicationService {
             fatherMap.put("phone", value(entity.getFather().getPhone()));
             fatherMap.put("address", value(entity.getFather().getAddress()));
             fatherMap.put("profession", value(entity.getFather().getProfession()));
+            fatherMap.put("birthDate", entity.getFather().getBirthDate());
             response.put("father", fatherMap);
         }
 
@@ -748,6 +785,7 @@ public class ApplicationService {
             motherMap.put("phone", value(entity.getMother().getPhone()));
             motherMap.put("address", value(entity.getMother().getAddress()));
             motherMap.put("profession", value(entity.getMother().getProfession()));
+            motherMap.put("birthDate", entity.getMother().getBirthDate());
             response.put("mother", motherMap);
         }
 
@@ -898,7 +936,17 @@ public class ApplicationService {
 
     private Map<String, Object> toParentResponse(ParentEntity entity, String relationship) {
         if (entity == null) return null;
-        return Map.of("id", entity.getId(), "fullName", entity.getFullName(), "rut", entity.getRut(), "email", entity.getEmail(), "phone", entity.getPhone(), "address", entity.getAddress(), "occupation", entity.getProfession(), "relationship", relationship);
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("id", entity.getId());
+        response.put("fullName", entity.getFullName());
+        response.put("rut", entity.getRut());
+        response.put("email", entity.getEmail());
+        response.put("phone", entity.getPhone());
+        response.put("address", entity.getAddress());
+        response.put("occupation", entity.getProfession());
+        response.put("birthDate", entity.getBirthDate());
+        response.put("relationship", relationship);
+        return response;
     }
 
     private Map<String, Object> toDocumentResponse(DocumentEntity document) {
