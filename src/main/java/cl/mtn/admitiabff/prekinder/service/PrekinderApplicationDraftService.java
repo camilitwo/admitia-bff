@@ -52,7 +52,7 @@ public class PrekinderApplicationDraftService {
         if (data == null || data.isEmpty()) throw new IllegalArgumentException("El borrador está vacío");
         return transactions.execute(status -> {
             DraftView current = get(processId);
-            if (expectedVersion != null && expectedVersion == 0L) {
+            if (expectedVersion != null && expectedVersion == -1L) {
                 if (current != null) throw new VersionConflictException("El borrador cambió en otra sesión");
                 UUID newDraftId = UUID.randomUUID();
                 EncryptedPayload initial = encrypt(newDraftId, data);
