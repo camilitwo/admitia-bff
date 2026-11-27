@@ -93,7 +93,8 @@ public class PrekinderApplicationDraftService {
                 INSERT INTO guardian_application_drafts(draft_id, process_id, actor_id, current_section,
                     ciphertext, iv, wrapped_dek, wrapped_dek_iv, key_version)
                 VALUES (:id, :processId, :actorId, :section, :ciphertext, :iv, :wrappedDek, :wrappedDekIv, :keyVersion)
-                ON CONFLICT (process_id, actor_id) DO UPDATE SET current_section = EXCLUDED.current_section,
+                ON CONFLICT (process_id, actor_id) DO UPDATE SET draft_id = EXCLUDED.draft_id,
+                    current_section = EXCLUDED.current_section,
                     ciphertext = EXCLUDED.ciphertext, iv = EXCLUDED.iv, wrapped_dek = EXCLUDED.wrapped_dek,
                     wrapped_dek_iv = EXCLUDED.wrapped_dek_iv, key_version = EXCLUDED.key_version,
                     version = guardian_application_drafts.version + 1, updated_at = now()
