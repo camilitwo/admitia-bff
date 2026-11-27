@@ -98,4 +98,7 @@ public class ApplicationEntity extends BaseEntity {
 
     @Column(name = "process_code")
     private String processCode;
+
+    @Column(name = "parents_separated", nullable = false)
+    private boolean parentsSeparated;
 }

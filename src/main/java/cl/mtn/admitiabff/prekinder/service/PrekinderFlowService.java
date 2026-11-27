@@ -2458,6 +2458,8 @@ public class PrekinderFlowService {
         }
         PrekinderRut.normalize(details.father().rut());
         PrekinderRut.normalize(details.mother().rut());
+        validateParentProfile(details.father(), "padre");
+        validateParentProfile(details.mother(), "madre");
         cl.mtn.admitiabff.service.AdultBirthDateValidator.requireAdult(details.father().birthDate(), "padre");
         cl.mtn.admitiabff.service.AdultBirthDateValidator.requireAdult(details.mother().birthDate(), "madre");
         PrekinderRut.normalize(details.supporter().rut());
@@ -2497,6 +2499,15 @@ public class PrekinderFlowService {
                 }
             }
             default -> throw new IllegalArgumentException("Categoría de postulación inválida");
+        }
+    }
+
+    private static void validateParentProfile(FamilyAdultDetails parent, String label) {
+        boolean legacy = !blank(parent.fullName());
+        boolean separated = !blank(parent.firstName()) && !blank(parent.paternalLastName())
+            && !blank(parent.maternalLastName());
+        if (!legacy && !separated) {
+            throw new IllegalArgumentException("Registra nombres, apellido paterno y apellido materno de " + label);
         }
     }
 
@@ -2585,14 +2596,15 @@ public class PrekinderFlowService {
                                          AlumniDeclaration fatherAlumni, AlumniDeclaration motherAlumni) {}
     public record AddressDetails(String street, String number, String apartment, String country,
                                  String region, String commune) {}
-    public record FamilyAdultDetails(String fullName, String rut, String email, String phone,
-                                     String address, String profession, LocalDate birthDate) {}
+    public record FamilyAdultDetails(String fullName, String firstName, String paternalLastName,
+                                     String maternalLastName, String maritalStatus, String rut, String email,
+                                     String phone, String address, String profession, LocalDate birthDate) {}
     public record ResponsibleAdultDetails(String fullName, String rut, String email, String phone,
                                           String relationship) {}
     public record ApplicationDetails(String gender, String studentEmail, AddressDetails address, String grade,
                                      int applicationYear, String currentSchool, String additionalNotes,
                                      String admissionPreference, boolean hasSiblingsInSchool,
-                                     String siblingsInSchoolDetails, FamilyAdultDetails father,
+                                     String siblingsInSchoolDetails, boolean parentsSeparated, FamilyAdultDetails father,
                                      FamilyAdultDetails mother, ResponsibleAdultDetails supporter,
                                      ResponsibleAdultDetails guardian) {}
     public record SubmitApplication(UUID processId, UUID clientSubmissionId, String rut, String firstName, String paternalLastName,

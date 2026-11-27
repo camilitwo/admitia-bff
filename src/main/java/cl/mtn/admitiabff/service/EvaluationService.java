@@ -600,6 +600,10 @@ public class EvaluationService {
         Map<String, Object> map = new LinkedHashMap<>();
         map.put("id", entity.getId());
         map.put("fullName", entity.getFullName());
+        map.put("firstName", entity.getFirstName());
+        map.put("paternalLastName", entity.getPaternalLastName());
+        map.put("maternalLastName", entity.getMaternalLastName());
+        map.put("maritalStatus", entity.getMaritalStatus());
         map.put("rut", entity.getRut());
         map.put("email", entity.getEmail());
         map.put("phone", entity.getPhone());

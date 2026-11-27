@@ -337,12 +337,22 @@ public class PrekinderFlowController {
                 value.address().apartment(), value.address().country(), value.address().region(), value.address().commune()),
             value.grade(), value.applicationYear(), value.currentSchool(), value.additionalNotes(),
             value.admissionPreference(), value.hasSiblingsInSchool(), value.siblingsInSchoolDetails(),
-            adult(value.father()), adult(value.mother()), responsible(value.supporter()), responsible(value.guardian()));
+            value.parentsSeparated(), adult(value.father()), adult(value.mother()),
+            responsible(value.supporter()), responsible(value.guardian()));
     }
 
     private static PrekinderFlowService.FamilyAdultDetails adult(FamilyAdultDetails value) {
-        return new PrekinderFlowService.FamilyAdultDetails(value.fullName(), value.rut(), value.email(), value.phone(),
+        String fullName = value.fullName() == null || value.fullName().isBlank()
+            ? joinName(value.firstName(), value.paternalLastName(), value.maternalLastName())
+            : value.fullName().trim();
+        return new PrekinderFlowService.FamilyAdultDetails(fullName, value.firstName(), value.paternalLastName(),
+            value.maternalLastName(), value.maritalStatus(), value.rut(), value.email(), value.phone(),
             value.address(), value.profession(), value.birthDate());
+    }
+
+    private static String joinName(String... parts) {
+        return java.util.Arrays.stream(parts).filter(part -> part != null && !part.isBlank())
+            .map(String::trim).collect(java.util.stream.Collectors.joining(" "));
     }
 
     private static PrekinderFlowService.ResponsibleAdultDetails responsible(ResponsibleAdultDetails value) {
@@ -361,7 +371,9 @@ public class PrekinderFlowController {
     public record AddressDetails(@NotBlank @Size(max = 160) String street, @NotBlank @Size(max = 24) String number,
         @Size(max = 64) String apartment, @NotBlank @Size(max = 80) String country,
         @Size(max = 120) String region, @NotBlank @Size(max = 120) String commune) {}
-    public record FamilyAdultDetails(@NotBlank @Size(max = 200) String fullName,
+    public record FamilyAdultDetails(@Size(max = 200) String fullName,
+        @Size(max = 120) String firstName, @Size(max = 120) String paternalLastName,
+        @Size(max = 120) String maternalLastName, @Size(max = 40) String maritalStatus,
         @NotBlank @Size(max = 16) String rut, @Email @NotBlank @Size(max = 254) String email,
         @NotBlank @Size(max = 32) String phone, @NotBlank @Size(max = 300) String address,
         @Size(max = 160) String profession, @NotNull @Past LocalDate birthDate) {}
@@ -373,7 +385,7 @@ public class PrekinderFlowController {
         @NotBlank @Pattern(regexp = "PRE_KINDER") String grade, @Min(2026) @Max(2100) int applicationYear,
         @Size(max = 200) String currentSchool, @Size(max = 4000) String additionalNotes,
         @NotBlank @Pattern(regexp = "NINGUNA|HIJO_FUNCIONARIO|HIJO_EX_ALUMNO") String admissionPreference,
-        boolean hasSiblingsInSchool, @Size(max = 1000) String siblingsInSchoolDetails,
+        boolean hasSiblingsInSchool, @Size(max = 1000) String siblingsInSchoolDetails, boolean parentsSeparated,
         @NotNull @Valid FamilyAdultDetails father, @NotNull @Valid FamilyAdultDetails mother,
         @NotNull @Valid ResponsibleAdultDetails supporter, @NotNull @Valid ResponsibleAdultDetails guardian) {}
     public record SubmitApplication(@NotNull UUID processId, UUID clientSubmissionId, @NotBlank @Size(max = 16) String rut,
