@@ -92,6 +92,41 @@ class ParentBirthDateContractTest {
     }
 
     @Test
+    void partialSeparatedEditPreservesOmittedExistingNames() {
+        ParentEntity historical = parent(10L, LocalDate.of(1980, 1, 2));
+        historical.setFirstName("Juan");
+        historical.setPaternalLastName("Pérez");
+        historical.setMaternalLastName("Soto");
+        when(parentRepository.findById(10L)).thenReturn(Optional.of(historical));
+        when(parentRepository.save(historical)).thenReturn(historical);
+
+        ParentEntity updated = resolve(Map.of("parent1Id", 10L, "father", Map.of("firstName", "Juan Pablo")),
+            "father", "parent1", "FATHER");
+
+        assertThat(updated.getFullName()).isEqualTo("Juan Pablo Pérez Soto");
+        assertThat(updated.getPaternalLastName()).isEqualTo("Pérez");
+        assertThat(updated.getMaternalLastName()).isEqualTo("Soto");
+    }
+
+    @Test
+    void legacyNameEditClearsSeparatedNamesSoReadersUseTheUpdatedValue() {
+        ParentEntity historical = parent(10L, LocalDate.of(1980, 1, 2));
+        historical.setFirstName("Juan");
+        historical.setPaternalLastName("Pérez");
+        historical.setMaternalLastName("Soto");
+        when(parentRepository.findById(10L)).thenReturn(Optional.of(historical));
+        when(parentRepository.save(historical)).thenReturn(historical);
+
+        ParentEntity updated = resolve(Map.of("parent1Id", 10L, "parent1Name", "Nombre actualizado"),
+            "father", "parent1", "FATHER");
+
+        assertThat(updated.getFullName()).isEqualTo("Nombre actualizado");
+        assertThat(updated.getFirstName()).isNull();
+        assertThat(updated.getPaternalLastName()).isNull();
+        assertThat(updated.getMaternalLastName()).isNull();
+    }
+
+    @Test
     void existingValidDateIsUsedWhenPayloadDoesNotReplaceIt() {
         ParentEntity existing = parent(10L, LocalDate.of(1980, 1, 2));
         when(parentRepository.findById(10L)).thenReturn(Optional.of(existing));

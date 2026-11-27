@@ -2503,9 +2503,11 @@ public class PrekinderFlowService {
     }
 
     private static void validateParentProfile(FamilyAdultDetails parent, String label) {
-        boolean legacy = !blank(parent.fullName());
+        boolean hasSeparatedComponent = !blank(parent.firstName()) || !blank(parent.paternalLastName())
+            || !blank(parent.maternalLastName());
         boolean separated = !blank(parent.firstName()) && !blank(parent.paternalLastName())
             && !blank(parent.maternalLastName());
+        boolean legacy = !hasSeparatedComponent && !blank(parent.fullName());
         if (!legacy && !separated) {
             throw new IllegalArgumentException("Registra nombres, apellido paterno y apellido materno de " + label);
         }

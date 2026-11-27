@@ -675,12 +675,21 @@ public class ApplicationService {
         if (!separatedNamesProvided && !legacyNameProvided && !maritalStatusProvided) return false;
 
         if (separatedNamesProvided) {
-            entity.setFirstName(value(valueFrom(nested, payload, "firstName", flatPrefix + "FirstName")));
-            entity.setPaternalLastName(value(valueFrom(nested, payload, "paternalLastName", flatPrefix + "PaternalLastName")));
-            entity.setMaternalLastName(value(valueFrom(nested, payload, "maternalLastName", flatPrefix + "MaternalLastName")));
+            if (containsField(nested, payload, "firstName", flatPrefix + "FirstName")) {
+                entity.setFirstName(value(valueFrom(nested, payload, "firstName", flatPrefix + "FirstName")));
+            }
+            if (containsField(nested, payload, "paternalLastName", flatPrefix + "PaternalLastName")) {
+                entity.setPaternalLastName(value(valueFrom(nested, payload, "paternalLastName", flatPrefix + "PaternalLastName")));
+            }
+            if (containsField(nested, payload, "maternalLastName", flatPrefix + "MaternalLastName")) {
+                entity.setMaternalLastName(value(valueFrom(nested, payload, "maternalLastName", flatPrefix + "MaternalLastName")));
+            }
             entity.setFullName(joinName(entity.getFirstName(), entity.getPaternalLastName(), entity.getMaternalLastName()));
         } else if (legacyNameProvided) {
             entity.setFullName(value(valueFrom(nested, payload, "fullName", flatPrefix + "Name")));
+            entity.setFirstName(null);
+            entity.setPaternalLastName(null);
+            entity.setMaternalLastName(null);
         }
         if (maritalStatusProvided) {
             entity.setMaritalStatus(value(valueFrom(nested, payload, "maritalStatus", flatPrefix + "MaritalStatus")));
@@ -691,6 +700,11 @@ public class ApplicationService {
     private static Object valueFrom(Map<String, Object> nested, Map<String, Object> payload,
                                     String nestedKey, String flatKey) {
         return nested != null && nested.containsKey(nestedKey) ? nested.get(nestedKey) : payload.get(flatKey);
+    }
+
+    private static boolean containsField(Map<String, Object> nested, Map<String, Object> payload,
+                                         String nestedKey, String flatKey) {
+        return nested != null && nested.containsKey(nestedKey) || payload.containsKey(flatKey);
     }
 
     private static String joinName(String... parts) {
