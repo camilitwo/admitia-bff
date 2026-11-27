@@ -74,6 +74,21 @@ public class PrekinderApplicationDraftService {
                 throw new VersionConflictException("El borrador cambió en otra sesión");
             }
             EncryptedPayload encrypted = encrypt(draftId, data);
+            if (expectedVersion != null) {
+                int updated = jdbc.update("""
+                    UPDATE guardian_application_drafts
+                       SET current_section = :section, ciphertext = :ciphertext, iv = :iv,
+                           wrapped_dek = :wrappedDek, wrapped_dek_iv = :wrappedDekIv,
+                           key_version = :keyVersion, version = version + 1, updated_at = now()
+                     WHERE process_id = :processId AND actor_id = :actorId AND version = :expectedVersion
+                    """, new MapSqlParameterSource().addValue("processId", processId)
+                    .addValue("actorId", actor.id()).addValue("section", currentSection)
+                    .addValue("ciphertext", encrypted.ciphertext()).addValue("iv", encrypted.iv())
+                    .addValue("wrappedDek", encrypted.wrappedDek()).addValue("wrappedDekIv", encrypted.wrappedDekIv())
+                    .addValue("keyVersion", encrypted.keyVersion()).addValue("expectedVersion", expectedVersion));
+                if (updated == 0) throw new VersionConflictException("El borrador cambió en otra sesión");
+                return get(processId);
+            }
             jdbc.update("""
                 INSERT INTO guardian_application_drafts(draft_id, process_id, actor_id, current_section,
                     ciphertext, iv, wrapped_dek, wrapped_dek_iv, key_version)
