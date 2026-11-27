@@ -52,16 +52,49 @@ public class PrekinderApplicationDraftService {
         if (data == null || data.isEmpty()) throw new IllegalArgumentException("El borrador está vacío");
         return transactions.execute(status -> {
             DraftView current = get(processId);
+            if (expectedVersion != null && expectedVersion == -1L) {
+                if (current != null) throw new VersionConflictException("El borrador cambió en otra sesión");
+                UUID newDraftId = UUID.randomUUID();
+                EncryptedPayload initial = encrypt(newDraftId, data);
+                int inserted = jdbc.update("""
+                    INSERT INTO guardian_application_drafts(draft_id, process_id, actor_id, current_section,
+                        ciphertext, iv, wrapped_dek, wrapped_dek_iv, key_version)
+                    VALUES (:id, :processId, :actorId, :section, :ciphertext, :iv, :wrappedDek, :wrappedDekIv, :keyVersion)
+                    ON CONFLICT (process_id, actor_id) DO NOTHING
+                    """, new MapSqlParameterSource().addValue("id", newDraftId).addValue("processId", processId)
+                    .addValue("actorId", actor.id()).addValue("section", currentSection)
+                    .addValue("ciphertext", initial.ciphertext()).addValue("iv", initial.iv())
+                    .addValue("wrappedDek", initial.wrappedDek()).addValue("wrappedDekIv", initial.wrappedDekIv())
+                    .addValue("keyVersion", initial.keyVersion()));
+                if (inserted == 0) throw new VersionConflictException("El borrador cambió en otra sesión");
+                return get(processId);
+            }
             UUID draftId = current == null ? UUID.randomUUID() : current.draftId();
             if (current != null && expectedVersion != null && current.version() != expectedVersion) {
                 throw new VersionConflictException("El borrador cambió en otra sesión");
             }
             EncryptedPayload encrypted = encrypt(draftId, data);
+            if (expectedVersion != null) {
+                int updated = jdbc.update("""
+                    UPDATE guardian_application_drafts
+                       SET current_section = :section, ciphertext = :ciphertext, iv = :iv,
+                           wrapped_dek = :wrappedDek, wrapped_dek_iv = :wrappedDekIv,
+                           key_version = :keyVersion, version = version + 1, updated_at = now()
+                     WHERE process_id = :processId AND actor_id = :actorId AND version = :expectedVersion
+                    """, new MapSqlParameterSource().addValue("processId", processId)
+                    .addValue("actorId", actor.id()).addValue("section", currentSection)
+                    .addValue("ciphertext", encrypted.ciphertext()).addValue("iv", encrypted.iv())
+                    .addValue("wrappedDek", encrypted.wrappedDek()).addValue("wrappedDekIv", encrypted.wrappedDekIv())
+                    .addValue("keyVersion", encrypted.keyVersion()).addValue("expectedVersion", expectedVersion));
+                if (updated == 0) throw new VersionConflictException("El borrador cambió en otra sesión");
+                return get(processId);
+            }
             jdbc.update("""
                 INSERT INTO guardian_application_drafts(draft_id, process_id, actor_id, current_section,
                     ciphertext, iv, wrapped_dek, wrapped_dek_iv, key_version)
                 VALUES (:id, :processId, :actorId, :section, :ciphertext, :iv, :wrappedDek, :wrappedDekIv, :keyVersion)
-                ON CONFLICT (process_id, actor_id) DO UPDATE SET current_section = EXCLUDED.current_section,
+                ON CONFLICT (process_id, actor_id) DO UPDATE SET draft_id = EXCLUDED.draft_id,
+                    current_section = EXCLUDED.current_section,
                     ciphertext = EXCLUDED.ciphertext, iv = EXCLUDED.iv, wrapped_dek = EXCLUDED.wrapped_dek,
                     wrapped_dek_iv = EXCLUDED.wrapped_dek_iv, key_version = EXCLUDED.key_version,
                     version = guardian_application_drafts.version + 1, updated_at = now()

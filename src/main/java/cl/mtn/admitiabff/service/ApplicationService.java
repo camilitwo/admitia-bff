@@ -54,6 +54,8 @@ import org.springframework.jdbc.core.JdbcTemplate;
 @Service
 @Transactional(readOnly = true)
 public class ApplicationService {
+    private static final java.util.Set<String> MARITAL_STATUSES = java.util.Set.of(
+        "SINGLE", "MARRIED", "CIVIL_UNION", "SEPARATED", "DIVORCED", "WIDOWED", "OTHER");
     private static final Logger log = LoggerFactory.getLogger(ApplicationService.class);
 
     @org.springframework.beans.factory.annotation.Autowired
@@ -270,6 +272,7 @@ public class ApplicationService {
             entity.setAcademicYear(activeAcademicYear);
         }
         entity.setProcessCode(value(payload.getOrDefault("processCode", activeProcessCode)));
+        entity.setParentsSeparated(booleanValue(payload.getOrDefault("parentsSeparated", false)));
         ApplicationEntity saved = applicationRepository.save(entity);
         return Map.of("success", true, "message", "Postulación creada correctamente", "data", toFullResponse(saved));
     }
@@ -279,6 +282,7 @@ public class ApplicationService {
         ApplicationEntity entity = loadForUpdate(id);
         if (payload.containsKey("status")) statusTransitions.transition(entity, parseStatus(value(payload.get("status"))));
         if (payload.containsKey("notes")) entity.setNotes(value(payload.get("notes")));
+        if (payload.containsKey("parentsSeparated")) entity.setParentsSeparated(booleanValue(payload.get("parentsSeparated")));
         if (hasParentData(payload, "father", "parent1")) {
             entity.setFather(resolveParent(payload, "father", "parent1", "FATHER", true));
         }
@@ -639,14 +643,18 @@ public class ApplicationService {
                 ? parseDate(rawBirthDate)
                 : existing.getBirthDate();
             AdultBirthDateValidator.requireAdult(birthDate, person);
+            boolean profileChanged = applyParentProfile(existing, payload, nested, flatPrefix);
             if (hasNestedBirthDate || hasFlatBirthDate) {
                 existing.setBirthDate(birthDate);
+                profileChanged = true;
+            }
+            if (profileChanged) {
                 return parentRepository.save(existing);
             }
             return existing;
         }
         ParentEntity entity = new ParentEntity();
-        entity.setFullName(value(nested != null ? nested.get("fullName") : payload.get(flatPrefix + "Name")));
+        applyParentProfile(entity, payload, nested, flatPrefix);
         entity.setRut(value(nested != null ? nested.get("rut") : payload.get(flatPrefix + "Rut")));
         entity.setEmail(value(nested != null ? nested.get("email") : payload.get(flatPrefix + "Email")));
         entity.setPhone(value(nested != null ? nested.get("phone") : payload.get(flatPrefix + "Phone")));
@@ -659,10 +667,81 @@ public class ApplicationService {
         return parentRepository.save(entity);
     }
 
+    private boolean applyParentProfile(ParentEntity entity, Map<String, Object> payload,
+                                       Map<String, Object> nested, String flatPrefix) {
+        boolean separatedNamesProvided = valueFrom(nested, payload, "firstName", flatPrefix + "FirstName") != null
+            || valueFrom(nested, payload, "paternalLastName", flatPrefix + "PaternalLastName") != null
+            || valueFrom(nested, payload, "maternalLastName", flatPrefix + "MaternalLastName") != null;
+        boolean legacyNameProvided = valueFrom(nested, payload, "fullName", flatPrefix + "Name") != null;
+        boolean maritalStatusProvided = valueFrom(nested, payload, "maritalStatus", flatPrefix + "MaritalStatus") != null;
+        if (!separatedNamesProvided && !legacyNameProvided && !maritalStatusProvided) return false;
+
+        if (separatedNamesProvided) {
+            if (containsField(nested, payload, "firstName", flatPrefix + "FirstName")) {
+                entity.setFirstName(value(valueFrom(nested, payload, "firstName", flatPrefix + "FirstName")));
+            }
+            if (containsField(nested, payload, "paternalLastName", flatPrefix + "PaternalLastName")) {
+                entity.setPaternalLastName(value(valueFrom(nested, payload, "paternalLastName", flatPrefix + "PaternalLastName")));
+            }
+            if (containsField(nested, payload, "maternalLastName", flatPrefix + "MaternalLastName")) {
+                entity.setMaternalLastName(value(valueFrom(nested, payload, "maternalLastName", flatPrefix + "MaternalLastName")));
+            }
+            entity.setFullName(joinName(entity.getFirstName(), entity.getPaternalLastName(), entity.getMaternalLastName()));
+        } else if (legacyNameProvided) {
+            entity.setFullName(value(valueFrom(nested, payload, "fullName", flatPrefix + "Name")));
+            entity.setFirstName(null);
+            entity.setPaternalLastName(null);
+            entity.setMaternalLastName(null);
+        }
+        if (maritalStatusProvided) {
+            entity.setMaritalStatus(value(valueFrom(nested, payload, "maritalStatus", flatPrefix + "MaritalStatus")));
+        }
+        if (separatedNamesProvided) {
+            requireSeparatedParentProfile(entity);
+        } else if (maritalStatusProvided && entity.getMaritalStatus() != null
+            && !MARITAL_STATUSES.contains(entity.getMaritalStatus())) {
+            throw new IllegalArgumentException("Estado civil inválido");
+        }
+        return true;
+    }
+
+    private static void requireSeparatedParentProfile(ParentEntity entity) {
+        if (blank(entity.getFirstName()) || blank(entity.getPaternalLastName())
+            || blank(entity.getMaternalLastName())) {
+            throw new IllegalArgumentException("Registra nombres, apellido paterno y apellido materno");
+        }
+        if (blank(entity.getMaritalStatus()) || !MARITAL_STATUSES.contains(entity.getMaritalStatus())) {
+            throw new IllegalArgumentException("Estado civil inválido");
+        }
+    }
+
+    private static boolean blank(String value) {
+        return value == null || value.isBlank();
+    }
+
+    private static Object valueFrom(Map<String, Object> nested, Map<String, Object> payload,
+                                    String nestedKey, String flatKey) {
+        return nested != null && nested.containsKey(nestedKey) ? nested.get(nestedKey) : payload.get(flatKey);
+    }
+
+    private static boolean containsField(Map<String, Object> nested, Map<String, Object> payload,
+                                         String nestedKey, String flatKey) {
+        return nested != null && nested.containsKey(nestedKey) || payload.containsKey(flatKey);
+    }
+
+    private static String joinName(String... parts) {
+        return java.util.Arrays.stream(parts).filter(part -> part != null && !part.isBlank())
+            .map(String::trim).collect(java.util.stream.Collectors.joining(" "));
+    }
+
     private static boolean hasParentData(Map<String, Object> payload, String nestedKey, String flatPrefix) {
         Object parents = payload.get("parents");
         return payload.containsKey(flatPrefix + "BirthDate")
             || payload.containsKey(flatPrefix + "Name")
+            || payload.containsKey(flatPrefix + "FirstName")
+            || payload.containsKey(flatPrefix + "PaternalLastName")
+            || payload.containsKey(flatPrefix + "MaternalLastName")
+            || payload.containsKey(flatPrefix + "MaritalStatus")
             || payload.get(nestedKey) instanceof Map<?, ?>
             || parents instanceof Map<?, ?> map && map.containsKey(nestedKey);
     }
@@ -764,30 +843,10 @@ public class ApplicationService {
         response.put("student", studentMap);
 
         // Father
-        if (entity.getFather() != null) {
-            Map<String, Object> fatherMap = new LinkedHashMap<>();
-            fatherMap.put("fullName", entity.getFather().getFullName());
-            fatherMap.put("rut", entity.getFather().getRut());
-            fatherMap.put("email", value(entity.getFather().getEmail()));
-            fatherMap.put("phone", value(entity.getFather().getPhone()));
-            fatherMap.put("address", value(entity.getFather().getAddress()));
-            fatherMap.put("profession", value(entity.getFather().getProfession()));
-            fatherMap.put("birthDate", entity.getFather().getBirthDate());
-            response.put("father", fatherMap);
-        }
+        if (entity.getFather() != null) response.put("father", toParentResponse(entity.getFather(), "FATHER"));
 
         // Mother
-        if (entity.getMother() != null) {
-            Map<String, Object> motherMap = new LinkedHashMap<>();
-            motherMap.put("fullName", entity.getMother().getFullName());
-            motherMap.put("rut", entity.getMother().getRut());
-            motherMap.put("email", value(entity.getMother().getEmail()));
-            motherMap.put("phone", value(entity.getMother().getPhone()));
-            motherMap.put("address", value(entity.getMother().getAddress()));
-            motherMap.put("profession", value(entity.getMother().getProfession()));
-            motherMap.put("birthDate", entity.getMother().getBirthDate());
-            response.put("mother", motherMap);
-        }
+        if (entity.getMother() != null) response.put("mother", toParentResponse(entity.getMother(), "MOTHER"));
 
         // Guardian
         if (entity.getGuardian() != null) {
@@ -837,6 +896,7 @@ public class ApplicationService {
         response.put("processKey", processKey(entity));
         response.put("academicYear", entity.getAcademicYear());
         response.put("processCode", entity.getProcessCode());
+        response.put("parentsSeparated", entity.isParentsSeparated());
         response.put("status", entity.getStatus().name());
         response.putAll(ApplicationStatusPolicy.metadata(entity));
         response.put("paymentStatus", entity.getPaymentStatus().name());
@@ -939,6 +999,10 @@ public class ApplicationService {
         Map<String, Object> response = new LinkedHashMap<>();
         response.put("id", entity.getId());
         response.put("fullName", entity.getFullName());
+        response.put("firstName", entity.getFirstName());
+        response.put("paternalLastName", entity.getPaternalLastName());
+        response.put("maternalLastName", entity.getMaternalLastName());
+        response.put("maritalStatus", entity.getMaritalStatus());
         response.put("rut", entity.getRut());
         response.put("email", entity.getEmail());
         response.put("phone", entity.getPhone());

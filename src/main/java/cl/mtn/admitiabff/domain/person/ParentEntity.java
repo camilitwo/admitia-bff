@@ -23,6 +23,18 @@ public class ParentEntity extends BaseEntity {
     @Column(name = "full_name", nullable = false)
     private String fullName;
 
+    @Column(name = "first_name")
+    private String firstName;
+
+    @Column(name = "paternal_last_name")
+    private String paternalLastName;
+
+    @Column(name = "maternal_last_name")
+    private String maternalLastName;
+
+    @Column(name = "marital_status")
+    private String maritalStatus;
+
     @Column
     private String rut;
 

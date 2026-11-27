@@ -70,6 +70,78 @@ class ParentBirthDateContractTest {
     }
 
     @Test
+    void editingExistingParentPersistsSeparatedProfileWithoutLosingBirthDate() {
+        ParentEntity historical = parent(10L, LocalDate.of(1980, 1, 2));
+        when(parentRepository.findById(10L)).thenReturn(Optional.of(historical));
+        when(parentRepository.save(historical)).thenReturn(historical);
+
+        ParentEntity updated = resolve(Map.of(
+            "parent1Id", 10L,
+            "father", Map.of(
+                "firstName", "Juan",
+                "paternalLastName", "Pérez",
+                "maternalLastName", "Soto",
+                "maritalStatus", "SEPARATED"
+            )
+        ), "father", "parent1", "FATHER");
+
+        assertThat(updated.getFullName()).isEqualTo("Juan Pérez Soto");
+        assertThat(updated.getMaritalStatus()).isEqualTo("SEPARATED");
+        assertThat(updated.getBirthDate()).isEqualTo(LocalDate.of(1980, 1, 2));
+        verify(parentRepository).save(historical);
+    }
+
+    @Test
+    void partialSeparatedEditPreservesOmittedExistingNames() {
+        ParentEntity historical = parent(10L, LocalDate.of(1980, 1, 2));
+        historical.setFirstName("Juan");
+        historical.setPaternalLastName("Pérez");
+        historical.setMaternalLastName("Soto");
+        historical.setMaritalStatus("MARRIED");
+        when(parentRepository.findById(10L)).thenReturn(Optional.of(historical));
+        when(parentRepository.save(historical)).thenReturn(historical);
+
+        ParentEntity updated = resolve(Map.of("parent1Id", 10L, "father", Map.of("firstName", "Juan Pablo")),
+            "father", "parent1", "FATHER");
+
+        assertThat(updated.getFullName()).isEqualTo("Juan Pablo Pérez Soto");
+        assertThat(updated.getPaternalLastName()).isEqualTo("Pérez");
+        assertThat(updated.getMaternalLastName()).isEqualTo("Soto");
+    }
+
+    @Test
+    void legacyNameEditClearsSeparatedNamesSoReadersUseTheUpdatedValue() {
+        ParentEntity historical = parent(10L, LocalDate.of(1980, 1, 2));
+        historical.setFirstName("Juan");
+        historical.setPaternalLastName("Pérez");
+        historical.setMaternalLastName("Soto");
+        when(parentRepository.findById(10L)).thenReturn(Optional.of(historical));
+        when(parentRepository.save(historical)).thenReturn(historical);
+
+        ParentEntity updated = resolve(Map.of("parent1Id", 10L, "parent1Name", "Nombre actualizado"),
+            "father", "parent1", "FATHER");
+
+        assertThat(updated.getFullName()).isEqualTo("Nombre actualizado");
+        assertThat(updated.getFirstName()).isNull();
+        assertThat(updated.getPaternalLastName()).isNull();
+        assertThat(updated.getMaternalLastName()).isNull();
+    }
+
+    @Test
+    void rejectsIncompleteSeparatedProfilesAndUnsupportedMaritalStatus() {
+        when(parentRepository.save(any(ParentEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        assertThatThrownBy(() -> resolve(Map.of("father", Map.of(
+            "firstName", "Juan", "birthDate", "1980-05-17")), "father", "parent1", "FATHER"))
+            .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("apellido paterno");
+
+        assertThatThrownBy(() -> resolve(Map.of("father", Map.of(
+            "firstName", "Juan", "paternalLastName", "Pérez", "maternalLastName", "Soto",
+            "maritalStatus", "INVALID", "birthDate", "1980-05-17")), "father", "parent1", "FATHER"))
+            .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("Estado civil");
+    }
+
+    @Test
     void existingValidDateIsUsedWhenPayloadDoesNotReplaceIt() {
         ParentEntity existing = parent(10L, LocalDate.of(1980, 1, 2));
         when(parentRepository.findById(10L)).thenReturn(Optional.of(existing));
@@ -80,6 +152,32 @@ class ParentBirthDateContractTest {
     void responseIncludesBirthDateAndLegacyNullRemainsReadable() {
         assertThat(response(parent(10L, LocalDate.of(1980, 1, 2)))).containsEntry("birthDate", LocalDate.of(1980, 1, 2));
         assertThat(response(parent(11L, null))).containsEntry("birthDate", null);
+    }
+
+    @Test
+    void mapsSeparatedParentNamesAndKeepsLegacyFullName() {
+        when(parentRepository.save(any(ParentEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        ParentEntity father = resolve(Map.of("father", Map.of(
+            "firstName", "Juan Pablo",
+            "paternalLastName", "Pérez",
+            "maternalLastName", "Soto",
+            "maritalStatus", "MARRIED",
+            "rut", "11.111.111-1",
+            "birthDate", "1980-05-17"
+        )), "father", "parent1", "FATHER");
+
+        assertThat(father.getFirstName()).isEqualTo("Juan Pablo");
+        assertThat(father.getPaternalLastName()).isEqualTo("Pérez");
+        assertThat(father.getMaternalLastName()).isEqualTo("Soto");
+        assertThat(father.getMaritalStatus()).isEqualTo("MARRIED");
+        assertThat(father.getFullName()).isEqualTo("Juan Pablo Pérez Soto");
+        assertThat(response(father))
+            .containsEntry("firstName", "Juan Pablo")
+            .containsEntry("paternalLastName", "Pérez")
+            .containsEntry("maternalLastName", "Soto")
+            .containsEntry("maritalStatus", "MARRIED")
+            .containsEntry("fullName", "Juan Pablo Pérez Soto");
     }
 
     private void assertInvalid(Map<String, Object> payload, String message) {

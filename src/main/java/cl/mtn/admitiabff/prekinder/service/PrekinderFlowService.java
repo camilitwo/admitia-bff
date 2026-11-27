@@ -39,6 +39,8 @@ import org.springframework.transaction.support.TransactionTemplate;
 @Service
 @ConditionalOnProperty(prefix = "app.prekinder", name = "enabled", havingValue = "true")
 public class PrekinderFlowService {
+    private static final java.util.Set<String> MARITAL_STATUSES = java.util.Set.of(
+        "SINGLE", "MARRIED", "CIVIL_UNION", "SEPARATED", "DIVORCED", "WIDOWED", "OTHER");
     private static final ZoneId SANTIAGO = ZoneId.of("America/Santiago");
     private static final Pattern EMAIL = Pattern.compile("^[A-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?(?:\\.[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?)+$", Pattern.CASE_INSENSITIVE);
     private static final List<ProfessionalRoleDefinition> PROFESSIONAL_ROLES = List.of(
@@ -2458,6 +2460,8 @@ public class PrekinderFlowService {
         }
         PrekinderRut.normalize(details.father().rut());
         PrekinderRut.normalize(details.mother().rut());
+        validateParentProfile(details.father(), "padre");
+        validateParentProfile(details.mother(), "madre");
         cl.mtn.admitiabff.service.AdultBirthDateValidator.requireAdult(details.father().birthDate(), "padre");
         cl.mtn.admitiabff.service.AdultBirthDateValidator.requireAdult(details.mother().birthDate(), "madre");
         PrekinderRut.normalize(details.supporter().rut());
@@ -2497,6 +2501,20 @@ public class PrekinderFlowService {
                 }
             }
             default -> throw new IllegalArgumentException("Categoría de postulación inválida");
+        }
+    }
+
+    private static void validateParentProfile(FamilyAdultDetails parent, String label) {
+        boolean hasSeparatedComponent = !blank(parent.firstName()) || !blank(parent.paternalLastName())
+            || !blank(parent.maternalLastName());
+        boolean separated = !blank(parent.firstName()) && !blank(parent.paternalLastName())
+            && !blank(parent.maternalLastName());
+        boolean legacy = !hasSeparatedComponent && !blank(parent.fullName());
+        if (!legacy && !separated) {
+            throw new IllegalArgumentException("Registra nombres, apellido paterno y apellido materno de " + label);
+        }
+        if (separated && (blank(parent.maritalStatus()) || !MARITAL_STATUSES.contains(parent.maritalStatus()))) {
+            throw new IllegalArgumentException("Estado civil inválido de " + label);
         }
     }
 
@@ -2585,14 +2603,15 @@ public class PrekinderFlowService {
                                          AlumniDeclaration fatherAlumni, AlumniDeclaration motherAlumni) {}
     public record AddressDetails(String street, String number, String apartment, String country,
                                  String region, String commune) {}
-    public record FamilyAdultDetails(String fullName, String rut, String email, String phone,
-                                     String address, String profession, LocalDate birthDate) {}
+    public record FamilyAdultDetails(String fullName, String firstName, String paternalLastName,
+                                     String maternalLastName, String maritalStatus, String rut, String email,
+                                     String phone, String address, String profession, LocalDate birthDate) {}
     public record ResponsibleAdultDetails(String fullName, String rut, String email, String phone,
                                           String relationship) {}
     public record ApplicationDetails(String gender, String studentEmail, AddressDetails address, String grade,
                                      int applicationYear, String currentSchool, String additionalNotes,
                                      String admissionPreference, boolean hasSiblingsInSchool,
-                                     String siblingsInSchoolDetails, FamilyAdultDetails father,
+                                     String siblingsInSchoolDetails, boolean parentsSeparated, FamilyAdultDetails father,
                                      FamilyAdultDetails mother, ResponsibleAdultDetails supporter,
                                      ResponsibleAdultDetails guardian) {}
     public record SubmitApplication(UUID processId, UUID clientSubmissionId, String rut, String firstName, String paternalLastName,
