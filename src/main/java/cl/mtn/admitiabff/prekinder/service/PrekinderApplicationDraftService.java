@@ -52,6 +52,23 @@ public class PrekinderApplicationDraftService {
         if (data == null || data.isEmpty()) throw new IllegalArgumentException("El borrador está vacío");
         return transactions.execute(status -> {
             DraftView current = get(processId);
+            if (expectedVersion != null && expectedVersion == 0L) {
+                if (current != null) throw new VersionConflictException("El borrador cambió en otra sesión");
+                UUID newDraftId = UUID.randomUUID();
+                EncryptedPayload initial = encrypt(newDraftId, data);
+                int inserted = jdbc.update("""
+                    INSERT INTO guardian_application_drafts(draft_id, process_id, actor_id, current_section,
+                        ciphertext, iv, wrapped_dek, wrapped_dek_iv, key_version)
+                    VALUES (:id, :processId, :actorId, :section, :ciphertext, :iv, :wrappedDek, :wrappedDekIv, :keyVersion)
+                    ON CONFLICT (process_id, actor_id) DO NOTHING
+                    """, new MapSqlParameterSource().addValue("id", newDraftId).addValue("processId", processId)
+                    .addValue("actorId", actor.id()).addValue("section", currentSection)
+                    .addValue("ciphertext", initial.ciphertext()).addValue("iv", initial.iv())
+                    .addValue("wrappedDek", initial.wrappedDek()).addValue("wrappedDekIv", initial.wrappedDekIv())
+                    .addValue("keyVersion", initial.keyVersion()));
+                if (inserted == 0) throw new VersionConflictException("El borrador cambió en otra sesión");
+                return get(processId);
+            }
             UUID draftId = current == null ? UUID.randomUUID() : current.draftId();
             if (current != null && expectedVersion != null && current.version() != expectedVersion) {
                 throw new VersionConflictException("El borrador cambió en otra sesión");
