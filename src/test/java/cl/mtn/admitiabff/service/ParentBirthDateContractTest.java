@@ -97,6 +97,7 @@ class ParentBirthDateContractTest {
         historical.setFirstName("Juan");
         historical.setPaternalLastName("Pérez");
         historical.setMaternalLastName("Soto");
+        historical.setMaritalStatus("MARRIED");
         when(parentRepository.findById(10L)).thenReturn(Optional.of(historical));
         when(parentRepository.save(historical)).thenReturn(historical);
 
@@ -124,6 +125,20 @@ class ParentBirthDateContractTest {
         assertThat(updated.getFirstName()).isNull();
         assertThat(updated.getPaternalLastName()).isNull();
         assertThat(updated.getMaternalLastName()).isNull();
+    }
+
+    @Test
+    void rejectsIncompleteSeparatedProfilesAndUnsupportedMaritalStatus() {
+        when(parentRepository.save(any(ParentEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        assertThatThrownBy(() -> resolve(Map.of("father", Map.of(
+            "firstName", "Juan", "birthDate", "1980-05-17")), "father", "parent1", "FATHER"))
+            .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("apellido paterno");
+
+        assertThatThrownBy(() -> resolve(Map.of("father", Map.of(
+            "firstName", "Juan", "paternalLastName", "Pérez", "maternalLastName", "Soto",
+            "maritalStatus", "INVALID", "birthDate", "1980-05-17")), "father", "parent1", "FATHER"))
+            .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("Estado civil");
     }
 
     @Test

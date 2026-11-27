@@ -54,6 +54,8 @@ import org.springframework.jdbc.core.JdbcTemplate;
 @Service
 @Transactional(readOnly = true)
 public class ApplicationService {
+    private static final java.util.Set<String> MARITAL_STATUSES = java.util.Set.of(
+        "SINGLE", "MARRIED", "CIVIL_UNION", "SEPARATED", "DIVORCED", "WIDOWED", "OTHER");
     private static final Logger log = LoggerFactory.getLogger(ApplicationService.class);
 
     @org.springframework.beans.factory.annotation.Autowired
@@ -694,7 +696,27 @@ public class ApplicationService {
         if (maritalStatusProvided) {
             entity.setMaritalStatus(value(valueFrom(nested, payload, "maritalStatus", flatPrefix + "MaritalStatus")));
         }
+        if (separatedNamesProvided) {
+            requireSeparatedParentProfile(entity);
+        } else if (maritalStatusProvided && entity.getMaritalStatus() != null
+            && !MARITAL_STATUSES.contains(entity.getMaritalStatus())) {
+            throw new IllegalArgumentException("Estado civil inválido");
+        }
         return true;
+    }
+
+    private static void requireSeparatedParentProfile(ParentEntity entity) {
+        if (blank(entity.getFirstName()) || blank(entity.getPaternalLastName())
+            || blank(entity.getMaternalLastName())) {
+            throw new IllegalArgumentException("Registra nombres, apellido paterno y apellido materno");
+        }
+        if (blank(entity.getMaritalStatus()) || !MARITAL_STATUSES.contains(entity.getMaritalStatus())) {
+            throw new IllegalArgumentException("Estado civil inválido");
+        }
+    }
+
+    private static boolean blank(String value) {
+        return value == null || value.isBlank();
     }
 
     private static Object valueFrom(Map<String, Object> nested, Map<String, Object> payload,

@@ -39,6 +39,8 @@ import org.springframework.transaction.support.TransactionTemplate;
 @Service
 @ConditionalOnProperty(prefix = "app.prekinder", name = "enabled", havingValue = "true")
 public class PrekinderFlowService {
+    private static final java.util.Set<String> MARITAL_STATUSES = java.util.Set.of(
+        "SINGLE", "MARRIED", "CIVIL_UNION", "SEPARATED", "DIVORCED", "WIDOWED", "OTHER");
     private static final ZoneId SANTIAGO = ZoneId.of("America/Santiago");
     private static final Pattern EMAIL = Pattern.compile("^[A-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?(?:\\.[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?)+$", Pattern.CASE_INSENSITIVE);
     private static final List<ProfessionalRoleDefinition> PROFESSIONAL_ROLES = List.of(
@@ -2510,6 +2512,9 @@ public class PrekinderFlowService {
         boolean legacy = !hasSeparatedComponent && !blank(parent.fullName());
         if (!legacy && !separated) {
             throw new IllegalArgumentException("Registra nombres, apellido paterno y apellido materno de " + label);
+        }
+        if (separated && (blank(parent.maritalStatus()) || !MARITAL_STATUSES.contains(parent.maritalStatus()))) {
+            throw new IllegalArgumentException("Estado civil inválido de " + label);
         }
     }
 

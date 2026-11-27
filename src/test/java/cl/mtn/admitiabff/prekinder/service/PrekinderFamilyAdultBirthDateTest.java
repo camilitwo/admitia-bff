@@ -52,4 +52,15 @@ class PrekinderFamilyAdultBirthDateTest {
             .isInstanceOf(IllegalArgumentException.class)
             .hasMessageContaining("apellido paterno");
     }
+
+    @Test
+    void separatedProfileRequiresASupportedMaritalStatus() {
+        var invalid = new PrekinderFlowService.FamilyAdultDetails("Juan Pérez Soto", "Juan", "Pérez", "Soto",
+            "INVALID", "12.345.678-5", "a@x.cl", "+56911112222", "Calle 1", null, LocalDate.of(1988, 5, 17));
+
+        assertThatThrownBy(() -> ReflectionTestUtils.invokeMethod(
+            PrekinderFlowService.class, "validateParentProfile", invalid, "el padre"))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("Estado civil");
+    }
 }
