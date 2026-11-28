@@ -96,6 +96,27 @@ class PrekinderProfessionalAccountServiceTest {
     }
 
     @Test
+    void linksFirebaseIdentityThatExistsOnlyInProvider() {
+        when(users.findByEmailIgnoreCase("externa@mtn.cl")).thenReturn(Optional.empty());
+        when(firebase.createUser("externa@mtn.cl", "secreta1", "Cuenta Externa"))
+            .thenThrow(new IllegalStateException("La identidad Firebase ya existe"));
+        when(firebase.resolveByEmail("externa@mtn.cl"))
+            .thenReturn(new FirebaseCredentialService.ResolvedUser("firebase-existing", "externa@mtn.cl"));
+        when(users.saveAndFlush(any(UserEntity.class))).thenAnswer(invocation -> {
+            UserEntity user = invocation.getArgument(0);
+            user.setId(74L);
+            return user;
+        });
+
+        var account = service.provision("Cuenta Externa", "externa@mtn.cl", "secreta1");
+
+        assertThat(account.userId()).isEqualTo(74L);
+        assertThat(account.firebaseUid()).isEqualTo("firebase-existing");
+        assertThat(account.firebaseCreated()).isFalse();
+        assertThat(account.localUserCreated()).isTrue();
+    }
+
+    @Test
     void inactiveExistingAccountIsRejectedBeforeFirebaseMutation() {
         UserEntity existing = activeUser(99L, Role.TEACHER);
         existing.setActive(false);

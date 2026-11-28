@@ -5,10 +5,26 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import java.math.BigDecimal;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 
 class PrekinderRubricServiceTest {
+    @Test
+    void acceptsConditionalPrekinderInstruments() throws Exception {
+        assertEquals("LEARNING_SUPPORT", validateInstrument("LEARNING_SUPPORT"));
+        assertEquals("DAP", validateInstrument("DAP"));
+    }
+
+    @Test
+    void rejectsUnknownPrekinderInstrument() throws Exception {
+        var error = assertThrows(InvocationTargetException.class,
+            () -> validateInstrument("UNKNOWN_INSTRUMENT"));
+
+        assertEquals("Instrumento de pauta inválido", error.getCause().getMessage());
+    }
+
     @Test
     void acceptsRealEditableRubricContent() {
         var command = draft(List.of(
@@ -58,5 +74,11 @@ class PrekinderRubricServiceTest {
     private static PrekinderRubricService.OptionCommand option(String value, String label) {
         return new PrekinderRubricService.OptionCommand(
             new BigDecimal(value), label, "Descriptor observable", false);
+    }
+
+    private static String validateInstrument(String value) throws Exception {
+        Method method = PrekinderRubricService.class.getDeclaredMethod("instrument", String.class);
+        method.setAccessible(true);
+        return (String) method.invoke(null, value);
     }
 }

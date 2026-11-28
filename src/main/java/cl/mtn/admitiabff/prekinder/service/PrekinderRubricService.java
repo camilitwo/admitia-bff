@@ -1,6 +1,7 @@
 package cl.mtn.admitiabff.prekinder.service;
 
 import cl.mtn.admitiabff.prekinder.domain.PrekinderActor;
+import cl.mtn.admitiabff.prekinder.domain.PrekinderPolicyCodes;
 import cl.mtn.admitiabff.prekinder.realtime.PrekinderRealtimeNotifier;
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -503,7 +504,7 @@ public class PrekinderRubricService {
 
     private static String instrument(String value) {
         String normalized = required(value).trim().toUpperCase();
-        if (!PrekinderProcessLifecycleService.REQUIRED_INSTRUMENTS.contains(normalized)) {
+        if (!PrekinderPolicyCodes.SUPPORTED_INSTRUMENTS.contains(normalized)) {
             throw new IllegalArgumentException("Instrumento de pauta inválido");
         }
         return normalized;

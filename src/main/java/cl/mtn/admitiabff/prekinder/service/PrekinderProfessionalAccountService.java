@@ -44,12 +44,25 @@ public class PrekinderProfessionalAccountService {
             return new ProvisionedAccount(existing.getId(), existing.getFirebaseUid(), false, false);
         }
 
-        FirebaseCredentialService.ResolvedUser firebaseUser = firebase.createUser(email, password, displayName);
+        FirebaseCredentialService.ResolvedUser firebaseUser;
+        boolean firebaseCreated;
+        try {
+            firebaseUser = firebase.createUser(email, password, displayName);
+            firebaseCreated = true;
+        } catch (IllegalStateException createFailure) {
+            try {
+                firebaseUser = firebase.resolveByEmail(email);
+                firebaseCreated = false;
+            } catch (RuntimeException resolveFailure) {
+                createFailure.addSuppressed(resolveFailure);
+                throw createFailure;
+            }
+        }
         try {
             if (existing != null) {
                 existing.setFirebaseUid(firebaseUser.uid());
                 users.saveAndFlush(existing);
-                return new ProvisionedAccount(existing.getId(), firebaseUser.uid(), false, true);
+                return new ProvisionedAccount(existing.getId(), firebaseUser.uid(), false, firebaseCreated);
             }
 
             NameParts name = splitName(displayName);
@@ -64,9 +77,9 @@ public class PrekinderProfessionalAccountService {
             user.setEmailVerified(false);
             user.setPreferencesJson(jsonSupport.write(Map.of("prekinderProfessional", true)));
             UserEntity saved = users.saveAndFlush(user);
-            return new ProvisionedAccount(saved.getId(), firebaseUser.uid(), true, true);
+            return new ProvisionedAccount(saved.getId(), firebaseUser.uid(), true, firebaseCreated);
         } catch (RuntimeException exception) {
-            firebase.deleteUser(firebaseUser.uid());
+            if (firebaseCreated) firebase.deleteUser(firebaseUser.uid());
             throw exception;
         }
     }

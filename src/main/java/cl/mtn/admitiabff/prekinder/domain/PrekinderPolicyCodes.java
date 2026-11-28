@@ -29,6 +29,10 @@ public final class PrekinderPolicyCodes {
         GROUP_OBSERVATION, FAMILY_INTERVIEW
     );
     public static final Set<String> CONDITIONAL_INSTRUMENTS = Set.of(LEARNING_SUPPORT, DAP);
+    public static final Set<String> SUPPORTED_INSTRUMENTS = Set.of(
+        ENTRY_INDICATORS, ACADEMIC, PSYCHOLOGY, PSYCHOMOTOR,
+        GROUP_OBSERVATION, FAMILY_INTERVIEW, LEARNING_SUPPORT, DAP
+    );
     public static final Set<String> SCORING_INSTRUMENTS = Set.of(ACADEMIC, PSYCHOLOGY, PSYCHOMOTOR);
 
     public static final BigDecimal ACADEMIC_WEIGHT = new BigDecimal("0.34");
